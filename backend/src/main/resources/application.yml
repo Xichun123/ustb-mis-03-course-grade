@@ -12,8 +12,8 @@ spring:
     username: ${DB_USER:root}
     password: ${DB_PASS:}
     hikari:
-      maximum-pool-size: 10
-      minimum-idle: 2
+      maximum-pool-size: 3
+      minimum-idle: 1
       connection-timeout: 15000
   jackson:
     time-zone: Asia/Shanghai
