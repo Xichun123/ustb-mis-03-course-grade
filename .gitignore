@@ -1,0 +1,17 @@
+# 后端构建与本地密钥
+backend/target/
+backend/.mvn/
+backend/src/main/resources/application-local.yml
+*.log
+
+# 前端依赖与构建
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+
+# IDE 与系统文件
+.idea/
+*.iml
+.vscode/
+.DS_Store
+__pycache__/

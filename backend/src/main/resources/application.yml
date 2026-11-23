@@ -1,0 +1,24 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: course-grade-mgmt
+  config:
+    import: optional:classpath:application-local.yml
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:course_grade_mgmt}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DB_USER:root}
+    password: ${DB_PASS:}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 15000
+  jackson:
+    time-zone: Asia/Shanghai
+    date-format: yyyy-MM-dd HH:mm:ss
+
+logging:
+  level:
+    com.ustb.coursegrade: INFO
