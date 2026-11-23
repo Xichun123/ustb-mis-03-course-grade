@@ -1,8 +1,8 @@
 <template>
   <div>
     <el-tabs v-model="activeTab" type="border-card">
-      <!-- Tab 1: 1.1 开课计划导入 & 1.2 限选条件设置 -->
-      <el-tab-pane label="1.1 / 1.2 开课计划与限选条件设置" name="classes">
+      <!-- Tab 1: 1.1 开课计划导入 & 1.2 限选条件设置（学生角色隐藏） -->
+      <el-tab-pane v-if="!isStudent" label="1.1 / 1.2 开课计划与限选条件设置" name="classes">
         <div class="toolbar">
           <el-input v-model="classQuery.term" placeholder="学期如 2026-2027-1" style="width: 170px" clearable />
           <el-input v-model="classQuery.keyword" placeholder="教学班号 / 课程号 / 课程名" style="width: 240px" clearable />
@@ -42,14 +42,14 @@
       </el-tab-pane>
 
       <!-- Tab 2: 1.3 选课轮次设置 / 1.4 审批 / 1.5 发布 -->
-      <el-tab-pane label="1.3 / 1.4 / 1.5 选课轮次、审批与发布" name="rounds">
+      <el-tab-pane :label="isStudent ? '1.5 选课轮次与通知公告' : '1.3 / 1.4 / 1.5 选课轮次、审批与发布'" name="rounds">
         <div class="toolbar">
           <el-input v-model="roundQuery.term" placeholder="学年学期" style="width: 170px" clearable />
-          <el-select v-model="roundQuery.round_status" placeholder="轮次状态" clearable style="width: 150px">
+          <el-select v-if="!isStudent" v-model="roundQuery.round_status" placeholder="轮次状态" clearable style="width: 150px">
             <el-option v-for="(label, val) in ROUND_STATUS_MAP" :key="val" :label="label" :value="Number(val)" />
           </el-select>
           <el-button type="primary" @click="loadRounds">查询</el-button>
-          <el-button type="success" @click="openRoundDialog()">+ 新建轮次草稿</el-button>
+          <el-button v-if="canManageRound" type="success" @click="openRoundDialog()">+ 新建轮次草稿</el-button>
         </div>
 
         <el-table :data="roundList" border stripe v-loading="loadingRounds">
@@ -81,15 +81,15 @@
           <el-table-column label="操作" width="260" fixed="right">
             <template #default="{ row }">
               <el-button type="primary" link @click="openRoundDialog(row.round_id)">
-                {{ row.round_status === 0 ? '编辑' : '查看' }}
+                {{ row.round_status === 0 && canManageRound ? '编辑' : '查看通知' }}
               </el-button>
-              <el-button v-if="row.round_status === 0" type="warning" link @click="handleSubmitRound(row.round_id)">
+              <el-button v-if="row.round_status === 0 && canManageRound" type="warning" link @click="handleSubmitRound(row.round_id)">
                 提交审批
               </el-button>
-              <el-button v-if="row.round_status === 1" type="success" link @click="openApproveDialog(row)">
+              <el-button v-if="row.round_status === 1 && canApproveRound" type="success" link @click="openApproveDialog(row)">
                 处长审批
               </el-button>
-              <el-button v-if="row.round_status === 5" type="success" link @click="handlePublishRound(row.round_id)">
+              <el-button v-if="row.round_status === 5 && canManageRound" type="success" link @click="handlePublishRound(row.round_id)">
                 发布通知
               </el-button>
             </template>
@@ -236,15 +236,21 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { prepApi } from '../../api/prep'
+import { userState } from '../../stores/user'
 
 const ROUND_TYPE_MAP = { 1: '预选', 2: '正选', 3: '补退选' }
 const LEVEL_MAP = { 1: '本科生', 2: '研究生', 3: '全部' }
 const ROUND_STATUS_MAP = { 0: '0 草稿', 1: '1 待审批', 2: '2 已发布', 3: '3 进行中', 4: '4 已结束', 5: '5 已审批待发布' }
 
-const activeTab = ref('classes')
+const role = computed(() => userState.currentUser?.role)
+const isStudent = computed(() => role.value === 'STUDENT')
+const canManageRound = computed(() => ['ACADEMIC_OFFICE', 'SYS_ADMIN'].includes(role.value))
+const canApproveRound = computed(() => ['ACADEMIC_DIRECTOR', 'SYS_ADMIN'].includes(role.value))
+
+const activeTab = ref('rounds')
 const loadingClasses = ref(false)
 const classList = ref([])
 const publishedClassOptions = ref([])
@@ -377,7 +383,10 @@ async function handlePublishRound(roundId) {
 }
 
 onMounted(() => {
-  loadClasses()
+  activeTab.value = isStudent.value ? 'rounds' : 'classes'
+  if (!isStudent.value) {
+    loadClasses()
+  }
   loadRounds()
 })
 </script>

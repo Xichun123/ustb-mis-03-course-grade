@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.util.*;
@@ -281,7 +282,7 @@ public class CorrectionService {
 
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT cr.*, s.score_type, s.total_score AS cur_score, s.score_level AS cur_level,
-                       sc.student_id, sc.stat_stage, tc.course_id
+                       sc.student_id, sc.stat_stage, tc.course_id, tc.term
                 FROM score_correction cr
                 JOIN score s ON cr.score_id = s.score_id
                 JOIN sc ON s.sc_id = sc.sc_id
@@ -331,10 +332,13 @@ public class CorrectionService {
                     newLv, newGp, scoreId);
         }
 
-        recomputeIsFinalForCourse(
-                String.valueOf(row.get("student_id")),
-                ((Number) row.get("stat_stage")).intValue(),
-                String.valueOf(row.get("course_id")));
+        String studentId = String.valueOf(row.get("student_id"));
+        int statStage = ((Number) row.get("stat_stage")).intValue();
+        String courseId = String.valueOf(row.get("course_id"));
+        String term = String.valueOf(row.get("term"));
+
+        recomputeIsFinalForCourse(studentId, statStage, courseId);
+        recomputeAcademicStatsSnapshot(studentId, statStage, term);
 
         jdbc.update("""
                 UPDATE score_correction
@@ -411,6 +415,138 @@ public class CorrectionService {
             long id = ((Number) r.get("score_id")).longValue();
             jdbc.update("UPDATE score SET is_final = ? WHERE score_id = ?", (id == bestId ? 1 : 0), id);
         }
+    }
+
+    /**
+     * 5.4 同事务刷新 stu_gpa、stu_term_gpa 与专业年级排名（与 4.3 统计算法一致：
+     * 严格排除 sc.study_type=3 辅修成绩，并联合 exchange_score_convert 生效记录）。
+     */
+    private void recomputeAcademicStatsSnapshot(String studentId, int statStage, String term) {
+        List<Map<String, Object>> finalScores = jdbc.queryForList("""
+                SELECT c.credit, s.score_type, s.total_score, s.score_level, s.grade_point
+                FROM score s
+                JOIN sc ON s.sc_id = sc.sc_id
+                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN course c ON tc.course_id = c.course_id
+                WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
+                  AND s.score_status = 3 AND s.is_final = 1
+                UNION ALL
+                SELECT c.credit, e.score_type, e.converted_score AS total_score,
+                       e.converted_level AS score_level, e.grade_point
+                FROM exchange_score_convert e
+                JOIN course c ON e.course_id = c.course_id
+                WHERE e.student_id = ? AND e.stat_stage = ?
+                  AND e.audit_status = 2 AND e.is_final = 1
+                """, studentId, statStage, studentId, statStage);
+
+        BigDecimal earned = BigDecimal.ZERO;
+        BigDecimal failed = BigDecimal.ZERO;
+        BigDecimal totalCredit = BigDecimal.ZERO;
+        BigDecimal gpWeighted = BigDecimal.ZERO;
+        BigDecimal scoreWeighted = BigDecimal.ZERO;
+
+        for (Map<String, Object> r : finalScores) {
+            BigDecimal credit = new BigDecimal(String.valueOf(r.get("credit")));
+            BigDecimal gp = r.get("grade_point") == null ? BigDecimal.ZERO : new BigDecimal(String.valueOf(r.get("grade_point")));
+            BigDecimal numericScore = resolveNumericScore(r.get("score_type"), r.get("total_score"), r.get("score_level"));
+            if (gp.compareTo(BigDecimal.ZERO) > 0) {
+                earned = earned.add(credit);
+            } else {
+                failed = failed.add(credit);
+            }
+            totalCredit = totalCredit.add(credit);
+            gpWeighted = gpWeighted.add(gp.multiply(credit));
+            scoreWeighted = scoreWeighted.add(numericScore.multiply(credit));
+        }
+
+        BigDecimal gpa = totalCredit.compareTo(BigDecimal.ZERO) > 0
+                ? gpWeighted.divide(totalCredit, 2, RoundingMode.HALF_UP) : null;
+        BigDecimal avgScore = totalCredit.compareTo(BigDecimal.ZERO) > 0
+                ? scoreWeighted.divide(totalCredit, 2, RoundingMode.HALF_UP) : null;
+
+        jdbc.update("""
+                INSERT INTO stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, update_time)
+                VALUES (?, ?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE
+                  earned_credit = VALUES(earned_credit),
+                  failed_credit = VALUES(failed_credit),
+                  gpa = VALUES(gpa),
+                  avg_score = VALUES(avg_score),
+                  update_time = NOW()
+                """, studentId, earned, failed, gpa, avgScore);
+
+        // 同步刷新本学期学业统计 stu_term_gpa（同样排除辅修）
+        List<Map<String, Object>> termRows = jdbc.queryForList("""
+                SELECT tc.course_id, MAX(c.credit) AS credit, MAX(COALESCE(s.grade_point, 0)) AS best_gp
+                FROM score s
+                JOIN sc ON s.sc_id = sc.sc_id
+                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN course c ON tc.course_id = c.course_id
+                WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
+                  AND tc.term = ? AND s.score_status = 3
+                GROUP BY tc.course_id
+                """, studentId, statStage, term);
+        BigDecimal termEarned = BigDecimal.ZERO;
+        BigDecimal termFailed = BigDecimal.ZERO;
+        for (Map<String, Object> tr : termRows) {
+            BigDecimal credit = new BigDecimal(String.valueOf(tr.get("credit")));
+            BigDecimal bestGp = new BigDecimal(String.valueOf(tr.get("best_gp")));
+            if (bestGp.compareTo(BigDecimal.ZERO) > 0) {
+                termEarned = termEarned.add(credit);
+            } else {
+                termFailed = termFailed.add(credit);
+            }
+        }
+        jdbc.update("""
+                INSERT INTO stu_term_gpa (student_id, term, term_credit, term_failed_credit, update_time)
+                VALUES (?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE
+                  term_credit = VALUES(term_credit),
+                  term_failed_credit = VALUES(term_failed_credit),
+                  update_time = NOW()
+                """, studentId, term, termEarned, termFailed);
+
+        // 同步刷新同专业同年级排名（同分并列跳号）
+        List<Map<String, Object>> stuMeta = jdbc.queryForList(
+                "SELECT major_id, grade FROM student WHERE student_id = ?", studentId);
+        if (!stuMeta.isEmpty() && stuMeta.get(0).get("major_id") != null && stuMeta.get(0).get("grade") != null) {
+            String majorId = String.valueOf(stuMeta.get(0).get("major_id"));
+            Object grade = stuMeta.get(0).get("grade");
+            List<Map<String, Object>> peers = jdbc.queryForList("""
+                    SELECT g.student_id, g.avg_score
+                    FROM stu_gpa g
+                    JOIN student st ON g.student_id = st.student_id
+                    WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NOT NULL
+                    ORDER BY g.avg_score DESC, g.student_id ASC
+                    """, majorId, grade);
+            int totalPeers = peers.size();
+            BigDecimal prevScore = null;
+            int currentRank = 0;
+            for (int i = 0; i < peers.size(); i++) {
+                BigDecimal cur = new BigDecimal(String.valueOf(peers.get(i).get("avg_score")));
+                if (prevScore == null || cur.compareTo(prevScore) != 0) {
+                    currentRank = i + 1;
+                    prevScore = cur;
+                }
+                jdbc.update("UPDATE stu_gpa SET major_rank = ?, major_rank_total = ? WHERE student_id = ?",
+                        currentRank, totalPeers, peers.get(i).get("student_id"));
+            }
+        }
+    }
+
+    private BigDecimal resolveNumericScore(Object scoreTypeObj, Object totalScoreObj, Object levelObj) {
+        int st = ((Number) scoreTypeObj).intValue();
+        if (st == 1 && totalScoreObj != null) {
+            return new BigDecimal(String.valueOf(totalScoreObj));
+        }
+        String lv = levelObj == null ? "" : String.valueOf(levelObj);
+        return switch (lv) {
+            case "优" -> new BigDecimal("95.0");
+            case "良" -> new BigDecimal("85.0");
+            case "中" -> new BigDecimal("75.0");
+            case "及格", "合格" -> new BigDecimal("65.0");
+            default -> new BigDecimal("50.0");
+        };
     }
 
     private void validateLevel(int scoreType, String level) {
