@@ -9,12 +9,14 @@
 
 ## 一、快速启动（5 分钟跑起来）
 
-### 1. 克隆仓库并切到自己的开发分支
+### 1. Fork 仓库并切到自己的开发分支（PR 协作模式）
+1. 打开 `https://github.com/Xichun123/ustb-mis-03-course-grade`，点击右上角 **Fork** 到自己的 GitHub 账号下；
+2. 克隆**你自己账号下的 Fork 仓库**并建分支开发：
 ```bash
-git clone https://github.com/Xichun123/ustb-mis-03-course-grade.git
+git clone https://github.com/<你的GitHub用户名>/ustb-mis-03-course-grade.git
 cd ustb-mis-03-course-grade
 
-# 按分工切出个人分支（不要直接往 main 推送）：
+# 按分工切出个人分支：
 # 张文浩: git checkout -b feat/selection
 # 蒋作:   git checkout -b feat/score-admin
 # 黎家俊: git checkout -b feat/stats
@@ -74,4 +76,4 @@ ustb-mis-03-course-grade/
 2. **统一响应与异常**：成功返回 `ApiResponse.ok(data)`；校验/权限/状态错误抛 `BizException.unprocessable(...)` / `forbidden(...)` / `conflict(...)`。
 3. **身份获取**：服务端一律调用 `UserContext.requireUser()` / `UserContext.requireRole(...)`，禁止从前端请求体信任学号或工号。
 4. **表结构铁律**：所有 SQL 字段名和取值严格以 `sql/` 下的 v9 脚本为准（含 82 条 CHECK，例如 `lesson_class` 合班课堂、`score_audit.lesson_no`、`sc.study_type=3` 辅修不计入主修统计）。
-5. **推送合并**：明天 **11:30 前** `git push -u origin feat/你的分支名`，在 GitHub 提 Pull Request 或群里通知组长合入 `main`。
+5. **提交 Pull Request**：明天 **11:30 前** `git push -u origin feat/你的分支名` 推到你自己的 Fork，然后在 GitHub 页面点击 **Contribute → Open pull request**，提交 PR 合入 `Xichun123/ustb-mis-03-course-grade` 的 `main` 分支，群里通知组长审合并联调。
