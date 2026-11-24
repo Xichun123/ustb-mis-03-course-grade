@@ -156,7 +156,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { correctionApi } from '../../api/correction'
 import { userState } from '../../stores/user'
@@ -274,7 +274,10 @@ async function confirmAudit() {
   loadList()
 }
 
-onMounted(() => {
+let initializedRole = null
+watch(role, (val) => {
+  if (!val || val === initializedRole) return
+  initializedRole = val
   if (isStudent.value) {
     activeTab.value = 'my'
     loadMy()
@@ -283,7 +286,7 @@ onMounted(() => {
     loadCandidates()
     loadList()
   }
-})
+}, { immediate: true })
 </script>
 
 <style scoped>
