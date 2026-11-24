@@ -3,7 +3,7 @@
     <el-alert v-if="role && !isTeacher && !isCollege && !isOffice && !isAdmin" title="请切换至任课教师、学院教学秘书、教务处经办或系统管理员账号使用成绩录入与审核模块。" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
     <el-tabs v-else v-model="activeTab" type="border-card">
       <!-- 3.1 教师：我的课堂（本学期在前、往届在后） -->
-      <el-tab-pane v-if="isTeacher || isAdmin" label="3.1 我的课堂与成绩录入" name="entry">
+      <el-tab-pane v-if="isTeacher || isAdmin" label="我的课堂与成绩录入" name="entry">
         <div class="toolbar">
           <el-input v-model="classQuery.term" placeholder="学期，如 2026-2027-1" style="width: 190px" clearable />
           <el-input v-model="classQuery.keyword" placeholder="课堂号 / 课程名" style="width: 220px" clearable />
@@ -84,7 +84,7 @@
       </el-tab-pane>
 
       <!-- 3.3 学院核对 -->
-      <el-tab-pane v-if="isCollege || isAdmin" label="3.3 学院核对（输码）" name="audit">
+      <el-tab-pane v-if="isCollege || isAdmin" label="学院核对" name="audit">
         <div class="toolbar">
           <el-input v-model="auditTerm" placeholder="学期（可空）" style="width: 190px" clearable />
           <el-button type="primary" @click="loadAudit">刷新待核对</el-button>
@@ -105,7 +105,7 @@
       </el-tab-pane>
 
       <!-- 3.4 发布 -->
-      <el-tab-pane v-if="isOffice || isAdmin" label="3.4 成绩发布" name="publish">
+      <el-tab-pane v-if="isOffice || isAdmin" label="成绩发布" name="publish">
         <div class="toolbar">
           <el-input v-model="publishTerm" placeholder="学期（可空）" style="width: 190px" clearable />
           <el-button type="primary" @click="loadPublish">刷新待发布</el-button>
@@ -124,7 +124,7 @@
       </el-tab-pane>
 
       <!-- 3.5 校外交流认定 -->
-      <el-tab-pane v-if="isOffice || isCollege || isAdmin" label="3.5 校外交流成绩认定" name="exchange">
+      <el-tab-pane v-if="isOffice || isCollege || isAdmin" label="校外交流成绩认定" name="exchange">
         <div class="toolbar">
           <el-input v-model="exchangeQuery.student_id" placeholder="学号" style="width: 160px" clearable />
           <el-input v-model="exchangeQuery.keyword" placeholder="课程名 / 外校" style="width: 200px" clearable />

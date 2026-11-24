@@ -1,8 +1,8 @@
 <template>
   <div>
     <el-tabs v-model="activeTab" type="border-card">
-      <!-- Tab 1: 1.1 开课计划导入 & 1.2 限选条件设置（学生角色隐藏） -->
-      <el-tab-pane v-if="!isStudent" label="1.1 / 1.2 开课计划与限选条件设置" name="classes">
+      <!-- Tab 1: 开课计划导入与限选条件设置（学生角色隐藏） -->
+      <el-tab-pane v-if="!isStudent" label="开课计划与限选设置" name="classes">
         <div class="toolbar">
           <el-input v-model="classQuery.term" placeholder="学期如 2026-2027-1" style="width: 170px" clearable />
           <el-input v-model="classQuery.keyword" placeholder="教学班号 / 课程号 / 课程名" style="width: 240px" clearable />
@@ -41,8 +41,8 @@
         </el-table>
       </el-tab-pane>
 
-      <!-- Tab 2: 1.3 选课轮次设置 / 1.4 审批 / 1.5 发布 -->
-      <el-tab-pane :label="isStudent ? '1.5 选课轮次与通知公告' : '1.3 / 1.4 / 1.5 选课轮次、审批与发布'" name="rounds">
+      <!-- Tab 2: 选课轮次设置、审批与发布 -->
+      <el-tab-pane :label="isStudent ? '选课轮次与通知公告' : '选课轮次、审批与发布'" name="rounds">
         <div class="toolbar">
           <el-input v-model="roundQuery.term" placeholder="学年学期" style="width: 170px" clearable />
           <el-select v-if="!isStudent" v-model="roundQuery.round_status" placeholder="轮次状态" clearable style="width: 150px">
@@ -214,8 +214,8 @@
       </template>
     </el-dialog>
 
-    <!-- 1.4 教务处处长审批弹窗 -->
-    <el-dialog v-model="approveVisible" title="1.4 选课方案审批（教务处处长）" width="480px">
+    <!-- 教务处处长审批弹窗 -->
+    <el-dialog v-model="approveVisible" title="选课方案审批" width="480px">
       <el-form label-width="90px">
         <el-form-item label="审批决定">
           <el-radio-group v-model="approveForm.decision">

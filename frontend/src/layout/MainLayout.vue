@@ -135,8 +135,7 @@
             <el-icon :size="18"><Menu /></el-icon>
           </el-button>
           <span class="app-header-title">{{ route.meta.title || '系统工作台' }}</span>
-          <el-tag size="small" effect="plain" class="header-pill">2026-2027-1</el-tag>
-          <el-tag size="small" type="success" effect="plain" class="header-pill hide-xs">云库 v9</el-tag>
+          <el-tag size="small" effect="plain" class="header-pill">2026-2027-1 学期</el-tag>
         </div>
 
         <div class="header-right">

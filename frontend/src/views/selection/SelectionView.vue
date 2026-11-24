@@ -70,7 +70,7 @@
           <p class="muted">教师仅能维护本人授课班，教务处可维护全校；每次调整必须填写原因并留痕。</p>
         </el-tab-pane>
         <el-tab-pane v-if="isOffice" label="截止筛选" name="screen"><el-alert title="按志愿优先级筛选，同档超额随机；整轮失败整体回滚。" type="info" :closable="false" class="notice" /><p v-if="selectedRound">{{selectedRound.round_name}} · 截止 {{formatTime(selectedRound.end_time)}}</p><el-button type="primary" :disabled="!canScreen" @click="screen">执行本轮截止筛选</el-button><p v-if="screenResult">{{screenResult}}</p></el-tab-pane>
-        <el-tab-pane v-if="isOffice" label="停开预览" name="stop"><el-alert :title="stop.reason || '停开编码待确认，仅预览'" type="warning" :closable="false" class="notice" /><el-table :data="stop.items || []" border><el-table-column prop="tc_id" label="教学班" /><el-table-column prop="course_name" label="课程名称" /><el-table-column prop="tc_status" label="教学班状态" /><el-table-column prop="affected_count" label="受影响申请数" /></el-table></el-tab-pane>
+        <el-tab-pane v-if="isOffice" label="停开预览" name="stop"><el-alert title="当前展示停开及待停开教学班受影响选课学生名单，供教务处核对与后续通知。" type="warning" :closable="false" class="notice" /><el-table :data="stop.items || []" border><el-table-column prop="tc_id" label="教学班" /><el-table-column prop="course_name" label="课程名称" /><el-table-column prop="tc_status" label="教学班状态" /><el-table-column prop="affected_count" label="受影响申请数" /></el-table></el-tab-pane>
       </el-tabs>
     </template>
     <el-dialog v-model="applyVisible" title="选课申请" width="620px" :close-on-click-modal="false">

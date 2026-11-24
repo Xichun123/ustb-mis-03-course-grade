@@ -1,25 +1,24 @@
 <template>
   <div class="dashboard-page">
-    <!-- 欢迎区（复刻 USTB Manager 首页风格） -->
+    <!-- 顶部欢迎区（对标 USTB Manager 首页风格） -->
     <div class="welcome-header">
       <div class="welcome-title">
-        {{ greeting }}{{ userState.currentUser?.displayName ? `，${userState.currentUser.displayName}` : '' }}
+        {{ greeting }}{{ shortName ? `，${shortName}` : '' }}
       </div>
       <div class="welcome-sub">
-        {{ todayText }} · 2026-2027-1 学期 · 选课及成绩管理一体化平台（03组）
+        {{ todayText }} · 2026-2027 学年第 1 学期 · 北京科技大学本科生与研究生选课及成绩管理平台
       </div>
     </div>
 
-    <!-- 双核心状态卡片 -->
+    <!-- 第一排：个人信息 + 本学期教务概览 -->
     <el-row :gutter="24" style="margin-bottom: 24px">
-      <!-- 当前身份信息卡 -->
       <el-col :xs="24" :lg="12" style="margin-bottom: 16px">
         <el-card class="app-card-hover full-height-card">
           <template #header>
             <div class="card-head">
               <span class="card-head-title">
                 <el-icon><User /></el-icon>
-                当前身份信息
+                个人信息
               </span>
               <el-tag size="small" type="primary" effect="light">
                 {{ roleLabel(userState.currentUser?.role) }}
@@ -31,22 +30,19 @@
               <el-icon :size="36"><UserFilled /></el-icon>
             </el-avatar>
             <el-descriptions :column="1" size="small" class="profile-desc">
-              <el-descriptions-item label="姓名 / 账号">
-                <strong class="profile-name">{{ userState.currentUser?.displayName || '加载中...' }}</strong>
+              <el-descriptions-item label="姓名">
+                <strong class="profile-name">{{ shortName || '加载中...' }}</strong>
               </el-descriptions-item>
-              <el-descriptions-item label="系统角色">
-                {{ roleLabel(userState.currentUser?.role) }}（{{ userState.currentUser?.role || '-' }}）
+              <el-descriptions-item label="当前角色">
+                {{ roleLabel(userState.currentUser?.role) }}
               </el-descriptions-item>
               <el-descriptions-item v-if="userState.currentUser?.studentId" label="学号">
                 {{ userState.currentUser.studentId }}
               </el-descriptions-item>
               <el-descriptions-item v-if="userState.currentUser?.empId" label="教职工号">
                 {{ userState.currentUser.empId }}
-                <span v-if="userState.currentUser?.teacherCode8" class="muted-inline">
-                  （教学班工号 {{ userState.currentUser.teacherCode8 }}）
-                </span>
               </el-descriptions-item>
-              <el-descriptions-item label="所属学院 / 单位">
+              <el-descriptions-item label="所属单位">
                 {{ collegeLabel(userState.currentUser?.collegeId, userState.currentUser?.orgId) }}
               </el-descriptions-item>
             </el-descriptions>
@@ -54,93 +50,120 @@
         </el-card>
       </el-col>
 
-      <!-- 系统与云库状态卡 -->
       <el-col :xs="24" :lg="12" style="margin-bottom: 16px">
         <el-card class="app-card-hover full-height-card">
           <template #header>
             <div class="card-head">
               <span class="card-head-title">
-                <el-icon><Connection /></el-icon>
-                云数据库与实施总览
+                <el-icon><Calendar /></el-icon>
+                本学期教务概览
               </span>
-              <el-button text circle :loading="loadingHealth" @click="fetchHealth" title="刷新连接状态">
+              <el-button text circle :loading="loading" @click="loadOverview" title="刷新">
                 <el-icon><Refresh /></el-icon>
               </el-button>
             </div>
           </template>
 
-          <el-row :gutter="16" class="kpi-grid">
+          <el-row :gutter="14" class="kpi-grid">
             <el-col :span="8">
               <div class="stat-box">
-                <div class="stat-title">云库数据表</div>
-                <div class="stat-num" :class="health?.db_connected ? 'num-success' : 'num-warn'">
-                  {{ health?.db_connected ? `${health.own_v9_tables}/14` : '离线' }}
+                <div class="stat-title">当前学期</div>
+                <div class="stat-num num-primary" style="font-size: 18px">2026-2027-1</div>
+                <div class="stat-foot">秋季学期进行中</div>
+              </div>
+            </el-col>
+            <el-col :span="8">
+              <div class="stat-box">
+                <div class="stat-title">开放选课轮次</div>
+                <div class="stat-num num-success">{{ activeRoundCount }}</div>
+                <div class="stat-foot">已发布 {{ publishedRounds.length }} 轮</div>
+              </div>
+            </el-col>
+            <el-col :span="8">
+              <div class="stat-box">
+                <div class="stat-title">系统服务状态</div>
+                <div class="stat-num" :class="serviceOnline ? 'num-success' : 'num-warn'" style="font-size: 18px">
+                  {{ serviceOnline ? '运行正常' : '连接中' }}
                 </div>
-                <div class="stat-foot">{{ health?.database || '等待连接' }}</div>
-              </div>
-            </el-col>
-            <el-col :span="8">
-              <div class="stat-box">
-                <div class="stat-title">业务子系统</div>
-                <div class="stat-num num-primary">6 / 6</div>
-                <div class="stat-foot">全模块已合入</div>
-              </div>
-            </el-col>
-            <el-col :span="8">
-              <div class="stat-box">
-                <div class="stat-title">叶子功能模块</div>
-                <div class="stat-num">29</div>
-                <div class="stat-foot">v9 全量对齐</div>
+                <div class="stat-foot">教务数据实时同步</div>
               </div>
             </el-col>
           </el-row>
 
           <div class="health-footer">
-            <el-tag :type="health?.db_connected ? 'success' : 'warning'" size="small" effect="light">
-              {{ health?.db_connected ? '云 MySQL 8.0 在线' : '后端未连接' }}
-            </el-tag>
+            <el-tag type="primary" size="small" effect="light">当前轮次</el-tag>
             <span class="health-meta">
-              {{ health?.schema_version || '请确认 Spring Boot 8080 端口已启动' }}
+              {{ currentActiveRound ? `${currentActiveRound.round_name}（截止 ${formatTime(currentActiveRound.end_time)}）` : '当前暂无进行中的选课轮次' }}
             </span>
           </div>
         </el-card>
       </el-col>
     </el-row>
 
-    <!-- 六大业务板块快捷看板 -->
-    <el-card class="app-card-hover">
+    <!-- 第二排：快捷功能入口网格 -->
+    <el-card class="app-card-hover" style="margin-bottom: 24px">
       <template #header>
         <div class="card-head">
           <span class="card-head-title">
             <el-icon><Grid /></el-icon>
-            03 组六大业务子系统与分工总览
+            业务快捷入口
           </span>
-          <el-tag type="success" size="small" effect="light">29 个叶子模块全部上线</el-tag>
+          <span class="header-hint">点击卡片进入对应业务办理</span>
         </div>
       </template>
 
-      <el-table :data="moduleRows" stripe>
-        <el-table-column prop="biz" label="业务子系统" width="185">
-          <template #default="{ row }">
-            <span class="biz-name">{{ row.biz }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="owner" label="负责人" width="95" />
-        <el-table-column prop="tester" label="交叉测试" width="95" />
-        <el-table-column prop="scope" label="涵盖叶子模块（共 29 个）" min-width="320" />
-        <el-table-column prop="status" label="状态" width="145">
-          <template #default="{ row }">
-            <el-tag type="success" effect="light" size="small">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="快捷进入" width="100" align="center">
-          <template #default="{ row }">
-            <el-button type="primary" link @click="router.push(row.path)">
-              进入 →
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="entry-grid">
+        <div
+          v-for="item in quickEntries"
+          :key="item.path"
+          class="entry-card"
+          @click="router.push(item.path)"
+        >
+          <div class="entry-icon" :style="{ background: item.bg, color: item.color }">
+            <el-icon :size="20"><component :is="item.icon" /></el-icon>
+          </div>
+          <div class="entry-body">
+            <div class="entry-title">
+              <span>{{ item.title }}</span>
+              <el-icon class="entry-arrow"><ArrowRight /></el-icon>
+            </div>
+            <div class="entry-desc">{{ item.desc }}</div>
+          </div>
+        </div>
+      </div>
+    </el-card>
+
+    <!-- 第三排：最新选课与教务通知公告 -->
+    <el-card class="app-card-hover">
+      <template #header>
+        <div class="card-head">
+          <span class="card-head-title">
+            <el-icon><Bell /></el-icon>
+            选课与教务通知公告
+          </span>
+          <el-button type="primary" link @click="router.push('/prep')">查看全部轮次</el-button>
+        </div>
+      </template>
+
+      <div v-if="publishedRounds.length" class="notice-list">
+        <div v-for="r in publishedRounds" :key="r.round_id" class="notice-item">
+          <div class="notice-top">
+            <div class="notice-title-wrap">
+              <el-tag
+                size="small"
+                :type="r.round_status === 3 ? 'success' : r.round_status === 2 ? 'primary' : 'info'"
+                effect="light"
+              >
+                {{ r.round_status === 3 ? '进行中' : r.round_status === 2 ? '已发布' : '已结束' }}
+              </el-tag>
+              <span class="notice-name">{{ r.round_name }}</span>
+            </div>
+            <span class="notice-time">{{ formatTime(r.start_time) }} 至 {{ formatTime(r.end_time) }}</span>
+          </div>
+          <div class="notice-content">{{ r.notice_content }}</div>
+        </div>
+      </div>
+      <el-empty v-else description="暂无已发布的选课通知" :image-size="64" />
     </el-card>
   </div>
 </template>
@@ -149,11 +172,18 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { systemApi } from '../api/modules'
+import { prepApi } from '../api/prep'
 import { userState } from '../stores/user'
 
 const router = useRouter()
-const health = ref(null)
-const loadingHealth = ref(false)
+const serviceOnline = ref(false)
+const rounds = ref([])
+const loading = ref(false)
+
+const shortName = computed(() => {
+  const full = userState.currentUser?.displayName || ''
+  return full.replace(/（.*）$/, '').trim() || full
+})
 
 const greeting = computed(() => {
   const hour = new Date().getHours()
@@ -169,6 +199,18 @@ const todayText = computed(() =>
   new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })
 )
 
+const publishedRounds = computed(() =>
+  rounds.value.filter((r) => [2, 3, 4].includes(r.round_status))
+)
+
+const activeRoundCount = computed(() =>
+  rounds.value.filter((r) => r.round_status === 3 || r.round_status === 2).length
+)
+
+const currentActiveRound = computed(() =>
+  rounds.value.find((r) => r.round_status === 3) || rounds.value.find((r) => r.round_status === 2) || null
+)
+
 const roleLabel = (role) => ({
   ACADEMIC_OFFICE: '教务处经办',
   ACADEMIC_DIRECTOR: '教务处处长',
@@ -177,37 +219,87 @@ const roleLabel = (role) => ({
   STUDENT: '在校学生',
   GRADUATE_SCHOOL: '研究生院审核',
   SYS_ADMIN: '系统管理员'
-}[role] || '演示用户')
+}[role] || '教务用户')
 
 const collegeLabel = (collegeId, orgId) => {
   const map = { '0001': '经济管理学院', '0002': '计算机与通信工程学院' }
-  if (collegeId && map[collegeId]) return `${map[collegeId]}（${collegeId}）`
-  const orgMap = { ORG900: '教务处', ORG901: '研究生院', ORG999: '信息中心 / 系统运维' }
-  return orgMap[orgId] || collegeId || orgId || '校级公共'
+  if (collegeId && map[collegeId]) return map[collegeId]
+  const orgMap = { ORG900: '教务处', ORG901: '研究生院', ORG999: '信息中心' }
+  return orgMap[orgId] || '校级单位'
 }
 
-const moduleRows = [
-  { biz: '① 选课准备与发布', owner: '朱鳞太', tester: '张文浩', scope: '1.1 开课计划导入、1.2 限选条件设置、1.3 选课轮次设置、1.4 选课方案审批、1.5 选课通知发布', status: '已完成（1.1–1.5）', path: '/prep' },
-  { biz: '② 学生选课', owner: '张文浩', tester: '黎家俊', scope: '2.1 课程查询、2.2 选退课、2.3 选课校验（含重修免听）、2.4 超额筛选、2.5 停开预览、2.6 课表与上课名单、2.7 上课名单调整', status: '已完成（2.1–2.7）', path: '/selection' },
-  { biz: '③ 成绩录入与审核', owner: '蒋作', tester: '朱鳞太', scope: '3.1 按课堂号录分、3.2 总评提交与随机码、3.3 学院核对、3.4 发布、3.5 校外交流成绩换算认定', status: '已完成（3.1–3.5）', path: '/score' },
-  { biz: '④ 成绩查询与统计', owner: '黎家俊', tester: '蒋作', scope: '4.1 学生评教、4.2 先评教后查分、4.3 学业统计（排除辅修）、4.4 成绩单打印、4.5 统计报表、4.6 评教汇总', status: '已完成（4.1–4.6）', path: '/stats' },
-  { biz: '⑤ 成绩更正申请', owner: '朱鳞太', tester: '张文浩', scope: '5.1 更正申请（原值并发核验）、5.2 学院审核、5.3 教务处审批、5.4 改分重算与学生通知', status: '已完成（5.1–5.4）', path: '/correction' },
-  { biz: '⑥ 系统维护', owner: '蒋作', tester: '朱鳞太', scope: '6.1 编码与系统参数维护、6.2 数据备份与恢复', status: '已完成（6.1–6.2）', path: '/admin' }
+const quickEntries = [
+  {
+    title: '选课准备与发布',
+    desc: '开课计划维护、限选条件配置、选课轮次审批与通知发布',
+    path: '/prep',
+    icon: 'Setting',
+    bg: 'rgba(11, 92, 173, 0.10)',
+    color: '#0b5cad'
+  },
+  {
+    title: '学生选课',
+    desc: '全校课程检索、选退课办理、按周课表与教学班上课名单管理',
+    path: '/selection',
+    icon: 'Calendar',
+    bg: 'rgba(22, 163, 74, 0.10)',
+    color: '#16a34a'
+  },
+  {
+    title: '成绩录入与审核',
+    desc: '按课堂录分提交、学院核对码核验、成绩发布与校外交流成绩认定',
+    path: '/score',
+    icon: 'EditPen',
+    bg: 'rgba(234, 88, 12, 0.10)',
+    color: '#ea580c'
+  },
+  {
+    title: '成绩查询与统计',
+    desc: '教学评价、本人查分、学业统计、中英文成绩单打印与统计报表',
+    path: '/stats',
+    icon: 'DataAnalysis',
+    bg: 'rgba(124, 58, 237, 0.10)',
+    color: '#7c3aed'
+  },
+  {
+    title: '成绩更正申请',
+    desc: '已发布成绩更正发起、学院与教务处两级审批及结果通知',
+    path: '/correction',
+    icon: 'DocumentChecked',
+    bg: 'rgba(8, 145, 178, 0.10)',
+    color: '#0891b2'
+  },
+  {
+    title: '系统维护',
+    desc: '教学编码参数配置、数据备份登记与恢复前应急快照管理',
+    path: '/admin',
+    icon: 'Tools',
+    bg: 'rgba(100, 116, 139, 0.12)',
+    color: '#475569'
+  }
 ]
 
-async function fetchHealth() {
-  loadingHealth.value = true
+function formatTime(t) {
+  return String(t || '').replace('T', ' ').slice(0, 16)
+}
+
+async function loadOverview() {
+  loading.value = true
   try {
-    const res = await systemApi.health()
-    health.value = res.data
-  } catch {
-    health.value = null
+    const [healthRes, roundsRes] = await Promise.allSettled([
+      systemApi.health(),
+      prepApi.listRounds({ term: '2026-2027-1' })
+    ])
+    serviceOnline.value = healthRes.status === 'fulfilled' && !!healthRes.value?.data?.db_connected
+    if (roundsRes.status === 'fulfilled') {
+      rounds.value = roundsRes.value?.data || []
+    }
   } finally {
-    loadingHealth.value = false
+    loading.value = false
   }
 }
 
-onMounted(fetchHealth)
+onMounted(loadOverview)
 </script>
 
 <style scoped>
@@ -244,6 +336,11 @@ onMounted(fetchHealth)
   font-weight: 600;
   color: var(--app-text-primary);
 }
+.header-hint {
+  font-size: 12px;
+  color: var(--app-text-tertiary);
+  font-weight: 400;
+}
 
 .profile-body {
   display: flex;
@@ -265,10 +362,6 @@ onMounted(fetchHealth)
   font-size: 15px;
   color: var(--app-text-primary);
 }
-.muted-inline {
-  color: var(--app-text-secondary);
-  font-size: 12px;
-}
 
 .kpi-grid {
   margin-bottom: 18px;
@@ -285,10 +378,10 @@ onMounted(fetchHealth)
   margin-bottom: 6px;
 }
 .stat-num {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 700;
   color: var(--app-text-primary);
-  line-height: 1.2;
+  line-height: 1.3;
 }
 .num-primary { color: var(--brand-primary); }
 .num-success { color: #389e0d; }
@@ -304,16 +397,121 @@ onMounted(fetchHealth)
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  padding-top: 8px;
+  padding-top: 10px;
   border-top: 1px dashed var(--app-border);
 }
 .health-meta {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--app-text-secondary);
 }
 
-.biz-name {
+/* 快捷业务卡片网格 */
+.entry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.entry-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--app-border);
+  background: var(--app-card-muted-bg);
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+}
+.entry-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(11, 92, 173, 0.28);
+  background: var(--app-card-bg);
+  box-shadow: var(--app-shadow-sm);
+}
+.entry-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.entry-body {
+  flex: 1;
+  min-width: 0;
+}
+.entry-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14.5px;
   font-weight: 600;
   color: var(--app-text-primary);
+  margin-bottom: 5px;
+}
+.entry-arrow {
+  color: var(--app-text-tertiary);
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+.entry-card:hover .entry-arrow {
+  transform: translateX(3px);
+  color: var(--brand-primary);
+}
+.entry-desc {
+  font-size: 12.5px;
+  color: var(--app-text-secondary);
+  line-height: 1.55;
+}
+
+/* 通知列表 */
+.notice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.notice-item {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--app-card-muted-bg);
+  border: 1px solid var(--app-border);
+}
+.notice-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.notice-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.notice-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+.notice-time {
+  font-size: 12px;
+  color: var(--app-text-tertiary);
+}
+.notice-content {
+  font-size: 13px;
+  color: var(--app-text-secondary);
+  line-height: 1.6;
+}
+
+@media (max-width: 1100px) {
+  .entry-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 680px) {
+  .entry-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

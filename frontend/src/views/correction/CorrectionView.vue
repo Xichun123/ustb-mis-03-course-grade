@@ -2,7 +2,7 @@
   <div>
     <el-tabs v-model="activeTab" type="border-card">
       <!-- 5.1 教师发起更正申请 -->
-      <el-tab-pane v-if="isTeacherOrOffice" label="5.1 已发布成绩检索与更正申请" name="candidates">
+      <el-tab-pane v-if="isTeacherOrOffice" label="发起成绩更正" name="candidates">
         <div class="toolbar">
           <el-input v-model="candQuery.term" placeholder="学期" style="width: 160px" clearable />
           <el-input v-model="candQuery.keyword" placeholder="学号 / 姓名 / 课程 / 课堂号" style="width: 240px" clearable />
@@ -31,7 +31,7 @@
       </el-tab-pane>
 
       <!-- 5.2 / 5.3 更正申请台账与两级审批 -->
-      <el-tab-pane v-if="isStaff" label="5.2 / 5.3 更正申请台账与两级审批" name="list">
+      <el-tab-pane v-if="isStaff" label="更正申请与两级审批" name="list">
         <div class="toolbar">
           <el-select v-model="listQuery.apply_status" placeholder="申请状态" clearable style="width: 160px">
             <el-option label="0 待学院审核" :value="0" />
@@ -85,7 +85,7 @@
       </el-tab-pane>
 
       <!-- 5.4 学生查看本人已通过更正通知 -->
-      <el-tab-pane v-if="isStudent" label="5.4 我的成绩更正通知" name="my">
+      <el-tab-pane v-if="isStudent" label="我的成绩更正通知" name="my">
         <el-table :data="myResults" border stripe v-loading="loadingMy">
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="course_name" label="课程名称" min-width="150" />
@@ -103,7 +103,7 @@
     </el-tabs>
 
     <!-- 5.1 发起更正弹窗 -->
-    <el-dialog v-model="applyVisible" title="5.1 提交成绩更正申请" width="500px">
+    <el-dialog v-model="applyVisible" title="提交成绩更正申请" width="500px">
       <el-form label-width="100px">
         <el-form-item label="学生/课程">
           <span>{{ applyTarget?.student_name }}（{{ applyTarget?.student_id }}） · {{ applyTarget?.course_name }}</span>
@@ -135,7 +135,7 @@
     </el-dialog>
 
     <!-- 5.2 / 5.3 审核弹窗 -->
-    <el-dialog v-model="auditVisible" :title="auditStage === 'college' ? '5.2 学院审核' : '5.3 教务处终审（通过后立即生效）'" width="480px">
+    <el-dialog v-model="auditVisible" :title="auditStage === 'college' ? '学院审核' : '教务处终审（通过后立即生效）'" width="480px">
       <el-form label-width="90px">
         <el-form-item label="审批决定">
           <el-radio-group v-model="auditForm.decision">

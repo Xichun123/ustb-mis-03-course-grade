@@ -2,13 +2,13 @@
   <div class="stats-page">
     <el-tabs v-model="activeTab" type="border-card" class="no-print-tabs">
       <!-- ==================== 4.1 学生评教（学生端） ==================== -->
-      <el-tab-pane v-if="isStudent" label="4.1 学生评教" name="eval">
+      <el-tab-pane v-if="isStudent" label="教学评价" name="eval">
         <el-alert
           type="info"
           show-icon
           :closable="false"
           style="margin-bottom: 14px"
-          title="评教说明：每条有效选课仅可提交一次（0~100 整数总分 + 可选意见），提交后不可修改；完成本学期全部有效选课评教后方可查询或打印本学期成绩。教师与第4组仅看教学班匿名汇总，不可查看个人评分与意见。"
+          title="评教说明：每门已选课程仅可提交一次（0~100 整数总分 + 可选意见），提交后不可修改；完成本学期全部课程评教后方可查询或打印本学期成绩。任课教师与师资管理部门仅可查看教学班匿名汇总，不可查看个人评分与意见。"
         />
 
         <div class="kpi-row" v-if="evalData">
@@ -37,7 +37,7 @@
         <div class="toolbar">
           <el-button type="primary" @click="loadPendingEvals">刷新评教清单</el-button>
           <el-button v-if="evalData?.all_completed" type="success" @click="activeTab = 'grades'; loadMyGrades()">
-            前往 4.2 查询本人成绩
+            前往查询本人成绩
           </el-button>
         </div>
 
@@ -78,7 +78,7 @@
       </el-tab-pane>
 
       <!-- ==================== 4.2 本人成绩查询（学生端，先评教后查分） ==================== -->
-      <el-tab-pane v-if="isStudent" label="4.2 本人成绩查询" name="grades">
+      <el-tab-pane v-if="isStudent" label="本人成绩查询" name="grades">
         <div class="toolbar">
           <el-select v-model="gradeQuery.term" placeholder="全部学期（含当前学期）" clearable style="width: 210px">
             <el-option v-for="t in gradeTermOptions" :key="t" :label="t" :value="t" />
@@ -100,7 +100,7 @@
           >
             <template #extra>
               <el-button type="primary" @click="activeTab = 'eval'; loadPendingEvals()">
-                立即前往 4.1 完成评教
+                立即前往完成评教
               </el-button>
             </template>
           </el-result>
@@ -211,7 +211,7 @@
       </el-tab-pane>
 
       <!-- ==================== 4.3 学业统计台账与重算（教务/学院/管理员） ==================== -->
-      <el-tab-pane v-if="canViewAcademicStats" label="4.3 学业统计台账与重算" name="academic">
+      <el-tab-pane v-if="canViewAcademicStats" label="学业统计台账" name="academic">
         <div class="toolbar">
           <el-input v-model="academicQuery.term" placeholder="统计学期如 2026-2027-1" style="width: 170px" clearable />
           <el-input v-model="academicQuery.major_id" placeholder="专业号如 120102" style="width: 145px" clearable />
@@ -263,7 +263,7 @@
               {{ row.term_credit ?? '—' }} / {{ row.term_failed_credit ?? '—' }}
             </template>
           </el-table-column>
-          <el-table-column label="v9 口径标记" width="150">
+          <el-table-column label="统计口径" width="150">
             <template #default="{ row }">
               <el-tag v-if="row.minor_score_count > 0" size="small" type="warning">
                 排除辅修 {{ row.minor_score_count }} 门
@@ -283,7 +283,7 @@
       </el-tab-pane>
 
       <!-- ==================== 4.4 成绩单预览与打印（含来校交换生中英文版） ==================== -->
-      <el-tab-pane v-if="canPrintTranscript" label="4.4 成绩单预览与打印" name="transcript">
+      <el-tab-pane v-if="canPrintTranscript" label="成绩单预览与打印" name="transcript">
         <div class="toolbar no-print">
           <el-select
             v-if="!isStudent"
@@ -324,7 +324,7 @@
         >
           <template #default>
             <el-button type="primary" size="small" style="margin-top: 8px" @click="activeTab = 'eval'; loadPendingEvals()">
-              前往 4.1 完成评教
+              前往完成评教
             </el-button>
           </template>
         </el-alert>
@@ -336,7 +336,7 @@
       </el-tab-pane>
 
       <!-- ==================== 4.5 成绩统计报表（教师/学院/教务处） ==================== -->
-      <el-tab-pane v-if="isStaff" label="4.5 成绩统计报表" name="reports">
+      <el-tab-pane v-if="isStaff" label="成绩统计报表" name="reports">
         <div class="toolbar">
           <el-radio-group v-model="reportQuery.report_type" @change="loadGradeReport">
             <el-radio-button value="DISTRIBUTION">成绩分布（分制独立）</el-radio-button>
@@ -517,7 +517,7 @@
       </el-tab-pane>
 
       <!-- ==================== 4.6 评教结果汇总（教师匿名汇总 / 教务处触发与受控明细） ==================== -->
-      <el-tab-pane v-if="isStaff" label="4.6 评教结果汇总" name="evalSummary">
+      <el-tab-pane v-if="isStaff" label="评教结果汇总" name="evalSummary">
         <div class="toolbar">
           <el-input v-model="evalSummaryQuery.term" placeholder="学期如 2026-2027-1" style="width: 170px" clearable />
           <el-button type="primary" @click="loadEvalSummaries">刷新汇总</el-button>
@@ -580,7 +580,7 @@
         <el-card
           v-if="evalSummaryData?.teacher_weighted_summaries?.length"
           shadow="never"
-          header="第4组（师资管理）教师按参评人数加权汇总投影（Σ(班均分×参评人数)/Σ参评人数，不含零参评班）"
+          header="教师教学评价加权汇总（按参评人数加权计算，不含零参评教学班）"
           style="margin-top: 16px"
         >
           <el-table :data="evalSummaryData.teacher_weighted_summaries" border size="small">
@@ -595,7 +595,7 @@
     </el-tabs>
 
     <!-- 4.1 评教提交弹窗 -->
-    <el-dialog v-model="evalDialogVisible" title="4.1 提交课程评教（提交后不可修改）" width="500px">
+    <el-dialog v-model="evalDialogVisible" title="提交课程教学评价（提交后不可修改）" width="500px">
       <el-alert
         type="warning"
         show-icon
@@ -635,7 +635,7 @@
     </el-dialog>
 
     <!-- 4.6 教务处受控评教明细抽屉（仅教务处/管理员可见） -->
-    <el-drawer v-model="detailDrawerVisible" title="4.6 教务处受控评教明细查阅（匿名化视图）" size="60%">
+    <el-drawer v-model="detailDrawerVisible" title="教务处受控评教明细查阅（匿名化视图）" size="60%">
       <el-alert
         type="warning"
         show-icon

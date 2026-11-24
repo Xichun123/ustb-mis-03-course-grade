@@ -3,7 +3,7 @@
     <el-alert v-if="!canView" title="请切换至系统管理员或教务处经办账号查看系统维护模块（写入操作仅限系统管理员）。" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
     <el-tabs v-else v-model="activeTab" type="border-card">
       <!-- 6.1 编码维护 -->
-      <el-tab-pane label="6.1 编码参数维护" name="codes">
+      <el-tab-pane label="编码与参数维护" name="codes">
         <div class="toolbar">
           <el-input v-model="codeQuery.group" placeholder="编码分组，如 system_param" style="width: 230px" clearable />
           <el-input v-model="codeQuery.keyword" placeholder="编码键 / 名称" style="width: 200px" clearable />
@@ -35,7 +35,7 @@
       </el-tab-pane>
 
       <!-- 6.2 备份与恢复 -->
-      <el-tab-pane label="6.2 数据备份与恢复" name="backups">
+      <el-tab-pane label="数据备份与恢复" name="backups">
         <div class="toolbar">
           <el-button type="primary" @click="loadBackups">刷新备份日志</el-button>
           <el-button v-if="isAdmin" type="success" @click="openBackup">+ 登记备份</el-button>
