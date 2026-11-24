@@ -95,7 +95,9 @@
           <el-table-column prop="course_name" label="课程" min-width="150" />
           <el-table-column prop="open_college" label="开课学院" width="100" />
           <el-table-column prop="wait_count" label="待核对人数" width="105" />
-          <el-table-column prop="submit_time" label="提交时间" min-width="160" />
+          <el-table-column label="提交时间" min-width="160">
+            <template #default="{ row }">{{ String(row.submit_time || '—').replace('T', ' ') }}</template>
+          </el-table-column>
           <el-table-column label="操作" width="100">
             <template #default="{ row }">
               <el-button type="primary" link @click="openAudit(row)">核对</el-button>

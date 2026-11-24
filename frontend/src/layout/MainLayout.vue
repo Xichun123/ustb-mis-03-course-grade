@@ -135,12 +135,12 @@
             <el-icon :size="18"><Menu /></el-icon>
           </el-button>
           <span class="app-header-title">{{ route.meta.title || '系统工作台' }}</span>
-          <el-tag size="small" effect="plain" class="header-pill">2026-2027-1 学期</el-tag>
+          <span class="term-badge hide-xs">2026-2027-1</span>
         </div>
 
         <div class="header-right">
           <div class="identity-box">
-            <span class="switch-label hide-xs">身份</span>
+            <span class="identity-dot">{{ currentInitial }}</span>
             <el-select
               v-model="userState.currentKey"
               size="default"
@@ -200,7 +200,7 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { initUserStore, switchDemoUser, userState } from '../stores/user'
@@ -211,6 +211,11 @@ const route = useRoute()
 const collapsed = ref(localStorage.getItem(COLLAPSED_KEY) === 'true')
 const isMobile = ref(typeof window !== 'undefined' ? window.innerWidth < 992 : false)
 const drawerOpen = ref(false)
+
+const currentInitial = computed(() => {
+  const name = (userState.currentUser?.displayName || '').trim()
+  return name ? name[0] : 'U'
+})
 
 function handleResize() {
   isMobile.value = window.innerWidth < 992
@@ -299,8 +304,14 @@ async function handleSwitch(val) {
   min-width: 0;
 }
 
-.header-pill {
+.term-badge {
+  font-size: 12px;
   font-weight: 500;
+  color: var(--brand-primary);
+  background: var(--app-menu-active-bg);
+  padding: 3px 9px;
+  border-radius: 999px;
+  line-height: 1.4;
 }
 
 .header-right {
@@ -316,17 +327,27 @@ async function handleSwitch(val) {
   gap: 8px;
 }
 
-.switch-label {
-  font-size: 13px;
-  color: var(--app-text-secondary);
+.identity-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #003366 0%, #0b5cad 100%);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0, 51, 102, 0.22);
 }
 
 .identity-select {
-  width: 230px;
+  width: 224px;
 }
 
 .header-icon-btn {
-  color: var(--app-text-primary);
+  color: var(--app-text-secondary);
 }
 
 .theme-option {
@@ -348,9 +369,13 @@ async function handleSwitch(val) {
 }
 
 .app-content {
-  padding: 24px;
+  padding: 26px 28px;
   flex: 1;
   min-width: 0;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 @media (max-width: 768px) {

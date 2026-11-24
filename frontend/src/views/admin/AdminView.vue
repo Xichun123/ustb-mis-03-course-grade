@@ -22,7 +22,9 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="update_time" label="更新时间" min-width="160" />
+          <el-table-column label="更新时间" min-width="160">
+            <template #default="{ row }">{{ String(row.update_time || '—').replace('T', ' ') }}</template>
+          </el-table-column>
           <el-table-column v-if="isAdmin" label="操作" width="140">
             <template #default="{ row }">
               <el-button type="primary" link @click="openCode(row)">编辑</el-button>
@@ -48,7 +50,9 @@
           <el-table-column prop="file_name" label="备份文件" min-width="220" />
           <el-table-column prop="file_size_kb" label="大小(KB)" width="100" />
           <el-table-column prop="operator_id" label="操作人" width="100" />
-          <el-table-column prop="backup_time" label="时间" min-width="160" />
+          <el-table-column label="时间" min-width="160">
+            <template #default="{ row }">{{ String(row.backup_time || '—').replace('T', ' ') }}</template>
+          </el-table-column>
           <el-table-column label="状态" width="90">
             <template #default="{ row }">
               <el-tag :type="row.status === 1 ? 'success' : 'danger'" size="small">

@@ -19,7 +19,9 @@
             </template>
           </el-table-column>
           <el-table-column prop="grade_point" label="绩点" width="80" />
-          <el-table-column prop="publish_time" label="发布时间" width="170" />
+          <el-table-column label="发布时间" width="170">
+            <template #default="{ row }">{{ String(row.publish_time || '—').replace('T', ' ') }}</template>
+          </el-table-column>
           <el-table-column label="操作" width="130">
             <template #default="{ row }">
               <el-button type="primary" link :disabled="row.pending_count > 0" @click="openApplyDialog(row)">
@@ -34,10 +36,10 @@
       <el-tab-pane v-if="isStaff" label="更正申请与两级审批" name="list">
         <div class="toolbar">
           <el-select v-model="listQuery.apply_status" placeholder="申请状态" clearable style="width: 160px">
-            <el-option label="0 待学院审核" :value="0" />
-            <el-option label="1 待教务处审批" :value="1" />
-            <el-option label="2 已通过生效" :value="2" />
-            <el-option label="3 已驳回" :value="3" />
+            <el-option label="待学院审核" :value="0" />
+            <el-option label="待教务处审批" :value="1" />
+            <el-option label="已通过生效" :value="2" />
+            <el-option label="已驳回" :value="3" />
           </el-select>
           <el-button type="primary" @click="loadList">刷新</el-button>
         </div>
@@ -97,7 +99,9 @@
           </el-table-column>
           <el-table-column prop="new_grade_point" label="更新后绩点" width="110" />
           <el-table-column prop="apply_reason" label="更正原因" min-width="200" />
-          <el-table-column prop="audit_time" label="生效时间" width="170" />
+          <el-table-column label="生效时间" width="170">
+            <template #default="{ row }">{{ String(row.audit_time || '—').replace('T', ' ') }}</template>
+          </el-table-column>
         </el-table>
       </el-tab-pane>
     </el-tabs>

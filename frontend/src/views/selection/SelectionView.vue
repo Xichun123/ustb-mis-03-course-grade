@@ -1,28 +1,27 @@
 <template>
   <section class="selection-page" v-loading="busy">
-    <div class="heading">
-      <div><h2>学生选课</h2><p>课程、申请与上课安排</p></div>
-      <el-button @click="perform(refresh)">刷新当前页面</el-button>
-    </div>
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="notice" />
     <el-alert v-if="!isStudent && !isStaff" title="请切换至学生、任课教师或教务处经办账号使用本模块。" type="info" :closable="false" />
     <template v-else>
       <div class="filters">
-        <label>学年学期</label>
-        <el-select v-model="term" style="width:170px" @change="changeTerm"><el-option v-for="t in context.terms" :key="t" :label="t" :value="t" /></el-select>
-        <template v-if="isStudent || active==='screen'">
-          <label>选课轮次</label>
-          <el-select v-model="roundId" style="width:340px" placeholder="选择已发布轮次" @change="changeRound">
-            <el-option v-for="r in termRounds" :key="r.round_id" :value="r.round_id" :label="r.round_name + (r.window_open ? ' · 开放中' : ' · 非办理时段')" />
-          </el-select>
-        </template>
+        <div class="filters-left">
+          <label>学年学期</label>
+          <el-select v-model="term" style="width:170px" @change="changeTerm"><el-option v-for="t in context.terms" :key="t" :label="t" :value="t" /></el-select>
+          <template v-if="isStudent || active==='screen'">
+            <label>选课轮次</label>
+            <el-select v-model="roundId" style="width:340px" placeholder="选择已发布轮次" @change="changeRound">
+              <el-option v-for="r in termRounds" :key="r.round_id" :value="r.round_id" :label="r.round_name + (r.window_open ? ' · 开放中' : ' · 非办理时段')" />
+            </el-select>
+          </template>
+        </div>
+        <el-button @click="perform(refresh)">刷新</el-button>
       </div>
       <div v-if="isStudent" class="summary">
         <span>本学期已选中 <strong>{{ summary.courses ?? '—' }}</strong> 门</span>
         <span>有效学分 <strong>{{ summary.credits ?? '—' }}</strong></span>
         <span v-if="selectedRound">{{ selectedRound.select_mode===2 ? '超额后筛选' : '先到先得' }} · 本轮学分上限 {{ selectedRound.max_credit }}</span>
       </div>
-      <el-tabs v-model="active" @tab-change="() => perform(refresh)">
+      <el-tabs v-model="active" type="border-card" @tab-change="() => perform(refresh)">
         <template v-if="isStudent">
           <el-tab-pane label="课程查询与选课" name="courses">
             <el-alert v-if="selectedRound" :title="selectedRound.round_name" :description="`${formatTime(selectedRound.start_time)} 至 ${formatTime(selectedRound.end_time)}；${selectedRound.notice_content || '请按本轮规则办理'}`" :type="selectedRound.window_open?'info':'warning'" :closable="false" class="notice" />
@@ -148,7 +147,8 @@ onMounted(() => perform(bootContext))
 .heading h2{font-size:20px;font-weight:700;margin:0 0 4px;color:var(--app-text-primary)}
 .heading p{margin:0;color:var(--app-text-secondary);font-size:13px}
 .filters,.toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-.filters{padding:16px 18px;background:var(--app-card-bg);border:1px solid var(--app-border);border-radius:14px;box-shadow:var(--app-shadow-sm)}
+.filters{justify-content:space-between;padding:14px 18px;background:var(--app-card-bg);border:1px solid var(--app-border);border-radius:14px;box-shadow:var(--app-shadow-sm)}
+.filters-left{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .filters label{font-size:13px;color:var(--app-text-secondary)}
 .summary{display:flex;gap:28px;padding:15px 20px;background:var(--app-menu-active-bg);border:1px solid var(--app-border);border-radius:12px;margin-bottom:18px;color:var(--app-text-primary);font-size:14px}
 .summary strong{font-size:20px;color:var(--brand-primary);margin:0 5px}

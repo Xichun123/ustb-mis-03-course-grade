@@ -7,9 +7,9 @@
           <el-input v-model="classQuery.term" placeholder="学期如 2026-2027-1" style="width: 170px" clearable />
           <el-input v-model="classQuery.keyword" placeholder="教学班号 / 课程号 / 课程名" style="width: 240px" clearable />
           <el-select v-model="classQuery.tc_status" placeholder="教学班状态" clearable style="width: 140px">
-            <el-option label="4 已发布" value="4" />
-            <el-option label="2 不开课" value="2" />
-            <el-option label="5 取消" value="5" />
+            <el-option label="已发布" value="4" />
+            <el-option label="不开课" value="2" />
+            <el-option label="已取消" value="5" />
           </el-select>
           <el-button type="primary" @click="loadClasses">查询</el-button>
         </div>
@@ -110,10 +110,10 @@
       />
       <div v-for="(item, idx) in editLimits" :key="idx" class="limit-row">
         <el-select v-model="item.limit_type" :disabled="!limitDetail?.editable" style="width: 160px">
-          <el-option label="1 限年级" :value="1" />
-          <el-option label="2 限专业" :value="2" />
-          <el-option label="3 限学院" :value="3" />
-          <el-option label="4 限培养层次" :value="4" />
+          <el-option label="限年级" :value="1" />
+          <el-option label="限专业" :value="2" />
+          <el-option label="限学院" :value="3" />
+          <el-option label="限培养层次" :value="4" />
         </el-select>
         <el-input v-model="item.limit_value" :disabled="!limitDetail?.editable" placeholder="如 2024 / 120102 / 0001 / 本科" />
         <el-button v-if="limitDetail?.editable" type="danger" link @click="editLimits.splice(idx, 1)">删除</el-button>

@@ -1,169 +1,147 @@
 <template>
   <div class="dashboard-page">
-    <!-- 顶部欢迎区（对标 USTB Manager 首页风格） -->
-    <div class="welcome-header">
-      <div class="welcome-title">
-        {{ greeting }}{{ shortName ? `，${shortName}` : '' }}
+    <!-- 顶部欢迎区（极简克制，对齐 USTB Manager） -->
+    <div class="welcome-bar">
+      <div>
+        <h1 class="welcome-title">
+          {{ greeting }}{{ shortName ? `，${shortName}` : '' }}
+        </h1>
+        <p class="welcome-sub">
+          {{ todayText }} · 2026-2027-1 学期
+        </p>
       </div>
-      <div class="welcome-sub">
-        {{ todayText }} · 2026-2027 学年第 1 学期 · 北京科技大学本科生与研究生选课及成绩管理平台
+      <div class="status-pill" :class="{ online: serviceOnline }">
+        <span class="status-dot" />
+        <span>{{ serviceOnline ? '教务服务运行正常' : '正在连接服务' }}</span>
       </div>
     </div>
 
-    <!-- 第一排：个人信息 + 本学期教务概览 -->
-    <el-row :gutter="24" style="margin-bottom: 24px">
-      <el-col :xs="24" :lg="12" style="margin-bottom: 16px">
+    <!-- 第一排：个人名片 + 学期概览双卡 -->
+    <el-row :gutter="20" class="section-row">
+      <el-col :xs="24" :lg="12" class="col-gap">
         <el-card class="app-card-hover full-height-card">
-          <template #header>
-            <div class="card-head">
-              <span class="card-head-title">
-                <el-icon><User /></el-icon>
-                个人信息
-              </span>
-              <el-tag size="small" type="primary" effect="light">
-                {{ roleLabel(userState.currentUser?.role) }}
-              </el-tag>
+          <div class="profile-layout">
+            <div class="profile-avatar">
+              <span>{{ avatarText }}</span>
             </div>
-          </template>
-          <div class="profile-body">
-            <el-avatar :size="76" class="ustb-avatar">
-              <el-icon :size="36"><UserFilled /></el-icon>
-            </el-avatar>
-            <el-descriptions :column="1" size="small" class="profile-desc">
-              <el-descriptions-item label="姓名">
-                <strong class="profile-name">{{ shortName || '加载中...' }}</strong>
-              </el-descriptions-item>
-              <el-descriptions-item label="当前角色">
-                {{ roleLabel(userState.currentUser?.role) }}
-              </el-descriptions-item>
-              <el-descriptions-item v-if="userState.currentUser?.studentId" label="学号">
-                {{ userState.currentUser.studentId }}
-              </el-descriptions-item>
-              <el-descriptions-item v-if="userState.currentUser?.empId" label="教职工号">
-                {{ userState.currentUser.empId }}
-              </el-descriptions-item>
-              <el-descriptions-item label="所属单位">
-                {{ collegeLabel(userState.currentUser?.collegeId, userState.currentUser?.orgId) }}
-              </el-descriptions-item>
-            </el-descriptions>
+            <div class="profile-main">
+              <div class="profile-name-row">
+                <span class="profile-name">{{ shortName || '加载中' }}</span>
+                <span class="role-badge">{{ roleLabel(userState.currentUser?.role) }}</span>
+              </div>
+              <div class="profile-meta-grid">
+                <div class="meta-item">
+                  <span class="meta-label">{{ userState.currentUser?.studentId ? '学号' : '工号' }}</span>
+                  <span class="meta-val">{{ userState.currentUser?.studentId || userState.currentUser?.empId || '—' }}</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">所属单位</span>
+                  <span class="meta-val">{{ collegeLabel(userState.currentUser?.collegeId, userState.currentUser?.orgId) }}</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">当前学期</span>
+                  <span class="meta-val">2026-2027-1</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">账户状态</span>
+                  <span class="meta-val val-ok">正常</span>
+                </div>
+              </div>
+            </div>
           </div>
         </el-card>
       </el-col>
 
-      <el-col :xs="24" :lg="12" style="margin-bottom: 16px">
+      <el-col :xs="24" :lg="12" class="col-gap">
         <el-card class="app-card-hover full-height-card">
-          <template #header>
-            <div class="card-head">
-              <span class="card-head-title">
-                <el-icon><Calendar /></el-icon>
-                本学期教务概览
-              </span>
-              <el-button text circle :loading="loading" @click="loadOverview" title="刷新">
-                <el-icon><Refresh /></el-icon>
-              </el-button>
+          <div class="overview-top">
+            <span class="block-label">本学期选课与教学概览</span>
+            <el-button text circle size="small" :loading="loading" @click="loadOverview" title="刷新">
+              <el-icon><Refresh /></el-icon>
+            </el-button>
+          </div>
+          <div class="metrics-strip">
+            <div class="metric-cell">
+              <div class="metric-value metric-primary">{{ activeRoundCount }}</div>
+              <div class="metric-label">进行中轮次</div>
             </div>
-          </template>
-
-          <el-row :gutter="14" class="kpi-grid">
-            <el-col :span="8">
-              <div class="stat-box">
-                <div class="stat-title">当前学期</div>
-                <div class="stat-num num-primary" style="font-size: 18px">2026-2027-1</div>
-                <div class="stat-foot">秋季学期进行中</div>
-              </div>
-            </el-col>
-            <el-col :span="8">
-              <div class="stat-box">
-                <div class="stat-title">开放选课轮次</div>
-                <div class="stat-num num-success">{{ activeRoundCount }}</div>
-                <div class="stat-foot">已发布 {{ publishedRounds.length }} 轮</div>
-              </div>
-            </el-col>
-            <el-col :span="8">
-              <div class="stat-box">
-                <div class="stat-title">系统服务状态</div>
-                <div class="stat-num" :class="serviceOnline ? 'num-success' : 'num-warn'" style="font-size: 18px">
-                  {{ serviceOnline ? '运行正常' : '连接中' }}
-                </div>
-                <div class="stat-foot">教务数据实时同步</div>
-              </div>
-            </el-col>
-          </el-row>
-
-          <div class="health-footer">
-            <el-tag type="primary" size="small" effect="light">当前轮次</el-tag>
-            <span class="health-meta">
-              {{ currentActiveRound ? `${currentActiveRound.round_name}（截止 ${formatTime(currentActiveRound.end_time)}）` : '当前暂无进行中的选课轮次' }}
+            <div class="metric-sep" />
+            <div class="metric-cell">
+              <div class="metric-value">{{ publishedRounds.length }}</div>
+              <div class="metric-label">本学期已发布</div>
+            </div>
+            <div class="metric-sep" />
+            <div class="metric-cell">
+              <div class="metric-value">{{ quickEntries.length }}</div>
+              <div class="metric-label">可用业务板块</div>
+            </div>
+          </div>
+          <div class="round-footnote">
+            <el-icon class="footnote-icon"><Clock /></el-icon>
+            <span v-if="currentActiveRound">
+              <strong>{{ currentActiveRound.round_name }}</strong>
+              <span class="footnote-sep">·</span>
+              <span>截止 {{ formatTime(currentActiveRound.end_time) }}</span>
             </span>
+            <span v-else>当前暂无开放办理的选课轮次</span>
           </div>
         </el-card>
       </el-col>
     </el-row>
 
-    <!-- 第二排：快捷功能入口网格 -->
-    <el-card class="app-card-hover" style="margin-bottom: 24px">
-      <template #header>
-        <div class="card-head">
-          <span class="card-head-title">
-            <el-icon><Grid /></el-icon>
-            业务快捷入口
-          </span>
-          <span class="header-hint">点击卡片进入对应业务办理</span>
+    <!-- 第二排：独立悬浮服务入口（去套娃卡片） -->
+    <div class="section-head">
+      <h2 class="section-title">常用服务</h2>
+      <span class="section-tip">选择对应模块办理教务业务</span>
+    </div>
+    <div class="entry-grid">
+      <div
+        v-for="item in quickEntries"
+        :key="item.path"
+        class="entry-card app-card-hover"
+        @click="router.push(item.path)"
+      >
+        <div class="entry-icon" :style="{ background: item.bg, color: item.color }">
+          <el-icon :size="20"><component :is="item.icon" /></el-icon>
         </div>
-      </template>
-
-      <div class="entry-grid">
-        <div
-          v-for="item in quickEntries"
-          :key="item.path"
-          class="entry-card"
-          @click="router.push(item.path)"
-        >
-          <div class="entry-icon" :style="{ background: item.bg, color: item.color }">
-            <el-icon :size="20"><component :is="item.icon" /></el-icon>
+        <div class="entry-body">
+          <div class="entry-title">
+            <span>{{ item.title }}</span>
+            <el-icon class="entry-arrow"><ArrowRight /></el-icon>
           </div>
-          <div class="entry-body">
-            <div class="entry-title">
-              <span>{{ item.title }}</span>
-              <el-icon class="entry-arrow"><ArrowRight /></el-icon>
-            </div>
-            <div class="entry-desc">{{ item.desc }}</div>
-          </div>
+          <div class="entry-desc">{{ item.desc }}</div>
         </div>
       </div>
-    </el-card>
+    </div>
 
-    <!-- 第三排：最新选课与教务通知公告 -->
-    <el-card class="app-card-hover">
-      <template #header>
-        <div class="card-head">
-          <span class="card-head-title">
-            <el-icon><Bell /></el-icon>
-            选课与教务通知公告
-          </span>
-          <el-button type="primary" link @click="router.push('/prep')">查看全部轮次</el-button>
-        </div>
-      </template>
-
+    <!-- 第三排：教务通知公告 -->
+    <div class="section-head" style="margin-top: 26px">
+      <h2 class="section-title">选课通知公告</h2>
+      <el-button type="primary" link @click="router.push('/prep')">全部轮次</el-button>
+    </div>
+    <el-card class="notice-card">
       <div v-if="publishedRounds.length" class="notice-list">
         <div v-for="r in publishedRounds" :key="r.round_id" class="notice-item">
-          <div class="notice-top">
-            <div class="notice-title-wrap">
-              <el-tag
-                size="small"
-                :type="r.round_status === 3 ? 'success' : r.round_status === 2 ? 'primary' : 'info'"
-                effect="light"
-              >
-                {{ r.round_status === 3 ? '进行中' : r.round_status === 2 ? '已发布' : '已结束' }}
-              </el-tag>
-              <span class="notice-name">{{ r.round_name }}</span>
+          <div class="notice-bar" :class="r.round_status === 3 ? 'bar-active' : 'bar-muted'" />
+          <div class="notice-main">
+            <div class="notice-top">
+              <div class="notice-title-wrap">
+                <span class="notice-name">{{ r.round_name }}</span>
+                <el-tag
+                  size="small"
+                  :type="r.round_status === 3 ? 'success' : r.round_status === 2 ? 'primary' : 'info'"
+                  effect="light"
+                >
+                  {{ r.round_status === 3 ? '进行中' : r.round_status === 2 ? '已发布' : '已结束' }}
+                </el-tag>
+              </div>
+              <span class="notice-time">{{ formatTime(r.start_time) }} — {{ formatTime(r.end_time) }}</span>
             </div>
-            <span class="notice-time">{{ formatTime(r.start_time) }} 至 {{ formatTime(r.end_time) }}</span>
+            <p class="notice-content">{{ r.notice_content }}</p>
           </div>
-          <div class="notice-content">{{ r.notice_content }}</div>
         </div>
       </div>
-      <el-empty v-else description="暂无已发布的选课通知" :image-size="64" />
+      <el-empty v-else description="暂无选课通知" :image-size="60" />
     </el-card>
   </div>
 </template>
@@ -185,6 +163,12 @@ const shortName = computed(() => {
   return full.replace(/（.*）$/, '').trim() || full
 })
 
+const avatarText = computed(() => {
+  const n = shortName.value
+  if (!n) return 'U'
+  return /^[A-Za-z]/.test(n) ? n.slice(0, 2).toUpperCase() : n.slice(0, 1)
+})
+
 const greeting = computed(() => {
   const hour = new Date().getHours()
   if (hour < 6) return '夜深了'
@@ -195,9 +179,11 @@ const greeting = computed(() => {
   return '晚上好'
 })
 
-const todayText = computed(() =>
-  new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })
-)
+const todayText = computed(() => {
+  const d = new Date()
+  const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${weekdays[d.getDay()]}`
+})
 
 const publishedRounds = computed(() =>
   rounds.value.filter((r) => [2, 3, 4].includes(r.round_status))
@@ -231,7 +217,7 @@ const collegeLabel = (collegeId, orgId) => {
 const quickEntries = [
   {
     title: '选课准备与发布',
-    desc: '开课计划维护、限选条件配置、选课轮次审批与通知发布',
+    desc: '开课计划、限选条件与轮次审批发布',
     path: '/prep',
     icon: 'Setting',
     bg: 'rgba(11, 92, 173, 0.10)',
@@ -239,7 +225,7 @@ const quickEntries = [
   },
   {
     title: '学生选课',
-    desc: '全校课程检索、选退课办理、按周课表与教学班上课名单管理',
+    desc: '选退课办理、周课表与上课名单调整',
     path: '/selection',
     icon: 'Calendar',
     bg: 'rgba(22, 163, 74, 0.10)',
@@ -247,7 +233,7 @@ const quickEntries = [
   },
   {
     title: '成绩录入与审核',
-    desc: '按课堂录分提交、学院核对码核验、成绩发布与校外交流成绩认定',
+    desc: '课堂录分、学院核对发布与交流认定',
     path: '/score',
     icon: 'EditPen',
     bg: 'rgba(234, 88, 12, 0.10)',
@@ -255,7 +241,7 @@ const quickEntries = [
   },
   {
     title: '成绩查询与统计',
-    desc: '教学评价、本人查分、学业统计、中英文成绩单打印与统计报表',
+    desc: '教学评价、查分、成绩单与统计报表',
     path: '/stats',
     icon: 'DataAnalysis',
     bg: 'rgba(124, 58, 237, 0.10)',
@@ -263,7 +249,7 @@ const quickEntries = [
   },
   {
     title: '成绩更正申请',
-    desc: '已发布成绩更正发起、学院与教务处两级审批及结果通知',
+    desc: '成绩更正发起、两级审批与结果通知',
     path: '/correction',
     icon: 'DocumentChecked',
     bg: 'rgba(8, 145, 178, 0.10)',
@@ -271,7 +257,7 @@ const quickEntries = [
   },
   {
     title: '系统维护',
-    desc: '教学编码参数配置、数据备份登记与恢复前应急快照管理',
+    desc: '编码参数配置、数据备份与应急快照',
     path: '/admin',
     icon: 'Tools',
     bg: 'rgba(100, 116, 139, 0.12)',
@@ -303,135 +289,227 @@ onMounted(loadOverview)
 </script>
 
 <style scoped>
-.welcome-header {
+.welcome-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
   margin-bottom: 22px;
 }
 .welcome-title {
-  font-size: 22px;
+  margin: 0;
+  font-size: 24px;
   font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--app-text-primary);
-  letter-spacing: 0.2px;
+  line-height: 1.25;
 }
 .welcome-sub {
+  margin: 6px 0 0;
+  font-size: 13.5px;
   color: var(--app-text-secondary);
-  margin-top: 6px;
-  font-size: 13px;
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--app-card-bg);
+  border: 1px solid var(--app-border);
+  font-size: 12.5px;
+  color: var(--app-text-secondary);
+  box-shadow: var(--app-shadow-sm);
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d97706;
+}
+.status-pill.online .status-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
+}
+
+.section-row {
+  margin-bottom: 8px;
+}
+.col-gap {
+  margin-bottom: 18px;
+}
 .full-height-card {
   height: 100%;
 }
 
-.card-head {
+/* 个人名片 */
+.profile-layout {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 20px;
 }
-.card-head-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--app-text-primary);
-}
-.header-hint {
-  font-size: 12px;
-  color: var(--app-text-tertiary);
-  font-weight: 400;
-}
-
-.profile-body {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 22px;
-}
-.ustb-avatar {
+.profile-avatar {
+  width: 68px;
+  height: 68px;
+  border-radius: 20px;
   background: linear-gradient(135deg, #003366 0%, #0b5cad 100%);
   color: #ffffff;
+  font-size: 24px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 6px 18px rgba(0, 51, 102, 0.22);
+  box-shadow: 0 8px 20px rgba(0, 51, 102, 0.22);
 }
-.profile-desc {
-  flex: 1 1 240px;
+.profile-main {
+  flex: 1;
   min-width: 0;
 }
-.profile-name {
-  font-size: 15px;
-  color: var(--app-text-primary);
-}
-
-.kpi-grid {
-  margin-bottom: 18px;
-}
-.stat-box {
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--app-card-muted-bg);
-  border: 1px solid var(--app-border);
-}
-.stat-title {
-  font-size: 12px;
-  color: var(--app-text-secondary);
-  margin-bottom: 6px;
-}
-.stat-num {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--app-text-primary);
-  line-height: 1.3;
-}
-.num-primary { color: var(--brand-primary); }
-.num-success { color: #389e0d; }
-.num-warn { color: #d48806; }
-.stat-foot {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--app-text-tertiary);
-}
-
-.health-footer {
+.profile-name-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
-  padding-top: 10px;
-  border-top: 1px dashed var(--app-border);
+  margin-bottom: 14px;
 }
-.health-meta {
+.profile-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--app-text-primary);
+}
+.role-badge {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--brand-primary);
+  background: var(--app-menu-active-bg);
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+.profile-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+}
+.meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.meta-label {
+  font-size: 11.5px;
+  color: var(--app-text-tertiary);
+}
+.meta-val {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--app-text-primary);
+}
+.val-ok {
+  color: #16a34a;
+}
+
+/* 概览卡 */
+.overview-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.block-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-text-secondary);
+}
+.metrics-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px 16px;
+}
+.metric-cell {
+  flex: 1;
+  text-align: center;
+}
+.metric-value {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--app-text-primary);
+  line-height: 1.2;
+}
+.metric-primary {
+  color: var(--brand-primary);
+}
+.metric-label {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--app-text-secondary);
+}
+.metric-sep {
+  width: 1px;
+  height: 34px;
+  background: var(--app-border);
+}
+.round-footnote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--app-card-muted-bg);
   font-size: 12.5px;
   color: var(--app-text-secondary);
 }
+.footnote-icon {
+  color: var(--brand-primary);
+  flex-shrink: 0;
+}
+.footnote-sep {
+  margin: 0 6px;
+  color: var(--app-text-tertiary);
+}
 
-/* 快捷业务卡片网格 */
+/* 分区标题 */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 6px 2px 12px;
+}
+.section-title {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 650;
+  color: var(--app-text-primary);
+}
+.section-tip {
+  font-size: 12.5px;
+  color: var(--app-text-tertiary);
+}
+
+/* 快捷业务独立悬浮卡 */
 .entry-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px;
 }
 .entry-card {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 14px;
-  padding: 16px;
-  border-radius: 12px;
+  padding: 18px 20px;
+  border-radius: 15px;
   border: 1px solid var(--app-border);
-  background: var(--app-card-muted-bg);
-  cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
-}
-.entry-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(11, 92, 173, 0.28);
   background: var(--app-card-bg);
   box-shadow: var(--app-shadow-sm);
+  cursor: pointer;
 }
 .entry-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 11px;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -448,7 +526,7 @@ onMounted(loadOverview)
   font-size: 14.5px;
   font-weight: 600;
   color: var(--app-text-primary);
-  margin-bottom: 5px;
+  margin-bottom: 4px;
 }
 .entry-arrow {
   color: var(--app-text-tertiary);
@@ -461,20 +539,43 @@ onMounted(loadOverview)
 .entry-desc {
   font-size: 12.5px;
   color: var(--app-text-secondary);
-  line-height: 1.55;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 通知列表 */
 .notice-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
 }
 .notice-item {
-  padding: 14px 16px;
-  border-radius: 10px;
-  background: var(--app-card-muted-bg);
-  border: 1px solid var(--app-border);
+  display: flex;
+  gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--app-border);
+}
+.notice-item:first-child {
+  padding-top: 2px;
+}
+.notice-item:last-child {
+  padding-bottom: 2px;
+  border-bottom: none;
+}
+.notice-bar {
+  width: 3px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.bar-active {
+  background: var(--brand-primary);
+}
+.bar-muted {
+  background: var(--app-border-strong);
+}
+.notice-main {
+  flex: 1;
+  min-width: 0;
 }
 .notice-top {
   display: flex;
@@ -499,19 +600,24 @@ onMounted(loadOverview)
   color: var(--app-text-tertiary);
 }
 .notice-content {
+  margin: 0;
   font-size: 13px;
   color: var(--app-text-secondary);
   line-height: 1.6;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1080px) {
   .entry-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-@media (max-width: 680px) {
+@media (max-width: 640px) {
   .entry-grid {
     grid-template-columns: 1fr;
+  }
+  .profile-layout {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 </style>
