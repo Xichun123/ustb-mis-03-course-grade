@@ -26,8 +26,8 @@
       <el-col :span="8">
         <el-card shadow="never">
           <div class="stat-label">全组 29 模块实施进度</div>
-          <div class="stat-value">已完成业务 ① ④ ⑤</div>
-          <div class="stat-desc">业务①④⑤已实库联调通过；业务②③⑥可按独立包并行合入</div>
+          <div class="stat-value">六大业务 ①–⑥ 全部合入</div>
+          <div class="stat-desc">业务①②③④⑤⑥全部接入云库 v9（29 个叶子模块），支持全角色联调验收</div>
         </el-card>
       </el-col>
     </el-row>
@@ -63,12 +63,12 @@ const router = useRouter()
 const health = ref(null)
 
 const moduleRows = [
-  { biz: '① 选课准备与发布', owner: '朱鳞太', tester: '张文浩', scope: '1.1 开课计划导入、1.2 限选条件设置、1.3 选课轮次设置、1.4 选课方案审批、1.5 选课通知发布', status: '样板已完成', ready: true, path: '/prep' },
-  { biz: '② 学生选课', owner: '张文浩', tester: '黎家俊', scope: '2.1 课程查询、2.2 选退课、2.3 选课校验（含重修免听）、2.4 超额筛选、2.5 停开、2.6 课表与上课名单、2.7 上课名单调整', status: '骨架就绪待开发', ready: false, path: '/selection' },
-  { biz: '③ 成绩录入与审核', owner: '蒋作', tester: '朱鳞太', scope: '3.1 按课堂号录分、3.2 总评提交与随机码、3.3 学院核对、3.4 发布、3.5 校外交流成绩换算认定', status: '骨架就绪待开发', ready: false, path: '/score' },
+  { biz: '① 选课准备与发布', owner: '朱鳞太', tester: '张文浩', scope: '1.1 开课计划导入、1.2 限选条件设置、1.3 选课轮次设置、1.4 选课方案审批、1.5 选课通知发布', status: '已完成（1.1–1.5）', ready: true, path: '/prep' },
+  { biz: '② 学生选课', owner: '张文浩', tester: '黎家俊', scope: '2.1 课程查询、2.2 选退课、2.3 选课校验（含重修免听）、2.4 超额筛选、2.5 停开预览、2.6 课表与上课名单、2.7 上课名单调整', status: '已完成（2.1–2.7）', ready: true, path: '/selection' },
+  { biz: '③ 成绩录入与审核', owner: '蒋作', tester: '朱鳞太', scope: '3.1 按课堂号录分、3.2 总评提交与随机码、3.3 学院核对、3.4 发布、3.5 校外交流成绩换算认定', status: '已完成（3.1–3.5）', ready: true, path: '/score' },
   { biz: '④ 成绩查询与统计', owner: '黎家俊', tester: '蒋作', scope: '4.1 学生评教、4.2 先评教后查分、4.3 学业统计（排除辅修）、4.4 成绩单打印、4.5 统计报表、4.6 评教汇总', status: '已完成（4.1–4.6）', ready: true, path: '/stats' },
-  { biz: '⑤ 成绩更正申请', owner: '朱鳞太', tester: '张文浩', scope: '5.1 更正申请（原值并发核验）、5.2 学院审核、5.3 教务处审批、5.4 改分重算与学生通知', status: '样板已完成', ready: true, path: '/correction' },
-  { biz: '⑥ 系统维护', owner: '蒋作', tester: '朱鳞太', scope: '6.1 编码与系统参数维护、6.2 数据备份与恢复', status: '骨架就绪待开发', ready: false, path: '/admin' }
+  { biz: '⑤ 成绩更正申请', owner: '朱鳞太', tester: '张文浩', scope: '5.1 更正申请（原值并发核验）、5.2 学院审核、5.3 教务处审批、5.4 改分重算与学生通知', status: '已完成（5.1–5.4）', ready: true, path: '/correction' },
+  { biz: '⑥ 系统维护', owner: '蒋作', tester: '朱鳞太', scope: '6.1 编码与系统参数维护、6.2 数据备份与恢复', status: '已完成（6.1–6.2）', ready: true, path: '/admin' }
 ]
 
 onMounted(async () => {

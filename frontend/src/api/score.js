@@ -33,5 +33,11 @@ export const scoreApi = {
   },
   createExchange(payload) {
     return request.post('/score/exchange', payload)
+  },
+  collegeAuditExchange(convertId, payload) {
+    return request.post(`/score/exchange/${convertId}/college-audit`, payload)
+  },
+  schoolApproveExchange(convertId, payload) {
+    return request.post(`/score/exchange/${convertId}/school-approve`, payload)
   }
 }

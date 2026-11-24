@@ -84,9 +84,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { selectionApi as api } from '../../api/selection'
+import { userState } from '../../stores/user'
 
 const context = ref({ rounds: [], terms: [], user: {} }), busy = ref(false), error = ref(''), active = ref('courses')
 const term = ref('2026-2027-1'), roundId = ref(null), keyword = ref(''), coursePage = ref(1), courses = ref([]), courseTotal = ref(0), summary = ref({})
@@ -130,7 +131,15 @@ function openAdjustment(row){adjustment.value={studentId:row?.student_id || '',o
 function submitAdjustment(){perform(async()=>{if(!adjustment.value.reason?.trim())throw new Error('请填写调整原因');try{const r=await api.adjust(tcId.value,adjustment.value);ElMessage.success(r.data.message);adjustVisible.value=false}catch(e){if(!e.response){adjustVisible.value=false;error.value='调整结果待核实，已刷新名单，请核对后再办理。'}else throw e}await loadRoster()})}
 function screen(){perform(async()=>{await ElMessageBox.confirm('确认执行本轮截止筛选？将按实际余量和志愿重新校验所有待筛选申请。','截止筛选',{type:'warning'});const r=await api.screen(roundId.value);screenResult.value=`${r.data.message}；本次录取 ${r.data.accepted} 人，未选中 ${r.data.rejected} 人。`})}
 function printRoster(){perform(async()=>{printData.value=(await api.roster(tcId.value,'')).data;await nextTick();window.print()})}
-onMounted(()=>perform(async()=>{context.value=(await api.context()).data;term.value=context.value.rounds.find(r=>r.window_open)?.term || context.value.terms[0] || term.value;chooseRound();active.value=isStudent.value?'courses':'roster';if(isStudent.value || isStaff.value)await refresh()}))
+async function bootContext() {
+  context.value = (await api.context()).data
+  term.value = context.value.rounds.find(r => r.window_open)?.term || context.value.terms[0] || term.value
+  chooseRound()
+  active.value = isStudent.value ? 'courses' : 'roster'
+  if (isStudent.value || isStaff.value) await refresh()
+}
+watch(() => userState.currentKey, () => perform(bootContext))
+onMounted(() => perform(bootContext))
 </script>
 
 <style scoped>

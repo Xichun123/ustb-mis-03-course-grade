@@ -99,4 +99,24 @@ public class ScoreController {
     public ApiResponse<Map<String, Object>> createExchange(@RequestBody Map<String, Object> body) {
         return ApiResponse.ok("校外成绩已登记", scoreService.createExchange(body));
     }
+
+    /** 3.5 学院审核校外交流成绩认定 */
+    @PostMapping("/exchange/{convertId}/college-audit")
+    public ApiResponse<Map<String, Object>> collegeAuditExchange(
+            @PathVariable long convertId, @RequestBody Map<String, Object> body) {
+        int decision = Integer.parseInt(String.valueOf(body.getOrDefault("decision", 1)));
+        String opinion = body.get("opinion") == null ? null : String.valueOf(body.get("opinion"));
+        Map<String, Object> data = scoreService.collegeAuditExchange(convertId, decision, opinion);
+        return ApiResponse.ok(String.valueOf(data.get("message")), data);
+    }
+
+    /** 3.5 教务处审批校外交流成绩认定 */
+    @PostMapping("/exchange/{convertId}/school-approve")
+    public ApiResponse<Map<String, Object>> schoolApproveExchange(
+            @PathVariable long convertId, @RequestBody Map<String, Object> body) {
+        int decision = Integer.parseInt(String.valueOf(body.getOrDefault("decision", 1)));
+        String opinion = body.get("opinion") == null ? null : String.valueOf(body.get("opinion"));
+        Map<String, Object> data = scoreService.schoolApproveExchange(convertId, decision, opinion);
+        return ApiResponse.ok(String.valueOf(data.get("message")), data);
+    }
 }

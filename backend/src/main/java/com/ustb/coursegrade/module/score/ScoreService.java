@@ -10,17 +10,21 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.security.SecureRandom;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.*;
 
 /**
- * 【业务③ 成绩录入与审核 3.1–3.5 · 蒋作】
+ * 【业务③ 成绩录入与审核 3.1–3.5 · 蒋作（已合入主干并对齐 v9 实库）】
  * 以课堂号 lesson_no 统一管理：一个课堂号可对应多个教学班 tc_id（不同班级/重修/辅修都在同一课堂号下）。
  */
 @Service
 public class ScoreService {
 
     private static final int DEFAULT_RATIO_MIN = 30;
-    private static final String CODE_SALT = "USTB03-SCORE-2026";
+    private static final char[] VERIFY_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".toCharArray();
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private final JdbcTemplate jdbc;
 
@@ -38,7 +42,10 @@ public class ScoreService {
                          WHERE lc2.lesson_no = lc.lesson_no AND sc.select_status = 1) AS student_count,
                        (SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
                          JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
-                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS submitted_count
+                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS submitted_count,
+                       (SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
+                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 3) AS published_count
                 FROM lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
@@ -65,21 +72,25 @@ public class ScoreService {
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
-    /** 3.1 课堂名单与已录成绩（聚合该课堂号下全部教学班） */
+    /** 3.1 课堂名单与已录成绩（聚合该课堂号下全部教学班，兼容来校交换生） */
     public Map<String, Object> roster(String lessonNo) {
         Map<String, Object> head = requireClass(lessonNo);
-        UserContext.requireUser();
-        CurrentUser u = UserContext.get();
+        CurrentUser u = UserContext.requireUser();
         if (u.role() == RoleEnum.TEACHER && !owns(head, u)) {
             throw BizException.forbidden("该课堂不属于当前教师");
         }
         List<String> tcIds = tcIds(head);
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT sc.sc_id, sc.tc_id, sc.student_id, st.student_name, st.class_name, sc.study_type, sc.stu_level,
-                       s.score_id, s.usual_ratio, s.usual_score, s.exam_score, s.exam_flag, s.score_type,
+                SELECT CAST(sc.sc_id AS CHAR) AS sc_id, sc.tc_id, sc.student_id,
+                       COALESCE(st.student_name, ex.student_name, sc.student_id) AS student_name,
+                       COALESCE(st.class_name, ex.sender_school_name, '交流生') AS class_name,
+                       sc.study_type, sc.stu_level,
+                       CAST(s.score_id AS CHAR) AS score_id,
+                       s.usual_ratio, s.usual_score, s.exam_score, s.exam_flag, s.score_type,
                        s.score_level, s.total_score, s.grade_point, s.score_status
                 FROM sc
-                JOIN student st ON sc.student_id = st.student_id
+                LEFT JOIN student st ON sc.student_id = st.student_id
+                LEFT JOIN v_exchange_student ex ON ex.temp_student_no = sc.student_id
                 LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
                 WHERE sc.tc_id IN (%s) AND sc.select_status = 1
                 ORDER BY sc.student_id
@@ -88,16 +99,16 @@ public class ScoreService {
         data.put("students", rows);
         data.put("ratio_min", ratioMin());
         boolean canSeeCode = u.role() == RoleEnum.TEACHER || u.role() == RoleEnum.SYS_ADMIN;
-        data.put("verify_code", canSeeCode && !rows.isEmpty() ? buildCode(lessonNo) : null);
+        data.put("verify_code", canSeeCode ? latestVerifyCode(lessonNo) : null);
         return data;
     }
 
-    /** 3.1 保存成绩草稿 */
+    /** 3.1 保存成绩草稿（最低平时占比仅在录入保存时校验一次） */
     @Transactional
     public Map<String, Object> saveGrades(String lessonNo, List<Map<String, Object>> items) {
         Map<String, Object> head = requireClass(lessonNo);
-        CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER);
-        if (!owns(head, u)) {
+        CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
+        if (u.role() == RoleEnum.TEACHER && !owns(head, u)) {
             throw BizException.forbidden("只能录入本人任教的课堂");
         }
         int min = ratioMin();
@@ -111,6 +122,15 @@ public class ScoreService {
             if (scId == null || !allowed.contains(scId)) {
                 throw BizException.unprocessable("INVALID_STUDENT", "名单中不存在该选课记录：" + item.get("sc_id"));
             }
+            List<Integer> curStatuses = jdbc.queryForList(
+                    "SELECT score_status FROM score WHERE sc_id = ? AND exam_type = 1", Integer.class, scId);
+            if (!curStatuses.isEmpty()) {
+                int st = curStatuses.get(0);
+                if (st == 1 || st == 2 || st == 3) {
+                    throw BizException.conflict("SCORE_LOCKED",
+                            "选课记录 " + scId + " 当前已提交/已核对/已发布，不能直接修改（发布后请走业务⑤成绩更正）");
+                }
+            }
             int ratio = toInt(item.get("usual_ratio"), min);
             if (ratio < min || ratio > 100) {
                 throw BizException.unprocessable("RATIO_TOO_LOW",
@@ -123,9 +143,26 @@ public class ScoreService {
                 throw BizException.unprocessable("INVALID_EXAM_FLAG", "考试情况只能为 0正常/1缺考/2缓考/3违纪");
             }
             int scoreType = toInt(item.get("score_type"), 1);
-            String level = item.get("score_level") == null ? null : String.valueOf(item.get("score_level")).trim();
-            if (scoreType == 2 && !Set.of("优", "良", "中", "及格", "不及格").contains(level)) {
-                throw BizException.unprocessable("INVALID_LEVEL", "五级制成绩只能为 优/良/中/及格/不及格");
+            if (scoreType < 1 || scoreType > 3) {
+                throw BizException.unprocessable("INVALID_SCORE_TYPE", "记分方式只能为 1百分制/2五级制/3两级制");
+            }
+            String level = str(item.get("score_level"));
+            if (scoreType == 1) {
+                level = null;
+            } else if (scoreType == 2) {
+                if (!level.isEmpty() && !Set.of("优", "良", "中", "及格", "不及格").contains(level)) {
+                    throw BizException.unprocessable("INVALID_LEVEL", "五级制成绩只能为 优/良/中/及格/不及格");
+                }
+                if (level.isEmpty()) {
+                    level = null;
+                }
+            } else {
+                if (!level.isEmpty() && !Set.of("合格", "不合格").contains(level)) {
+                    throw BizException.unprocessable("INVALID_LEVEL", "两级制成绩只能为 合格/不合格");
+                }
+                if (level.isEmpty()) {
+                    level = null;
+                }
             }
             int updated = jdbc.update("""
                     UPDATE score SET usual_ratio = ?, usual_score = ?, exam_score = ?, exam_flag = ?,
@@ -144,45 +181,62 @@ public class ScoreService {
         return Map.of("saved", saved, "ratio_min", min);
     }
 
-    /** 3.2 总评计算与提交：只校验数据规范，计算后置 1，生成 6 位核对码 */
+    /** 3.2 总评计算与提交：只校验输入数据规范，计算后置 1，写入 score_audit 批次并生成 6 位合法核对随机码 */
     @Transactional
     public Map<String, Object> submit(String lessonNo) {
         Map<String, Object> head = requireClass(lessonNo);
-        CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER);
-        if (!owns(head, u)) {
+        CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
+        if (u.role() == RoleEnum.TEACHER && !owns(head, u)) {
             throw BizException.forbidden("只能提交本人任教的课堂");
         }
         List<String> tcIds = tcIds(head);
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT sc.sc_id, sc.student_id, s.score_id, s.usual_ratio, s.usual_score, s.exam_score,
-                       s.exam_flag, s.score_type, s.score_level
+                       s.exam_flag, s.score_type, s.score_level, s.score_status
                 FROM sc
                 LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
                 WHERE sc.tc_id IN (%s) AND sc.select_status = 1
+                FOR UPDATE
                 """.formatted(marks(tcIds)), tcIds.toArray());
         if (rows.isEmpty()) {
             throw BizException.unprocessable("EMPTY_ROSTER", "该课堂没有已选中学生");
         }
         List<String> missing = new ArrayList<>();
         List<String> invalid = new ArrayList<>();
-        int min = ratioMin();
+        boolean hasDraft = false;
         for (Map<String, Object> r : rows) {
             String sid = String.valueOf(r.get("student_id"));
             if (r.get("score_id") == null) {
                 missing.add(sid);
                 continue;
             }
+            int st = ((Number) r.get("score_status")).intValue();
+            if (st == 0 || st == 4) {
+                hasDraft = true;
+            }
             int flag = r.get("exam_flag") == null ? 0 : ((Number) r.get("exam_flag")).intValue();
+            int scoreType = r.get("score_type") == null ? 1 : ((Number) r.get("score_type")).intValue();
             int ratio = r.get("usual_ratio") == null ? -1 : ((Number) r.get("usual_ratio")).intValue();
             BigDecimal usual = r.get("usual_score") == null ? null : new BigDecimal(String.valueOf(r.get("usual_score")));
             BigDecimal exam = r.get("exam_score") == null ? null : new BigDecimal(String.valueOf(r.get("exam_score")));
-            if (ratio < min || ratio > 100) {
-                invalid.add(sid + "占比");
-            } else if (flag == 0 && (usual == null || exam == null)) {
-                invalid.add(sid + "缺项");
-            } else if ((usual != null && (usual.signum() < 0 || usual.compareTo(new BigDecimal("100")) > 0))
-                    || (exam != null && (exam.signum() < 0 || exam.compareTo(new BigDecimal("100")) > 0))) {
-                invalid.add(sid + "超范围");
+            String level = str(r.get("score_level"));
+            if (ratio < 0 || ratio > 100) {
+                invalid.add(sid + "占比非法");
+            } else if (scoreType == 1) {
+                if (flag == 0 && (usual == null || exam == null)) {
+                    invalid.add(sid + "缺项");
+                } else if ((usual != null && (usual.signum() < 0 || usual.compareTo(new BigDecimal("100")) > 0))
+                        || (exam != null && (exam.signum() < 0 || exam.compareTo(new BigDecimal("100")) > 0))) {
+                    invalid.add(sid + "超范围");
+                }
+            } else if (scoreType == 2) {
+                if (flag == 0 && !Set.of("优", "良", "中", "及格", "不及格").contains(level)) {
+                    invalid.add(sid + "等级非法");
+                }
+            } else if (scoreType == 3) {
+                if (flag == 0 && !Set.of("合格", "不合格").contains(level)) {
+                    invalid.add(sid + "等级非法");
+                }
             }
         }
         if (!missing.isEmpty()) {
@@ -191,29 +245,56 @@ public class ScoreService {
         if (!invalid.isEmpty()) {
             throw BizException.unprocessable("INVALID_SCORE", "数据不符合规范：" + String.join("、", invalid));
         }
+        if (!hasDraft) {
+            throw BizException.conflict("ALREADY_SUBMITTED", "该课堂没有待提交（录入中/退回修改）的成绩");
+        }
+
+        LocalDateTime submitTime = nextUniqueSubmitTime(lessonNo);
+        Timestamp ts = Timestamp.valueOf(submitTime);
         for (Map<String, Object> r : rows) {
+            int st = ((Number) r.get("score_status")).intValue();
+            if (st != 0 && st != 4) {
+                continue;
+            }
             int flag = r.get("exam_flag") == null ? 0 : ((Number) r.get("exam_flag")).intValue();
+            int scoreType = r.get("score_type") == null ? 1 : ((Number) r.get("score_type")).intValue();
             int ratio = ((Number) r.get("usual_ratio")).intValue();
             BigDecimal usual = r.get("usual_score") == null ? BigDecimal.ZERO : new BigDecimal(String.valueOf(r.get("usual_score")));
             BigDecimal exam = r.get("exam_score") == null ? null : new BigDecimal(String.valueOf(r.get("exam_score")));
+            String level = str(r.get("score_level"));
             BigDecimal total = null;
             BigDecimal gp = null;
-            if (flag == 0 && exam != null) {
-                total = usual.multiply(BigDecimal.valueOf(ratio))
-                        .add(exam.multiply(BigDecimal.valueOf(100 - ratio)))
-                        .divide(BigDecimal.valueOf(100), 1, RoundingMode.HALF_UP);
-                gp = percentToPoint(total);
-            } else if (flag == 1) {
-                total = BigDecimal.ZERO;
-                gp = BigDecimal.ZERO;
+            if (scoreType == 1) {
+                if (flag == 0 && exam != null) {
+                    total = usual.multiply(BigDecimal.valueOf(ratio))
+                            .add(exam.multiply(BigDecimal.valueOf(100 - ratio)))
+                            .divide(BigDecimal.valueOf(100), 1, RoundingMode.HALF_UP);
+                    gp = percentToPoint(total);
+                } else if (flag == 1 || flag == 3) {
+                    total = BigDecimal.ZERO;
+                    gp = BigDecimal.ZERO;
+                }
+            } else {
+                if (flag == 0 && !level.isEmpty()) {
+                    gp = levelToPoint(level);
+                } else if (flag == 1 || flag == 3) {
+                    level = (scoreType == 2) ? "不及格" : "不合格";
+                    gp = BigDecimal.ZERO;
+                }
             }
             jdbc.update("""
-                    UPDATE score SET total_score = ?, grade_point = ?, score_status = 1, submit_time = NOW()
+                    UPDATE score SET total_score = ?, score_level = ?, grade_point = ?,
+                           score_status = 1, submit_time = ?
                      WHERE sc_id = ? AND exam_type = 1
-                    """, total, gp, r.get("sc_id"));
+                    """, total, scoreType == 1 ? null : (level.isEmpty() ? null : level), gp, ts, r.get("sc_id"));
         }
-        String code = buildCode(lessonNo);
-        return Map.of("lesson_no", lessonNo, "submitted", rows.size(), "verify_code", code);
+
+        String code = generateVerifyCode();
+        jdbc.update("""
+                INSERT INTO score_audit (lesson_no, submit_time, verify_code, auditor_id, audit_result, audit_opinion, audit_time)
+                VALUES (?, ?, ?, NULL, 0, NULL, NULL)
+                """, lessonNo, ts, code);
+        return Map.of("lesson_no", lessonNo, "submitted", rows.size(), "verify_code", code, "submit_time", submitTime.toString());
     }
 
     /** 3.2/3.3 成绩登记表（含核对码） */
@@ -253,7 +334,7 @@ public class ScoreService {
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
-    /** 3.3 输码核对：通过置 2，退回置 4 并记审核意见（按课堂号下每个教学班各写一条审核记录） */
+    /** 3.3 学院输码核对（对齐 v9 score_audit.lesson_no 与 verify_code）：通过置 2，退回置 4 并必填差异说明 */
     @Transactional
     public Map<String, Object> audit(String lessonNo, String verifyCode, int result, String opinion) {
         CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
@@ -265,11 +346,9 @@ public class ScoreService {
         if (result != 1 && result != 2) {
             throw BizException.unprocessable("INVALID_RESULT", "核对结论只能为 1通过 / 2退回");
         }
-        if (result == 2 && (opinion == null || opinion.isBlank())) {
+        String op = opinion == null ? "" : opinion.trim();
+        if (result == 2 && op.isEmpty()) {
             throw BizException.unprocessable("OPINION_REQUIRED", "退回时必须填写差异说明");
-        }
-        if (!buildCode(lessonNo).equals(verifyCode == null ? "" : verifyCode.trim())) {
-            throw BizException.unprocessable("CODE_MISMATCH", "核对码与系统不一致，请对照纸质成绩登记表重新输入");
         }
         List<String> tcIds = tcIds(head);
         Integer wait = jdbc.queryForObject("""
@@ -279,17 +358,35 @@ public class ScoreService {
         if (wait == null || wait == 0) {
             throw BizException.conflict("NOT_SUBMITTED", "该课堂没有待核对（已提交）的成绩");
         }
-        for (String tcId : tcIds) {
-            jdbc.update("""
-                    INSERT INTO score_audit(tc_id, auditor_id, audit_result, audit_opinion, audit_time)
-                    VALUES(?, ?, ?, ?, NOW())
-                    """, tcId, u.empId(), result, opinion == null ? null : opinion.trim());
+
+        List<Map<String, Object>> pendingAudits = jdbc.queryForList("""
+                SELECT audit_id, verify_code, submit_time
+                FROM score_audit
+                WHERE lesson_no = ? AND audit_result = 0
+                ORDER BY submit_time DESC, audit_id DESC
+                LIMIT 1 FOR UPDATE
+                """, lessonNo);
+        if (pendingAudits.isEmpty()) {
+            throw BizException.conflict("NO_PENDING_AUDIT", "未找到该课堂最新的待核对批次记录");
         }
+        Map<String, Object> batch = pendingAudits.get(0);
+        String expectedCode = String.valueOf(batch.get("verify_code")).trim();
+        String inputCode = verifyCode == null ? "" : verifyCode.trim().toUpperCase(Locale.ROOT);
+        if (!expectedCode.equalsIgnoreCase(inputCode)) {
+            throw BizException.unprocessable("CODE_MISMATCH", "核对码与系统不一致，请对照纸质成绩登记表重新输入");
+        }
+
+        long auditId = ((Number) batch.get("audit_id")).longValue();
+        jdbc.update("""
+                UPDATE score_audit
+                SET auditor_id = ?, audit_result = ?, audit_opinion = ?, audit_time = NOW()
+                WHERE audit_id = ? AND audit_result = 0
+                """, u.empId(), result, op.isEmpty() ? (result == 1 ? "核对纸质成绩单无误" : op) : op, auditId);
         jdbc.update("""
                 UPDATE score SET score_status = ?
                  WHERE sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s)) AND exam_type = 1 AND score_status = 1
                 """.formatted(marks(tcIds)), append(new Object[]{result == 1 ? 2 : 4}, tcIds));
-        return Map.of("lesson_no", lessonNo, "result", result,
+        return Map.of("lesson_no", lessonNo, "audit_id", String.valueOf(auditId), "result", result,
                 "message", result == 1 ? "核对通过，等待教务处发布" : "已退回任课教师二次确认");
     }
 
@@ -319,7 +416,7 @@ public class ScoreService {
                 """, args.toArray());
     }
 
-    /** 3.4 发布：校验本次提交后的审核通过记录，置 3 并重算 is_final */
+    /** 3.4 成绩发布：校验本次提交批次已审核通过（score_audit.lesson_no），置 3、精准重标 is_final 并刷新学业统计 */
     @Transactional
     public Map<String, Object> publish(String lessonNo) {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
@@ -332,41 +429,34 @@ public class ScoreService {
         if (ready == null || ready == 0) {
             throw BizException.conflict("NOT_READY", "该课堂没有学院核对通过的成绩");
         }
-        List<Object> passArgs = new ArrayList<>(tcIds);
-        passArgs.addAll(tcIds);
-        Integer pass = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM score_audit a
-                 WHERE a.tc_id IN (%s) AND a.audit_result = 1
-                   AND a.audit_time >= COALESCE((SELECT MAX(s.submit_time)
-                                                   FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                                                  WHERE sc.tc_id IN (%s) AND s.exam_type = 1), a.audit_time)
-                """.formatted(marks(tcIds), marks(tcIds)), Integer.class, passArgs.toArray());
-        if (pass == null || pass == 0) {
-            throw BizException.conflict("NO_AUDIT", "学院尚未核对本次提交，不能发布");
+        List<Map<String, Object>> latestAudit = jdbc.queryForList("""
+                SELECT audit_id, audit_result, submit_time
+                FROM score_audit
+                WHERE lesson_no = ?
+                ORDER BY submit_time DESC, audit_id DESC
+                LIMIT 1
+                """, lessonNo);
+        if (latestAudit.isEmpty() || ((Number) latestAudit.get(0).get("audit_result")).intValue() != 1) {
+            throw BizException.conflict("NO_AUDIT", "该课堂最新提交批次尚未通过学院核对，不能发布");
         }
+
         jdbc.update("""
                 UPDATE score SET score_status = 3, publish_time = NOW()
                  WHERE sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s)) AND exam_type = 1 AND score_status = 2
                 """.formatted(marks(tcIds)), tcIds.toArray());
+
         String courseId = String.valueOf(head.get("course_id"));
-        List<String> students = jdbc.queryForList("""
-                SELECT DISTINCT sc.student_id FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                 WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 3
-                """.formatted(marks(tcIds)), String.class, tcIds.toArray());
-        for (String sid : students) {
-            jdbc.update("""
-                    UPDATE score SET is_final = 0
-                     WHERE sc_id IN (SELECT sc_id FROM sc WHERE student_id = ?)
-                    """, sid);
-            Long best = jdbc.queryForObject("""
-                    SELECT s.score_id FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                     JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                     WHERE sc.student_id = ? AND s.score_status = 3 AND tc.course_id = ?
-                     ORDER BY s.total_score DESC, s.score_id DESC LIMIT 1
-                    """, Long.class, sid, courseId);
-            if (best != null) {
-                jdbc.update("UPDATE score SET is_final = 1 WHERE score_id = ?", best);
-            }
+        String term = String.valueOf(head.get("term"));
+        List<Map<String, Object>> targets = jdbc.queryForList("""
+                SELECT DISTINCT sc.student_id, sc.stat_stage
+                FROM score s JOIN sc ON s.sc_id = sc.sc_id
+                WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 3
+                """.formatted(marks(tcIds)), tcIds.toArray());
+        for (Map<String, Object> st : targets) {
+            String sid = String.valueOf(st.get("student_id"));
+            int stage = ((Number) st.get("stat_stage")).intValue();
+            recomputeIsFinalJoint(sid, stage, courseId);
+            recomputeAcademicStats(sid, stage, term);
         }
         return Map.of("lesson_no", lessonNo, "published", ready);
     }
@@ -375,30 +465,39 @@ public class ScoreService {
     public List<Map<String, Object>> listExchange(String studentId, String keyword) {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
-                SELECT convert_id, student_id, exchange_apply_id, term, stat_stage, host_school,
-                       ext_course_code, ext_course_name, ext_credit, ext_score_raw, ext_scale_type,
-                       course_id, score_type, converted_score, converted_level, grade_point, is_final, audit_status
-                FROM exchange_score_convert WHERE 1=1
+                SELECT CAST(e.convert_id AS CHAR) AS convert_id, e.student_id,
+                       COALESCE(st.student_name, e.student_id) AS student_name,
+                       e.exchange_apply_id, e.term, e.stat_stage, e.host_school,
+                       e.ext_course_code, e.ext_course_name, e.ext_credit, e.ext_score_raw, e.ext_scale_type,
+                       e.course_id, COALESCE(c.course_name, e.course_id) AS course_name,
+                       e.score_type, e.converted_score, e.converted_level, e.grade_point,
+                       e.is_final, e.proof_no, e.audit_status,
+                       e.college_audit_opinion, e.school_audit_opinion, e.apply_time
+                FROM exchange_score_convert e
+                LEFT JOIN student st ON e.student_id = st.student_id
+                LEFT JOIN course c ON e.course_id = c.course_id
+                WHERE 1=1
                 """);
         List<Object> args = new ArrayList<>();
         if (studentId != null && !studentId.isBlank()) {
-            sql.append(" AND student_id = ? ");
+            sql.append(" AND e.student_id = ? ");
             args.add(studentId.trim());
         }
         if (keyword != null && !keyword.isBlank()) {
-            sql.append(" AND (ext_course_name LIKE ? OR host_school LIKE ?) ");
+            sql.append(" AND (e.ext_course_name LIKE ? OR e.host_school LIKE ? OR e.proof_no LIKE ?) ");
             String like = "%" + keyword.trim() + "%";
             args.add(like);
             args.add(like);
+            args.add(like);
         }
-        sql.append(" ORDER BY convert_id DESC LIMIT 200");
+        sql.append(" ORDER BY e.convert_id DESC LIMIT 200");
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
     /** 3.5 校外交流成绩认定：登记并换算 */
     @Transactional
     public Map<String, Object> createExchange(Map<String, Object> body) {
-        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
+        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
         String sid = str(body.get("student_id"));
         String term = str(body.get("term"));
         String host = str(body.get("host_school"));
@@ -441,20 +540,283 @@ public class ScoreService {
             throw BizException.unprocessable("INVALID_SCORE_TYPE", "换算后记分方式只能为 1/2/3");
         }
         BigDecimal gp = converted != null ? percentToPoint(converted) : levelToPoint(level);
+        String applyId = str(body.get("exchange_apply_id"));
+        String extCode = str(body.get("ext_course_code"));
         jdbc.update("""
                 INSERT INTO exchange_score_convert(student_id, exchange_apply_id, term, stat_stage, host_school,
                     ext_course_code, ext_course_name, ext_credit, ext_score_raw, ext_scale_type, course_id,
                     score_type, converted_score, converted_level, grade_point, is_final, proof_no,
                     version_no, audit_status, apply_time)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1, 0, NOW())
-                """, sid, str(body.get("exchange_apply_id")), term, toInt(body.get("stat_stage"), 1), host,
-                str(body.get("ext_course_code")), extName, credit, extRaw, scale, courseId,
+                """, sid, applyId.isEmpty() ? null : applyId, term, toInt(body.get("stat_stage"), 1), host,
+                extCode.isEmpty() ? null : extCode, extName, credit, extRaw, scale, courseId,
                 scoreType, converted, level.isEmpty() ? null : level, gp, proofNo);
         return Map.of("student_id", sid, "course_id", courseId, "grade_point", gp,
                 "message", "校外成绩已登记，待学院审核、教务处审批后生效");
     }
 
-    // ---------- 内部工具 ----------
+    /** 3.5 学院审核校外成绩认定（0 -> 1 通过 / 0 -> 3 驳回） */
+    @Transactional
+    public Map<String, Object> collegeAuditExchange(long convertId, int decision, String opinion) {
+        CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
+        if (decision != 1 && decision != 2) {
+            throw BizException.unprocessable("INVALID_DECISION", "决定必须为 1通过 / 2驳回");
+        }
+        String op = opinion == null ? "" : opinion.trim();
+        if (decision == 2 && op.isEmpty()) {
+            throw BizException.unprocessable("OPINION_REQUIRED", "学院驳回时必须填写审核意见");
+        }
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT convert_id, audit_status FROM exchange_score_convert WHERE convert_id = ? FOR UPDATE", convertId);
+        if (rows.isEmpty()) {
+            throw BizException.notFound("校外成绩认定记录不存在");
+        }
+        if (((Number) rows.get(0).get("audit_status")).intValue() != 0) {
+            throw BizException.conflict("INVALID_STATUS", "仅待学院审核（0）状态的记录可执行学院审核");
+        }
+        int nextStatus = (decision == 1) ? 1 : 3;
+        jdbc.update("""
+                UPDATE exchange_score_convert
+                SET audit_status = ?, college_auditor_id = ?, college_audit_opinion = ?, college_audit_time = NOW()
+                WHERE convert_id = ? AND audit_status = 0
+                """, nextStatus, u.empId(), op.isEmpty() ? "学院审核通过" : op, convertId);
+        return Map.of("convert_id", String.valueOf(convertId), "audit_status", nextStatus,
+                "message", decision == 1 ? "学院审核通过，已转教务处审批" : "学院已驳回该认定申请");
+    }
+
+    /** 3.5 教务处审批校外成绩认定（1 -> 2 生效并联合重标 is_final & 刷新学业统计 / 1 -> 3 驳回） */
+    @Transactional
+    public Map<String, Object> schoolApproveExchange(long convertId, int decision, String opinion) {
+        CurrentUser u = UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
+        if (decision != 1 && decision != 2) {
+            throw BizException.unprocessable("INVALID_DECISION", "决定必须为 1通过 / 2驳回");
+        }
+        String op = opinion == null ? "" : opinion.trim();
+        if (decision == 2 && op.isEmpty()) {
+            throw BizException.unprocessable("OPINION_REQUIRED", "教务处驳回时必须填写审批意见");
+        }
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT convert_id, student_id, term, stat_stage, course_id, audit_status FROM exchange_score_convert WHERE convert_id = ? FOR UPDATE",
+                convertId);
+        if (rows.isEmpty()) {
+            throw BizException.notFound("校外成绩认定记录不存在");
+        }
+        Map<String, Object> row = rows.get(0);
+        if (((Number) row.get("audit_status")).intValue() != 1) {
+            throw BizException.conflict("INVALID_STATUS", "仅待教务处审批（1）状态的记录可执行审批");
+        }
+        int nextStatus = (decision == 1) ? 2 : 3;
+        jdbc.update("""
+                UPDATE exchange_score_convert
+                SET audit_status = ?, school_auditor_id = ?, school_audit_opinion = ?, school_audit_time = NOW()
+                WHERE convert_id = ? AND audit_status = 1
+                """, nextStatus, u.empId(), op.isEmpty() ? "教务处审批通过并生效" : op, convertId);
+        if (decision == 1) {
+            String sid = String.valueOf(row.get("student_id"));
+            int stage = ((Number) row.get("stat_stage")).intValue();
+            String courseId = String.valueOf(row.get("course_id"));
+            String term = String.valueOf(row.get("term"));
+            recomputeIsFinalJoint(sid, stage, courseId);
+            recomputeAcademicStats(sid, stage, term);
+        }
+        return Map.of("convert_id", String.valueOf(convertId), "audit_status", nextStatus,
+                "message", decision == 1 ? "教务处审批通过，已计入本校成绩与 GPA" : "教务处已驳回该认定申请");
+    }
+
+    // ---------- 内部工具与统计同步 ----------
+
+    /** 联合 score(status=3) 与 exchange_score_convert(status=2) 按 (student_id, stat_stage, course_id) 唯一标记 is_final */
+    private void recomputeIsFinalJoint(String studentId, int statStage, String courseId) {
+        List<Map<String, Object>> candidates = jdbc.queryForList("""
+                SELECT 'SCORE' AS src, s.score_id AS rec_id,
+                       COALESCE(s.grade_point, 0) AS gp, COALESCE(s.total_score, 0) AS num_score,
+                       s.publish_time AS eff_time
+                FROM score s
+                JOIN sc ON s.sc_id = sc.sc_id
+                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                WHERE sc.student_id = ? AND sc.stat_stage = ? AND tc.course_id = ? AND s.score_status = 3
+                UNION ALL
+                SELECT 'EXCHANGE' AS src, e.convert_id AS rec_id,
+                       COALESCE(e.grade_point, 0) AS gp, COALESCE(e.converted_score, 0) AS num_score,
+                       e.school_audit_time AS eff_time
+                FROM exchange_score_convert e
+                WHERE e.student_id = ? AND e.stat_stage = ? AND e.course_id = ? AND e.audit_status = 2
+                ORDER BY gp DESC, num_score DESC, eff_time DESC, rec_id DESC
+                """, studentId, statStage, courseId, studentId, statStage, courseId);
+        if (candidates.isEmpty()) {
+            return;
+        }
+        String bestSrc = String.valueOf(candidates.get(0).get("src"));
+        long bestId = ((Number) candidates.get(0).get("rec_id")).longValue();
+        for (Map<String, Object> c : candidates) {
+            String src = String.valueOf(c.get("src"));
+            long id = ((Number) c.get("rec_id")).longValue();
+            int flag = (src.equals(bestSrc) && id == bestId) ? 1 : 0;
+            if ("SCORE".equals(src)) {
+                jdbc.update("UPDATE score SET is_final = ? WHERE score_id = ?", flag, id);
+            } else {
+                jdbc.update("UPDATE exchange_score_convert SET is_final = ? WHERE convert_id = ?", flag, id);
+            }
+        }
+    }
+
+    /** 同事务刷新 stu_gpa、stu_term_gpa 与同专业同年级排名（严格排除 sc.study_type=3 辅修） */
+    private void recomputeAcademicStats(String studentId, int statStage, String term) {
+        Integer stuExists = jdbc.queryForObject("SELECT COUNT(*) FROM student WHERE student_id = ?", Integer.class, studentId);
+        if (stuExists == null || stuExists == 0) {
+            return;
+        }
+        List<Map<String, Object>> finalScores = jdbc.queryForList("""
+                SELECT c.credit, s.score_type, s.total_score, s.score_level, s.grade_point
+                FROM score s
+                JOIN sc ON s.sc_id = sc.sc_id
+                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN course c ON tc.course_id = c.course_id
+                WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
+                  AND s.score_status = 3 AND s.is_final = 1
+                UNION ALL
+                SELECT c.credit, e.score_type, e.converted_score AS total_score,
+                       e.converted_level AS score_level, e.grade_point
+                FROM exchange_score_convert e
+                JOIN course c ON e.course_id = c.course_id
+                WHERE e.student_id = ? AND e.stat_stage = ?
+                  AND e.audit_status = 2 AND e.is_final = 1
+                """, studentId, statStage, studentId, statStage);
+
+        BigDecimal earned = BigDecimal.ZERO;
+        BigDecimal failed = BigDecimal.ZERO;
+        BigDecimal totalCredit = BigDecimal.ZERO;
+        BigDecimal gpWeighted = BigDecimal.ZERO;
+        BigDecimal scoreWeighted = BigDecimal.ZERO;
+        for (Map<String, Object> r : finalScores) {
+            BigDecimal credit = new BigDecimal(String.valueOf(r.get("credit")));
+            BigDecimal gp = r.get("grade_point") == null ? BigDecimal.ZERO : new BigDecimal(String.valueOf(r.get("grade_point")));
+            BigDecimal num = resolveNumericScore(r.get("score_type"), r.get("total_score"), r.get("score_level"));
+            if (gp.compareTo(BigDecimal.ZERO) > 0) {
+                earned = earned.add(credit);
+            } else {
+                failed = failed.add(credit);
+            }
+            totalCredit = totalCredit.add(credit);
+            gpWeighted = gpWeighted.add(gp.multiply(credit));
+            scoreWeighted = scoreWeighted.add(num.multiply(credit));
+        }
+        BigDecimal gpa = totalCredit.compareTo(BigDecimal.ZERO) > 0
+                ? gpWeighted.divide(totalCredit, 2, RoundingMode.HALF_UP) : null;
+        BigDecimal avgScore = totalCredit.compareTo(BigDecimal.ZERO) > 0
+                ? scoreWeighted.divide(totalCredit, 2, RoundingMode.HALF_UP) : null;
+
+        jdbc.update("""
+                INSERT INTO stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, update_time)
+                VALUES (?, ?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE
+                  earned_credit = VALUES(earned_credit), failed_credit = VALUES(failed_credit),
+                  gpa = VALUES(gpa), avg_score = VALUES(avg_score), update_time = NOW()
+                """, studentId, earned, failed, gpa, avgScore);
+
+        List<Map<String, Object>> termRows = jdbc.queryForList("""
+                SELECT course_id, MAX(credit) AS credit, MAX(gp) AS best_gp FROM (
+                  SELECT tc.course_id, c.credit, COALESCE(s.grade_point, 0) AS gp
+                  FROM score s JOIN sc ON s.sc_id = sc.sc_id
+                  JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                  JOIN course c ON tc.course_id = c.course_id
+                  WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
+                    AND tc.term = ? AND s.score_status = 3
+                  UNION ALL
+                  SELECT e.course_id, c.credit, COALESCE(e.grade_point, 0) AS gp
+                  FROM exchange_score_convert e JOIN course c ON e.course_id = c.course_id
+                  WHERE e.student_id = ? AND e.stat_stage = ? AND e.term = ? AND e.audit_status = 2
+                ) t GROUP BY course_id
+                """, studentId, statStage, term, studentId, statStage, term);
+        BigDecimal termEarned = BigDecimal.ZERO;
+        BigDecimal termFailed = BigDecimal.ZERO;
+        for (Map<String, Object> tr : termRows) {
+            BigDecimal credit = new BigDecimal(String.valueOf(tr.get("credit")));
+            BigDecimal bestGp = new BigDecimal(String.valueOf(tr.get("best_gp")));
+            if (bestGp.compareTo(BigDecimal.ZERO) > 0) {
+                termEarned = termEarned.add(credit);
+            } else {
+                termFailed = termFailed.add(credit);
+            }
+        }
+        jdbc.update("""
+                INSERT INTO stu_term_gpa (student_id, term, term_credit, term_failed_credit, update_time)
+                VALUES (?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE
+                  term_credit = VALUES(term_credit), term_failed_credit = VALUES(term_failed_credit), update_time = NOW()
+                """, studentId, term, termEarned, termFailed);
+
+        List<Map<String, Object>> stuMeta = jdbc.queryForList(
+                "SELECT major_id, grade FROM student WHERE student_id = ?", studentId);
+        if (!stuMeta.isEmpty() && stuMeta.get(0).get("major_id") != null && stuMeta.get(0).get("grade") != null) {
+            String majorId = String.valueOf(stuMeta.get(0).get("major_id"));
+            Object grade = stuMeta.get(0).get("grade");
+            List<Map<String, Object>> peers = jdbc.queryForList("""
+                    SELECT g.student_id, g.avg_score
+                    FROM stu_gpa g JOIN student st ON g.student_id = st.student_id
+                    WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NOT NULL
+                    ORDER BY g.avg_score DESC, g.student_id ASC
+                    """, majorId, grade);
+            int totalPeers = peers.size();
+            BigDecimal prev = null;
+            int rank = 0;
+            for (int i = 0; i < peers.size(); i++) {
+                BigDecimal cur = new BigDecimal(String.valueOf(peers.get(i).get("avg_score")));
+                if (prev == null || cur.compareTo(prev) != 0) {
+                    rank = i + 1;
+                    prev = cur;
+                }
+                jdbc.update("UPDATE stu_gpa SET major_rank = ?, major_rank_total = ? WHERE student_id = ?",
+                        rank, totalPeers, peers.get(i).get("student_id"));
+            }
+        }
+    }
+
+    private BigDecimal resolveNumericScore(Object scoreTypeObj, Object totalScoreObj, Object levelObj) {
+        int st = ((Number) scoreTypeObj).intValue();
+        if (st == 1 && totalScoreObj != null) {
+            return new BigDecimal(String.valueOf(totalScoreObj));
+        }
+        String lv = levelObj == null ? "" : String.valueOf(levelObj);
+        return switch (lv) {
+            case "优" -> new BigDecimal("95.0");
+            case "良" -> new BigDecimal("85.0");
+            case "中" -> new BigDecimal("75.0");
+            case "及格", "合格" -> new BigDecimal("65.0");
+            default -> new BigDecimal("50.0");
+        };
+    }
+
+    private LocalDateTime nextUniqueSubmitTime(String lessonNo) {
+        LocalDateTime candidate = LocalDateTime.now().withNano(0);
+        List<Timestamp> latest = jdbc.queryForList(
+                "SELECT MAX(submit_time) FROM score_audit WHERE lesson_no = ?", Timestamp.class, lessonNo);
+        if (!latest.isEmpty() && latest.get(0) != null) {
+            LocalDateTime last = latest.get(0).toLocalDateTime().withNano(0);
+            if (!candidate.isAfter(last)) {
+                candidate = last.plusSeconds(1);
+            }
+        }
+        return candidate;
+    }
+
+    private String latestVerifyCode(String lessonNo) {
+        List<String> codes = jdbc.queryForList("""
+                SELECT verify_code FROM score_audit
+                WHERE lesson_no = ?
+                ORDER BY submit_time DESC, audit_id DESC
+                LIMIT 1
+                """, String.class, lessonNo);
+        return codes.isEmpty() ? null : codes.get(0);
+    }
+
+    private static String generateVerifyCode() {
+        StringBuilder sb = new StringBuilder(6);
+        for (int i = 0; i < 6; i++) {
+            sb.append(VERIFY_ALPHABET[RANDOM.nextInt(VERIFY_ALPHABET.length)]);
+        }
+        return sb.toString();
+    }
 
     private static String marks(List<String> ids) {
         return String.join(",", Collections.nCopies(ids.size(), "?"));
@@ -473,6 +835,7 @@ public class ScoreService {
         return (List<String>) head.get("tc_ids");
     }
 
+    @SuppressWarnings("unchecked")
     private static boolean owns(Map<String, Object> head, CurrentUser u) {
         return ((List<String>) head.get("teacher_ids")).stream()
                 .anyMatch(t -> t.equals(u.empId()) || t.equals(u.teacherCode8()));
@@ -506,7 +869,9 @@ public class ScoreService {
     private int ratioMin() {
         List<String> vals = jdbc.queryForList("""
                 SELECT dict_name FROM sys_code_dict
-                 WHERE dict_group = 'usual_ratio_min' AND is_enabled = 1
+                 WHERE is_enabled = 1
+                   AND ((dict_group = 'system_param' AND dict_code = 'usual_ratio_min')
+                        OR dict_group = 'usual_ratio_min')
                  ORDER BY dict_id LIMIT 1
                 """, String.class);
         if (vals.isEmpty()) {
@@ -519,38 +884,16 @@ public class ScoreService {
         }
     }
 
-    /** 6 位核对码：课堂号 + 该课堂全部 sc_id 的摘要，打印在成绩登记表上 */
-    private String buildCode(String lessonNo) {
-        List<Long> ids = jdbc.queryForList("""
-                SELECT sc.sc_id FROM sc JOIN lesson_class lc ON sc.tc_id = lc.tc_id
-                 WHERE lc.lesson_no = ? AND sc.select_status = 1 ORDER BY sc.sc_id
-                """, Long.class, lessonNo);
-        long h = 17;
-        for (Long id : ids) {
-            h = h * 31 + id;
-        }
-        h = h * 131 + lessonNo.hashCode() + CODE_SALT.hashCode();
-        return String.format("%06d", Math.abs(h) % 1_000_000);
-    }
-
-    /** 校发〔2021〕46 号附表 3：4.00/3.70/3.40/3.00/2.40/2.00/1.00/0.00 八档 */
+    /** 校发〔2021〕46 号附表 3（与业务④⑤完全一致） */
     private static BigDecimal percentToPoint(BigDecimal score) {
         double v = score.doubleValue();
-        if (v >= 90) {
-            return new BigDecimal("4.00");
-        } else if (v >= 85) {
-            return new BigDecimal("3.70");
-        } else if (v >= 80) {
-            return new BigDecimal("3.40");
-        } else if (v >= 75) {
-            return new BigDecimal("3.00");
-        } else if (v >= 70) {
-            return new BigDecimal("2.40");
-        } else if (v >= 65) {
-            return new BigDecimal("2.00");
-        } else if (v >= 60) {
-            return new BigDecimal("1.00");
-        }
+        if (v >= 90.0) return new BigDecimal("4.00");
+        if (v >= 85.0) return new BigDecimal("3.70");
+        if (v >= 82.0) return new BigDecimal("3.40");
+        if (v >= 78.0) return new BigDecimal("3.00");
+        if (v >= 75.0) return new BigDecimal("2.40");
+        if (v >= 72.0) return new BigDecimal("2.00");
+        if (v >= 60.0) return new BigDecimal("1.00");
         return new BigDecimal("0.00");
     }
 

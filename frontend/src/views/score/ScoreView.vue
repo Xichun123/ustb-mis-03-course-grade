@@ -37,21 +37,28 @@
             <el-table-column prop="student_name" label="姓名" width="100" />
             <el-table-column prop="class_name" label="班级" width="120" />
             <el-table-column label="修读" width="80">
-              <template #default="{ row }">{{ row.study_type === 2 ? '重修' : '初修' }}</template>
+              <template #default="{ row }">{{ { 1: '初修', 2: '重修', 3: '辅修' }[row.study_type] || '初修' }}</template>
             </el-table-column>
             <el-table-column label="平时占比%" width="110">
               <template #default="{ row }">
-                <el-input-number v-model="row.usual_ratio" :min="0" :max="100" :disabled="readOnly" size="small" />
+                <el-input-number v-model="row.usual_ratio" :min="0" :max="100" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" />
               </template>
             </el-table-column>
             <el-table-column label="平时成绩" width="120">
               <template #default="{ row }">
-                <el-input-number v-model="row.usual_score" :min="0" :max="100" :precision="1" :disabled="readOnly" size="small" />
+                <el-input-number v-if="row.score_type === 1" v-model="row.usual_score" :min="0" :max="100" :precision="1" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" />
+                <span v-else style="color: #909399">等级制</span>
               </template>
             </el-table-column>
-            <el-table-column label="期末成绩" width="120">
+            <el-table-column label="期末/等级" width="125">
               <template #default="{ row }">
-                <el-input-number v-model="row.exam_score" :min="0" :max="100" :precision="1" :disabled="readOnly" size="small" />
+                <el-input-number v-if="row.score_type === 1" v-model="row.exam_score" :min="0" :max="100" :precision="1" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" />
+                <el-select v-else-if="row.score_type === 2" v-model="row.score_level" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" placeholder="选等级">
+                  <el-option v-for="lv in ['优', '良', '中', '及格', '不及格']" :key="lv" :value="lv" :label="lv" />
+                </el-select>
+                <el-select v-else v-model="row.score_level" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" placeholder="选等级">
+                  <el-option v-for="lv in ['合格', '不合格']" :key="lv" :value="lv" :label="lv" />
+                </el-select>
               </template>
             </el-table-column>
             <el-table-column label="考试情况" width="110">
@@ -133,8 +140,26 @@
           <el-table-column prop="converted_score" label="换算成绩" width="90" />
           <el-table-column prop="converted_level" label="等级" width="80" />
           <el-table-column prop="grade_point" label="绩点" width="70" />
-          <el-table-column prop="audit_status" label="状态" width="100">
-            <template #default="{ row }">{{ ['待学院审核', '待教务处审批', '已通过', '已驳回'][row.audit_status] || row.audit_status }}</template>
+          <el-table-column prop="proof_no" label="证明编号" min-width="140" />
+          <el-table-column prop="audit_status" label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag size="small" :type="['warning', 'primary', 'success', 'danger'][row.audit_status] || 'info'">
+                {{ ['待学院审核', '待教务处审批', '已通过生效', '已驳回'][row.audit_status] || row.audit_status }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="150">
+            <template #default="{ row }">
+              <template v-if="row.audit_status === 0 && (isCollege || isAdmin)">
+                <el-button type="primary" link @click="decideExchange(row, 'college', 1)">学院通过</el-button>
+                <el-button type="danger" link @click="decideExchange(row, 'college', 2)">驳回</el-button>
+              </template>
+              <template v-else-if="row.audit_status === 1 && (isOffice || isAdmin)">
+                <el-button type="success" link @click="decideExchange(row, 'school', 1)">教务审批</el-button>
+                <el-button type="danger" link @click="decideExchange(row, 'school', 2)">驳回</el-button>
+              </template>
+              <span v-else style="color: #909399; font-size: 12px">—</span>
+            </template>
           </el-table-column>
         </el-table>
       </el-tab-pane>
@@ -203,7 +228,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { scoreApi } from '../../api/score'
 import { userState } from '../../stores/user'
@@ -345,7 +370,7 @@ const exchangeList = ref([])
 const exchangeVisible = ref(false)
 const exchangeForm = reactive({
   student_id: '', term: '2026-2027-1', host_school: '', ext_course_name: '',
-  ext_credit: 2, ext_score_raw: '', proof_no: '', course_id: '', score_type: 1, converted_score: 90
+  ext_credit: 2, ext_score_raw: '', proof_no: '', course_id: '', score_type: 1, converted_score: 90, converted_level: ''
 })
 
 async function loadExchange() {
@@ -367,11 +392,56 @@ async function doExchange() {
   await loadExchange()
 }
 
+async function decideExchange(row, stage, decision) {
+  let opinion = ''
+  if (decision === 2) {
+    const promptRes = await ElMessageBox.prompt('请填写驳回意见', '驳回确认', {
+      inputPlaceholder: '必填，说明退回原因',
+      inputValidator: (v) => (v && v.trim() ? true : '驳回意见不能为空')
+    })
+    opinion = promptRes.value
+  } else {
+    await ElMessageBox.confirm(`确认通过 ${row.student_id}《${row.ext_course_name}》的校外成绩认定？`, '审批确认', { type: 'info' })
+  }
+  if (stage === 'college') {
+    await scoreApi.collegeAuditExchange(row.convert_id, { decision, opinion })
+  } else {
+    await scoreApi.schoolApproveExchange(row.convert_id, { decision, opinion })
+  }
+  ElMessage.success(decision === 1 ? '审批通过' : '已驳回')
+  await loadExchange()
+}
+
+function initByRole() {
+  if (!role.value) return
+  currentClass.value = null
+  roster.students = []
+  if (isTeacher.value) {
+    activeTab.value = 'entry'
+    loadClasses()
+  } else if (isCollege.value) {
+    activeTab.value = 'audit'
+    loadAudit()
+    loadExchange()
+  } else if (isOffice.value) {
+    activeTab.value = 'publish'
+    loadPublish()
+    loadExchange()
+  } else if (isAdmin.value) {
+    activeTab.value = 'entry'
+    loadClasses()
+    loadAudit()
+    loadPublish()
+    loadExchange()
+  }
+}
+
+watch(() => userState.currentUser?.userId, () => {
+  initByRole()
+})
+
 onMounted(() => {
-  if (isTeacher.value || isAdmin.value) loadClasses()
-  if (isCollege.value || isAdmin.value) loadAudit()
-  if (isOffice.value || isAdmin.value) loadPublish()
-  if (isOffice.value || isCollege.value || isAdmin.value) loadExchange()
+  initByRole()
 })
 </script>
 
