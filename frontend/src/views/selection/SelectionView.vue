@@ -150,8 +150,9 @@ onMounted(() => perform(bootContext))
 .filters{justify-content:space-between;padding:14px 18px;background:var(--app-card-bg);border:1px solid var(--app-border);border-radius:14px;box-shadow:var(--app-shadow-sm)}
 .filters-left{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .filters label{font-size:13px;color:var(--app-text-secondary)}
-.summary{display:flex;gap:28px;padding:15px 20px;background:var(--app-menu-active-bg);border:1px solid var(--app-border);border-radius:12px;margin-bottom:18px;color:var(--app-text-primary);font-size:14px}
-.summary strong{font-size:20px;color:var(--brand-primary);margin:0 5px}
+.summary{display:flex;align-items:baseline;gap:28px;padding:15px 20px;background:var(--app-menu-active-bg);border:1px solid var(--app-border);border-radius:12px;margin-bottom:18px;color:var(--app-text-primary);font-size:14px;line-height:1.4}
+.summary > span{display:inline-flex;align-items:baseline;gap:4px}
+.summary strong{font-size:20px;line-height:1;color:var(--brand-primary);margin:0 2px}
 .notice{margin-bottom:16px}
 .class-detail{padding:16px 20px;background:var(--app-card-muted-bg)}
 .muted{font-size:12px;color:var(--app-text-secondary);line-height:1.7}
