@@ -53,7 +53,7 @@
         </div>
 
         <el-table :data="roundList" border stripe v-loading="loadingRounds">
-          <el-table-column prop="round_id" label="编号" width="70" />
+          <el-table-column v-if="!isStudent" prop="round_id" label="编号" width="70" />
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="round_name" label="轮次名称" min-width="180" />
           <el-table-column label="类型/对象" width="130">
@@ -61,7 +61,7 @@
               {{ ROUND_TYPE_MAP[row.round_type] }} / {{ LEVEL_MAP[row.target_level] }}
             </template>
           </el-table-column>
-          <el-table-column label="重修配置" width="140">
+          <el-table-column label="重修政策" width="140">
             <template #default="{ row }">
               <el-tag v-if="row.allow_retake === 1" size="small" type="warning">
                 开放重修{{ row.retake_ignore_conflict === 1 ? '·免听' : '' }}
@@ -70,7 +70,7 @@
             </template>
           </el-table-column>
           <el-table-column prop="max_credit" label="学分上限" width="90" />
-          <el-table-column prop="class_count" label="教学班数" width="85" />
+          <el-table-column v-if="!isStudent" prop="class_count" label="教学班数" width="85" />
           <el-table-column label="状态" width="115">
             <template #default="{ row }">
               <el-tag :type="statusTagType(row.round_status)" size="small">

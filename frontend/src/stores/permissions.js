@@ -13,55 +13,101 @@ export const MODULE_CONFIG = [
     path: '/prep',
     title: '选课准备与发布',
     desc: '开课计划、限选条件与轮次审批发布',
-    studentDesc: '查看本学期选课轮次安排与通知公告',
     icon: 'Setting',
     group: 1,
     bg: 'rgba(11, 92, 173, 0.10)',
     color: '#0b5cad',
-    roles: ALL_ROLES
+    roles: ALL_ROLES,
+    roleOverrides: {
+      STUDENT: {
+        title: '选课通知',
+        desc: '查看本学期各轮次选课安排与通知公告',
+        icon: 'Bell'
+      },
+      TEACHER: {
+        title: '开课计划',
+        desc: '查看本学期教学班与选课轮次安排',
+        icon: 'Reading'
+      }
+    }
   },
   {
     path: '/selection',
-    title: '学生选课',
-    desc: '选退课办理、周课表与上课名单调整',
-    studentDesc: '检索开放课程、办理选退课与查看按周课表',
+    title: '选课管理',
+    desc: '教学班名单调整、截止筛选与停开预览',
     icon: 'Calendar',
     group: 1,
     bg: 'rgba(22, 163, 74, 0.10)',
     color: '#16a34a',
-    roles: ['STUDENT', 'TEACHER', 'ACADEMIC_OFFICE']
+    roles: ['STUDENT', 'TEACHER', 'ACADEMIC_OFFICE'],
+    roleOverrides: {
+      STUDENT: {
+        title: '选课与课表',
+        desc: '检索开放课程、办理选退课与查看周课表',
+        icon: 'Calendar'
+      },
+      TEACHER: {
+        title: '上课名单',
+        desc: '查看本人授课班名单、打印与调整学生',
+        icon: 'User'
+      }
+    }
   },
   {
     path: '/score',
-    title: '成绩录入与审核',
-    desc: '课堂录分、学院核对发布与交流认定',
+    title: '成绩审核与发布',
+    desc: '学院核对、成绩发布与校外交流成绩认定',
     icon: 'EditPen',
     group: 1,
     bg: 'rgba(234, 88, 12, 0.10)',
     color: '#ea580c',
-    roles: ['TEACHER', 'COLLEGE_SECRETARY', 'ACADEMIC_OFFICE', 'SYS_ADMIN']
+    roles: ['TEACHER', 'COLLEGE_SECRETARY', 'ACADEMIC_OFFICE', 'SYS_ADMIN'],
+    roleOverrides: {
+      TEACHER: {
+        title: '成绩录入',
+        desc: '按课堂录入成绩、计算总评并提交审核'
+      }
+    }
   },
   {
     path: '/stats',
     title: '成绩查询与统计',
-    desc: '教学评价、查分、成绩单与统计报表',
-    studentDesc: '完成课程教学评价、查询成绩与打印成绩单',
+    desc: '学业统计、成绩单打印、统计报表与评教汇总',
     icon: 'DataAnalysis',
     group: 2,
     bg: 'rgba(124, 58, 237, 0.10)',
     color: '#7c3aed',
-    roles: ALL_ROLES
+    roles: ALL_ROLES,
+    roleOverrides: {
+      STUDENT: {
+        title: '评教与成绩',
+        desc: '完成课程教学评价、查分与打印成绩单'
+      },
+      TEACHER: {
+        title: '成绩报表与评教',
+        desc: '查看授课班成绩分布与匿名评教汇总'
+      }
+    }
   },
   {
     path: '/correction',
-    title: '成绩更正申请',
-    desc: '成绩更正发起、两级审批与结果通知',
-    studentDesc: '查看本人已通过审批的成绩更正记录',
+    title: '成绩更正审批',
+    desc: '受理成绩更正申请与学院/教务两级审批',
     icon: 'DocumentChecked',
     group: 2,
     bg: 'rgba(8, 145, 178, 0.10)',
     color: '#0891b2',
-    roles: ALL_ROLES
+    roles: ALL_ROLES,
+    roleOverrides: {
+      STUDENT: {
+        title: '成绩更正通知',
+        desc: '查看本人已通过审批的成绩更正记录'
+      },
+      TEACHER: {
+        title: '成绩更正',
+        desc: '发起已发布成绩的更正申请并跟踪进度'
+      }
+    }
   },
   {
     path: '/admin',
@@ -75,6 +121,23 @@ export const MODULE_CONFIG = [
   }
 ]
 
+function resolveItem(item, role) {
+  const override = role && item.roleOverrides?.[role]
+  return override ? { ...item, ...override } : item
+}
+
+export function getHomeTitle(role) {
+  return role === 'STUDENT' || role === 'TEACHER' ? '首页' : '工作台'
+}
+
+export function getPageTitle(path, role) {
+  if (!path || path === '/' || path === '/dashboard') {
+    return getHomeTitle(role)
+  }
+  const item = MODULE_CONFIG.find((m) => m.path === path)
+  return item ? resolveItem(item, role).title : getHomeTitle(role)
+}
+
 export function canAccessPath(path, role) {
   if (!path || path === '/dashboard' || path === '/') return true
   if (!role) return true
@@ -84,6 +147,6 @@ export function canAccessPath(path, role) {
 }
 
 export function visibleModulesForRole(role) {
-  if (!role) return MODULE_CONFIG
-  return MODULE_CONFIG.filter((m) => m.roles.includes(role))
+  const list = role ? MODULE_CONFIG.filter((m) => m.roles.includes(role)) : MODULE_CONFIG
+  return list.map((item) => resolveItem(item, role))
 }

@@ -92,7 +92,7 @@
     <!-- 第二排：独立悬浮服务入口（去套娃卡片） -->
     <div class="section-head">
       <h2 class="section-title">常用服务</h2>
-      <span class="section-tip">选择对应模块办理教务业务</span>
+      <span class="section-tip">{{ userState.currentUser?.role === 'STUDENT' ? '快速进入选课、课表与成绩查询' : '选择对应模块办理教务业务' }}</span>
     </div>
     <div class="entry-grid">
       <div
@@ -215,13 +215,7 @@ const collegeLabel = (collegeId, orgId) => {
   return orgMap[orgId] || '校级单位'
 }
 
-const quickEntries = computed(() => {
-  const role = userState.currentUser?.role
-  return visibleModulesForRole(role).map((m) => ({
-    ...m,
-    desc: role === 'STUDENT' && m.studentDesc ? m.studentDesc : m.desc
-  }))
-})
+const quickEntries = computed(() => visibleModulesForRole(userState.currentUser?.role))
 
 function formatTime(t) {
   return String(t || '').replace('T', ' ').slice(0, 16)

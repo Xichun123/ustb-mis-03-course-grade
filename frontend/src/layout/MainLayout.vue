@@ -21,8 +21,8 @@
           @select="drawerOpen = false"
         >
           <el-menu-item index="/dashboard">
-            <el-icon><Odometer /></el-icon>
-            <template #title>系统工作台</template>
+            <el-icon><House /></el-icon>
+            <template #title>{{ homeTitle }}</template>
           </el-menu-item>
           <template v-for="(grp, gIdx) in menuGroups" :key="gIdx">
             <div class="app-menu-divider" />
@@ -54,8 +54,8 @@
         class="app-side-menu sider-scroll"
       >
         <el-menu-item index="/dashboard">
-          <el-icon><Odometer /></el-icon>
-          <template #title>系统工作台</template>
+          <el-icon><House /></el-icon>
+          <template #title>{{ homeTitle }}</template>
         </el-menu-item>
         <template v-for="(grp, gIdx) in menuGroups" :key="gIdx">
           <div class="app-menu-divider" />
@@ -94,7 +94,7 @@
           >
             <el-icon :size="18"><Menu /></el-icon>
           </el-button>
-          <span class="app-header-title">{{ route.meta.title || '系统工作台' }}</span>
+          <span class="app-header-title">{{ pageTitle }}</span>
           <span class="term-badge hide-xs">2026-2027-1</span>
         </div>
 
@@ -160,7 +160,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { initUserStore, logoutSession, userState } from '../stores/user'
 import { setThemeMode, themeState } from '../stores/theme'
-import { canAccessPath, visibleModulesForRole } from '../stores/permissions'
+import { canAccessPath, getHomeTitle, getPageTitle, visibleModulesForRole } from '../stores/permissions'
 
 const COLLAPSED_KEY = 'ustb_cg_sidebar_collapsed'
 const route = useRoute()
@@ -170,6 +170,8 @@ const isMobile = ref(typeof window !== 'undefined' ? window.innerWidth < 992 : f
 const drawerOpen = ref(false)
 
 const currentRole = computed(() => userState.currentUser?.role)
+const homeTitle = computed(() => getHomeTitle(currentRole.value))
+const pageTitle = computed(() => getPageTitle(route.path, currentRole.value))
 
 const menuGroups = computed(() => {
   const list = visibleModulesForRole(currentRole.value)
