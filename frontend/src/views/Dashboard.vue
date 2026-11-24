@@ -152,6 +152,7 @@ import { useRouter } from 'vue-router'
 import { systemApi } from '../api/modules'
 import { prepApi } from '../api/prep'
 import { userState } from '../stores/user'
+import { visibleModulesForRole } from '../stores/permissions'
 
 const router = useRouter()
 const serviceOnline = ref(false)
@@ -214,56 +215,13 @@ const collegeLabel = (collegeId, orgId) => {
   return orgMap[orgId] || '校级单位'
 }
 
-const quickEntries = [
-  {
-    title: '选课准备与发布',
-    desc: '开课计划、限选条件与轮次审批发布',
-    path: '/prep',
-    icon: 'Setting',
-    bg: 'rgba(11, 92, 173, 0.10)',
-    color: '#0b5cad'
-  },
-  {
-    title: '学生选课',
-    desc: '选退课办理、周课表与上课名单调整',
-    path: '/selection',
-    icon: 'Calendar',
-    bg: 'rgba(22, 163, 74, 0.10)',
-    color: '#16a34a'
-  },
-  {
-    title: '成绩录入与审核',
-    desc: '课堂录分、学院核对发布与交流认定',
-    path: '/score',
-    icon: 'EditPen',
-    bg: 'rgba(234, 88, 12, 0.10)',
-    color: '#ea580c'
-  },
-  {
-    title: '成绩查询与统计',
-    desc: '教学评价、查分、成绩单与统计报表',
-    path: '/stats',
-    icon: 'DataAnalysis',
-    bg: 'rgba(124, 58, 237, 0.10)',
-    color: '#7c3aed'
-  },
-  {
-    title: '成绩更正申请',
-    desc: '成绩更正发起、两级审批与结果通知',
-    path: '/correction',
-    icon: 'DocumentChecked',
-    bg: 'rgba(8, 145, 178, 0.10)',
-    color: '#0891b2'
-  },
-  {
-    title: '系统维护',
-    desc: '编码参数配置、数据备份与应急快照',
-    path: '/admin',
-    icon: 'Tools',
-    bg: 'rgba(100, 116, 139, 0.12)',
-    color: '#475569'
-  }
-]
+const quickEntries = computed(() => {
+  const role = userState.currentUser?.role
+  return visibleModulesForRole(role).map((m) => ({
+    ...m,
+    desc: role === 'STUDENT' && m.studentDesc ? m.studentDesc : m.desc
+  }))
+})
 
 function formatTime(t) {
   return String(t || '').replace('T', ' ').slice(0, 16)
@@ -492,7 +450,7 @@ onMounted(loadOverview)
 /* 快捷业务独立悬浮卡 */
 .entry-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 16px;
 }
 .entry-card {

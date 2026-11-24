@@ -24,33 +24,13 @@
             <el-icon><Odometer /></el-icon>
             <template #title>系统工作台</template>
           </el-menu-item>
-          <div class="app-menu-divider" />
-          <el-menu-item index="/prep">
-            <el-icon><Setting /></el-icon>
-            <template #title>选课准备与发布</template>
-          </el-menu-item>
-          <el-menu-item index="/selection">
-            <el-icon><Calendar /></el-icon>
-            <template #title>学生选课</template>
-          </el-menu-item>
-          <el-menu-item index="/score">
-            <el-icon><EditPen /></el-icon>
-            <template #title>成绩录入与审核</template>
-          </el-menu-item>
-          <div class="app-menu-divider" />
-          <el-menu-item index="/stats">
-            <el-icon><DataAnalysis /></el-icon>
-            <template #title>成绩查询与统计</template>
-          </el-menu-item>
-          <el-menu-item index="/correction">
-            <el-icon><DocumentChecked /></el-icon>
-            <template #title>成绩更正申请</template>
-          </el-menu-item>
-          <div class="app-menu-divider" />
-          <el-menu-item index="/admin">
-            <el-icon><Tools /></el-icon>
-            <template #title>系统维护</template>
-          </el-menu-item>
+          <template v-for="(grp, gIdx) in menuGroups" :key="gIdx">
+            <div class="app-menu-divider" />
+            <el-menu-item v-for="item in grp" :key="item.path" :index="item.path">
+              <el-icon><component :is="item.icon" /></el-icon>
+              <template #title>{{ item.title }}</template>
+            </el-menu-item>
+          </template>
         </el-menu>
       </div>
     </el-drawer>
@@ -77,33 +57,13 @@
           <el-icon><Odometer /></el-icon>
           <template #title>系统工作台</template>
         </el-menu-item>
-        <div class="app-menu-divider" />
-        <el-menu-item index="/prep">
-          <el-icon><Setting /></el-icon>
-          <template #title>选课准备与发布</template>
-        </el-menu-item>
-        <el-menu-item index="/selection">
-          <el-icon><Calendar /></el-icon>
-          <template #title>学生选课</template>
-        </el-menu-item>
-        <el-menu-item index="/score">
-          <el-icon><EditPen /></el-icon>
-          <template #title>成绩录入与审核</template>
-        </el-menu-item>
-        <div class="app-menu-divider" />
-        <el-menu-item index="/stats">
-          <el-icon><DataAnalysis /></el-icon>
-          <template #title>成绩查询与统计</template>
-        </el-menu-item>
-        <el-menu-item index="/correction">
-          <el-icon><DocumentChecked /></el-icon>
-          <template #title>成绩更正申请</template>
-        </el-menu-item>
-        <div class="app-menu-divider" />
-        <el-menu-item index="/admin">
-          <el-icon><Tools /></el-icon>
-          <template #title>系统维护</template>
-        </el-menu-item>
+        <template v-for="(grp, gIdx) in menuGroups" :key="gIdx">
+          <div class="app-menu-divider" />
+          <el-menu-item v-for="item in grp" :key="item.path" :index="item.path">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <template #title>{{ item.title }}</template>
+          </el-menu-item>
+        </template>
       </el-menu>
 
       <button
@@ -200,17 +160,37 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { initUserStore, switchDemoUser, userState } from '../stores/user'
 import { setThemeMode, themeState } from '../stores/theme'
+import { canAccessPath, visibleModulesForRole } from '../stores/permissions'
 
 const COLLAPSED_KEY = 'ustb_cg_sidebar_collapsed'
 const route = useRoute()
+const router = useRouter()
 const collapsed = ref(localStorage.getItem(COLLAPSED_KEY) === 'true')
 const isMobile = ref(typeof window !== 'undefined' ? window.innerWidth < 992 : false)
 const drawerOpen = ref(false)
+
+const currentRole = computed(() => userState.currentUser?.role)
+
+const menuGroups = computed(() => {
+  const list = visibleModulesForRole(currentRole.value)
+  const grouped = []
+  for (const g of [1, 2, 3]) {
+    const items = list.filter((m) => m.group === g)
+    if (items.length) grouped.push(items)
+  }
+  return grouped
+})
+
+watch([currentRole, () => route.path], ([role, path]) => {
+  if (role && !canAccessPath(path, role)) {
+    router.replace('/dashboard')
+  }
+}, { immediate: true })
 
 const currentInitial = computed(() => {
   const name = (userState.currentUser?.displayName || '').trim()
