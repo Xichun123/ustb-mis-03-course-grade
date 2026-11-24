@@ -80,29 +80,29 @@
         <div class="app-menu-divider" />
         <el-menu-item index="/prep">
           <el-icon><Setting /></el-icon>
-          <template #title>① 选课准备与发布</template>
+          <template #title>选课准备与发布</template>
         </el-menu-item>
         <el-menu-item index="/selection">
           <el-icon><Calendar /></el-icon>
-          <template #title>② 学生选课</template>
+          <template #title>学生选课</template>
         </el-menu-item>
         <el-menu-item index="/score">
           <el-icon><EditPen /></el-icon>
-          <template #title>③ 成绩录入与审核</template>
+          <template #title>成绩录入与审核</template>
         </el-menu-item>
         <div class="app-menu-divider" />
         <el-menu-item index="/stats">
           <el-icon><DataAnalysis /></el-icon>
-          <template #title>④ 成绩查询与统计</template>
+          <template #title>成绩查询与统计</template>
         </el-menu-item>
         <el-menu-item index="/correction">
           <el-icon><DocumentChecked /></el-icon>
-          <template #title>⑤ 成绩更正申请</template>
+          <template #title>成绩更正申请</template>
         </el-menu-item>
         <div class="app-menu-divider" />
         <el-menu-item index="/admin">
           <el-icon><Tools /></el-icon>
-          <template #title>⑥ 系统维护</template>
+          <template #title>系统维护</template>
         </el-menu-item>
       </el-menu>
 
