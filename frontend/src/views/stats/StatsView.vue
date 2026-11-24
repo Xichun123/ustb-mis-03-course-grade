@@ -658,7 +658,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { statsApi } from '../../api/stats'
 import { userState } from '../../stores/user'
@@ -976,7 +976,10 @@ async function openOfficeEvalDetails() {
   }
 }
 
-onMounted(async () => {
+let initializedRole = null
+async function initByRole(curRole) {
+  if (!curRole || curRole === initializedRole) return
+  initializedRole = curRole
   if (isStudent.value) {
     activeTab.value = 'eval'
     await loadPendingEvals()
@@ -994,7 +997,11 @@ onMounted(async () => {
     await loadReportOptions()
     await Promise.all([loadGradeReport(), loadEvalSummaries()])
   }
-})
+}
+
+watch(role, (val) => {
+  initByRole(val)
+}, { immediate: true })
 </script>
 
 <style scoped>
