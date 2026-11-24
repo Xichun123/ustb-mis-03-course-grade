@@ -143,7 +143,33 @@ onMounted(() => perform(bootContext))
 </script>
 
 <style scoped>
-.selection-page{max-width:1600px;margin:0 auto}.heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.heading h2{font-size:24px;margin:0 0 5px;color:#24375a}.heading p{margin:0;color:#718096;font-size:13px}.filters,.toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}.filters{padding:18px;background:white;border:1px solid #e2e8f0;border-radius:8px}.filters label{font-size:13px;color:#64748b}.summary{display:flex;gap:32px;padding:17px 20px;background:#edf3fa;border-radius:8px;margin-bottom:20px;color:#3a5274;font-size:14px}.summary strong{font-size:22px;color:#244879;margin:0 5px}.notice{margin-bottom:18px}.class-detail{padding:18px 24px;background:#f8fafc}.muted{font-size:12px;color:#76859c;line-height:1.7}.el-pagination{margin-top:18px;justify-content:flex-end}.week-grid{display:grid;grid-template-columns:repeat(7,minmax(120px,1fr));border:1px solid #dce5ef;border-radius:8px;overflow:auto;background:white}.day-column{min-height:280px;border-right:1px solid #e5eaf1;padding:0 8px 12px}.day-column:last-child{border-right:0}.day-title{text-align:center;font-weight:600;padding:13px;color:#365477;background:#f4f7fb;margin:0 -8px 12px}.course-block{display:flex;flex-direction:column;text-align:left;width:100%;gap:8px;margin-bottom:10px;padding:12px;border:1px solid #bfd4e9;border-left:4px solid #3b6ea6;border-radius:5px;background:#eef5fc;color:#294b72;cursor:pointer}.course-block strong{font-size:13px}.course-block span,.course-block small{font-size:11px;line-height:1.6}.empty-day{text-align:center;color:#a1adbc;font-size:12px;margin-top:28px}.back{margin-top:18px}.roster-summary{padding:14px;background:#f4f7fb;margin-bottom:16px;color:#405673;font-size:14px}.roster-summary p{font-size:12px;margin-bottom:0}.print-sheet{display:none}@media(max-width:1000px){.summary{gap:15px;flex-wrap:wrap}.week-grid{grid-template-columns:repeat(7,145px)}}
+.selection-page{max-width:1600px;margin:0 auto}
+.heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.heading h2{font-size:20px;font-weight:700;margin:0 0 4px;color:var(--app-text-primary)}
+.heading p{margin:0;color:var(--app-text-secondary);font-size:13px}
+.filters,.toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.filters{padding:16px 18px;background:var(--app-card-bg);border:1px solid var(--app-border);border-radius:14px;box-shadow:var(--app-shadow-sm)}
+.filters label{font-size:13px;color:var(--app-text-secondary)}
+.summary{display:flex;gap:28px;padding:15px 20px;background:var(--app-menu-active-bg);border:1px solid var(--app-border);border-radius:12px;margin-bottom:18px;color:var(--app-text-primary);font-size:14px}
+.summary strong{font-size:20px;color:var(--brand-primary);margin:0 5px}
+.notice{margin-bottom:16px}
+.class-detail{padding:16px 20px;background:var(--app-card-muted-bg)}
+.muted{font-size:12px;color:var(--app-text-secondary);line-height:1.7}
+.el-pagination{margin-top:16px;justify-content:flex-end}
+.week-grid{display:grid;grid-template-columns:repeat(7,minmax(120px,1fr));border:1px solid var(--app-grid-line);border-radius:12px;overflow:auto;background:var(--app-card-bg)}
+.day-column{min-height:280px;border-right:1px solid var(--app-grid-line);padding:0 8px 12px}
+.day-column:last-child{border-right:0}
+.day-title{text-align:center;font-weight:600;padding:12px;color:var(--app-text-primary);background:var(--app-grid-bg);border-bottom:1px solid var(--app-grid-line);margin:0 -8px 12px}
+.course-block{display:flex;flex-direction:column;text-align:left;width:100%;gap:6px;margin-bottom:10px;padding:11px;border:1px solid var(--app-grid-line);border-left:4px solid var(--brand-primary);border-radius:8px;background:var(--app-menu-active-bg);color:var(--app-text-primary);cursor:pointer;transition:transform 0.2s ease,box-shadow 0.2s ease}
+.course-block:hover{transform:translateY(-1px);box-shadow:var(--app-shadow-sm)}
+.course-block strong{font-size:13px;color:var(--brand-primary)}
+.course-block span,.course-block small{font-size:11px;line-height:1.5;color:var(--app-text-secondary)}
+.empty-day{text-align:center;color:var(--app-text-tertiary);font-size:12px;margin-top:28px}
+.back{margin-top:16px}
+.roster-summary{padding:14px 16px;background:var(--app-card-muted-bg);border:1px solid var(--app-border);border-radius:10px;margin-bottom:16px;color:var(--app-text-primary);font-size:14px}
+.roster-summary p{font-size:12px;color:var(--app-text-secondary);margin-bottom:0}
+.print-sheet{display:none}
+@media(max-width:1000px){.summary{gap:15px;flex-wrap:wrap}.week-grid{grid-template-columns:repeat(7,145px)}}
 </style>
 <style>
 @media print{@page{size:A4 portrait;margin:15mm}body *{visibility:hidden!important}.print-sheet,.print-sheet *{visibility:visible!important}.print-sheet{display:block!important;position:absolute;left:0;top:0;width:100%;color:#000;background:#fff;font-size:11pt}.print-sheet h2{text-align:center}.print-sheet table{width:100%;border-collapse:collapse}.print-sheet th,.print-sheet td{border:1px solid #777;padding:7px;text-align:left}.print-sheet thead{display:table-header-group}.print-sheet tr{break-inside:avoid}.layout-main,.layout-root{overflow:visible!important;height:auto!important}}

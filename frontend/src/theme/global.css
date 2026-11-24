@@ -1,0 +1,360 @@
+/* ===== USTB Manager 设计系统（Vue 3 + Element Plus 1:1 主题定制） ===== */
+
+html {
+  --brand-color: #003366;
+  --brand-primary: #0b5cad;
+  --app-sidebar-bg: #ffffff;
+  --app-header-bg: rgba(255, 255, 255, 0.82);
+  --app-content-bg: #f5f7fa;
+  --app-card-bg: #ffffff;
+  --app-card-muted-bg: #fafbfc;
+  --app-border: rgba(0, 0, 0, 0.06);
+  --app-text-primary: rgba(0, 0, 0, 0.88);
+  --app-text-secondary: rgba(0, 0, 0, 0.55);
+  --app-text-tertiary: rgba(0, 0, 0, 0.38);
+  --app-grid-line: #f0f0f0;
+  --app-grid-bg: #fafbfc;
+  --app-menu-active-bg: rgba(11, 92, 173, 0.08);
+  --app-menu-hover-bg: rgba(0, 0, 0, 0.035);
+  --app-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.03), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --app-shadow-hover: 0 4px 8px rgba(0, 0, 0, 0.05), 0 12px 32px rgba(0, 0, 0, 0.08);
+
+  --el-color-primary: #0b5cad;
+  --el-color-primary-light-3: #4b87c6;
+  --el-color-primary-light-5: #7ca7d6;
+  --el-color-primary-light-7: #adc8e6;
+  --el-color-primary-light-8: #c6d9ee;
+  --el-color-primary-light-9: #eef4fb;
+  --el-color-primary-dark-2: #003366;
+  --el-border-radius-base: 10px;
+  --el-border-radius-small: 8px;
+  --el-border-radius-round: 20px;
+  --el-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --el-bg-color-page: #f5f7fa;
+  --el-bg-color: #ffffff;
+  --el-text-color-primary: rgba(0, 0, 0, 0.88);
+  --el-text-color-regular: rgba(0, 0, 0, 0.72);
+  --el-text-color-secondary: rgba(0, 0, 0, 0.55);
+  --el-border-color-lighter: rgba(0, 0, 0, 0.06);
+  --el-border-color-light: rgba(0, 0, 0, 0.08);
+}
+
+html[data-theme='dark'] {
+  --brand-color: #0b5cad;
+  --brand-primary: #5c9ce6;
+  --app-sidebar-bg: #141b24;
+  --app-header-bg: rgba(26, 34, 44, 0.82);
+  --app-content-bg: #0f1419;
+  --app-card-bg: #1a222c;
+  --app-card-muted-bg: #141b24;
+  --app-border: rgba(255, 255, 255, 0.08);
+  --app-text-primary: rgba(255, 255, 255, 0.9);
+  --app-text-secondary: rgba(255, 255, 255, 0.58);
+  --app-text-tertiary: rgba(255, 255, 255, 0.38);
+  --app-grid-line: rgba(255, 255, 255, 0.08);
+  --app-grid-bg: #141b24;
+  --app-menu-active-bg: rgba(58, 127, 212, 0.16);
+  --app-menu-hover-bg: rgba(255, 255, 255, 0.05);
+  --app-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22), 0 4px 16px rgba(0, 0, 0, 0.28);
+  --app-shadow-hover: 0 4px 8px rgba(0, 0, 0, 0.28), 0 12px 32px rgba(0, 0, 0, 0.38);
+
+  --el-color-primary: #3a7fd4;
+  --el-color-primary-light-3: #5c9ce6;
+  --el-color-primary-light-5: #2d62a3;
+  --el-color-primary-light-7: #214573;
+  --el-color-primary-light-8: #1a3559;
+  --el-color-primary-light-9: #16263d;
+  --el-color-primary-dark-2: #66a6ef;
+  --el-bg-color-page: #0f1419;
+  --el-bg-color: #1a222c;
+  --el-bg-color-overlay: #1f2937;
+  --el-fill-color-blank: #1a222c;
+  --el-fill-color-light: #141b24;
+  --el-fill-color-lighter: #18212c;
+  --el-border-color: rgba(255, 255, 255, 0.1);
+  --el-border-color-light: rgba(255, 255, 255, 0.08);
+  --el-border-color-lighter: rgba(255, 255, 255, 0.06);
+  --el-text-color-primary: rgba(255, 255, 255, 0.9);
+  --el-text-color-regular: rgba(255, 255, 255, 0.78);
+  --el-text-color-secondary: rgba(255, 255, 255, 0.55);
+}
+
+html, body, #app {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  font-family: var(--el-font-family);
+  background: var(--app-content-bg);
+  color: var(--app-text-primary);
+  transition: background-color 0.25s ease, color 0.25s ease;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===== 卡片与悬浮动效 ===== */
+.el-card {
+  border-radius: 14px !important;
+  border: 1px solid var(--app-border) !important;
+  background-color: var(--app-card-bg) !important;
+  box-shadow: var(--app-shadow-sm) !important;
+}
+
+.el-card__header {
+  border-bottom: 1px solid var(--app-border) !important;
+  font-weight: 600;
+  padding: 16px 20px !important;
+}
+
+.el-card__body {
+  padding: 20px !important;
+}
+
+.app-card-hover {
+  transition: box-shadow 0.25s ease, transform 0.25s ease !important;
+}
+.app-card-hover:hover {
+  box-shadow: var(--app-shadow-hover) !important;
+  transform: translateY(-2px);
+}
+
+/* ===== 侧边栏（白色毛玻璃 + 柔和蓝选中态） ===== */
+.app-sider {
+  background: var(--app-sidebar-bg);
+  box-shadow: 1px 0 0 var(--app-border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: width 0.2s ease, background-color 0.25s ease;
+}
+
+.app-sider-brand {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--app-border);
+  user-select: none;
+  overflow: hidden;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.app-sider-brand-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: block;
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0, 51, 102, 0.16);
+}
+
+.app-sider-brand-name {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.3px;
+  color: var(--app-text-primary);
+  opacity: 1;
+  max-width: 150px;
+  transition: opacity 0.2s ease, max-width 0.2s ease;
+}
+
+.app-sider-brand.collapsed {
+  gap: 0;
+}
+.app-sider-brand.collapsed .app-sider-brand-name {
+  opacity: 0;
+  max-width: 0;
+}
+
+.app-side-menu.el-menu {
+  border-right: none !important;
+  background: transparent !important;
+  padding: 8px 0;
+}
+
+.app-side-menu .el-menu-item {
+  height: 42px;
+  line-height: 42px;
+  margin: 4px 10px;
+  border-radius: 8px;
+  color: var(--app-text-primary);
+  font-size: 14px;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.app-side-menu.el-menu--collapse .el-menu-item {
+  margin: 4px 8px;
+  padding: 0 !important;
+  justify-content: center;
+}
+
+.app-side-menu .el-menu-item:hover {
+  background-color: var(--app-menu-hover-bg) !important;
+}
+
+.app-side-menu .el-menu-item.is-active {
+  background-color: var(--app-menu-active-bg) !important;
+  color: var(--brand-primary) !important;
+  font-weight: 600;
+}
+
+.app-side-menu .el-menu-item .el-icon {
+  font-size: 16px;
+}
+
+.app-menu-divider {
+  height: 1px;
+  background: var(--app-border);
+  margin: 8px 16px;
+}
+
+/* ===== 吸顶毛玻璃顶栏 ===== */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 99;
+  height: 60px !important;
+  background: var(--app-header-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 1px 0 var(--app-border);
+  padding: 0 24px !important;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-header-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+
+/* ===== Tabs 现代化改造（告别老式灰底边框卡片） ===== */
+.el-tabs--border-card {
+  border-radius: 14px !important;
+  border: 1px solid var(--app-border) !important;
+  background: var(--app-card-bg) !important;
+  box-shadow: var(--app-shadow-sm) !important;
+  overflow: hidden;
+}
+
+.el-tabs--border-card > .el-tabs__header {
+  background-color: var(--app-card-muted-bg) !important;
+  border-bottom: 1px solid var(--app-border) !important;
+  padding: 6px 12px 0;
+}
+
+.el-tabs--border-card > .el-tabs__header .el-tabs__item {
+  border: none !important;
+  border-radius: 8px 8px 0 0;
+  margin-right: 4px;
+  color: var(--app-text-secondary);
+  font-weight: 500;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.el-tabs--border-card > .el-tabs__header .el-tabs__item:hover {
+  color: var(--brand-primary) !important;
+}
+
+.el-tabs--border-card > .el-tabs__header .el-tabs__item.is-active {
+  background-color: var(--app-card-bg) !important;
+  color: var(--brand-primary) !important;
+  font-weight: 600;
+  position: relative;
+}
+
+.el-tabs--border-card > .el-tabs__header .el-tabs__item.is-active::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--brand-primary);
+}
+
+.el-tabs--border-card > .el-tabs__content {
+  padding: 20px !important;
+}
+
+/* ===== 表格轻盈美化 ===== */
+.el-table {
+  border-radius: 10px;
+  overflow: hidden;
+  --el-table-header-bg-color: var(--app-card-muted-bg);
+  --el-table-border-color: var(--app-border);
+  --el-table-bg-color: var(--app-card-bg);
+  --el-table-tr-bg-color: var(--app-card-bg);
+  --el-table-row-hover-bg-color: var(--app-menu-active-bg);
+}
+
+.el-table th.el-table__cell {
+  font-weight: 600;
+  color: var(--app-text-primary);
+  background-color: var(--app-card-muted-bg) !important;
+}
+
+/* ===== 弹窗、按钮、标签圆角统一 ===== */
+.el-dialog {
+  border-radius: 14px !important;
+  box-shadow: var(--app-shadow-hover) !important;
+}
+
+.el-button {
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.el-tag {
+  border-radius: 6px;
+}
+
+.el-alert {
+  border-radius: 10px !important;
+}
+
+/* ===== 课表网格主题变量 ===== */
+.schedule-grid-line {
+  border-color: var(--app-grid-line) !important;
+}
+.schedule-grid-bg {
+  background: var(--app-grid-bg) !important;
+}
+
+/* ===== 滚动条美化 ===== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.28);
+}
+html[data-theme='dark'] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+html[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+/* ===== 打印态隐藏导航壳，确保成绩单与上课名单完整居中输出 ===== */
+@media print {
+  .app-sider,
+  .app-header {
+    display: none !important;
+  }
+  .app-main-wrap {
+    margin-left: 0 !important;
+  }
+  .app-content {
+    padding: 0 !important;
+  }
+}
