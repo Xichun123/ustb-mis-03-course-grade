@@ -10,12 +10,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.LocalDateTime;
 import java.util.*;
 
 /**
  * 【业务③ 成绩录入与审核 3.1–3.5 · 蒋作】
- * 以课堂号 lesson_no 组织：教师只看本人课堂；平时占比低于参数 sys_code_dict(usual_ratio_min) 时拒绝保存。
+ * 以课堂号 lesson_no 统一管理：一个课堂号可对应多个教学班 tc_id（不同班级/重修/辅修都在同一课堂号下）。
  */
 @Service
 public class ScoreService {
@@ -29,15 +28,17 @@ public class ScoreService {
         this.jdbc = jdbc;
     }
 
-    /** 3.1 我的课堂列表（本学期在前、往届在后） */
+    /** 3.1 我的课堂列表（按课堂号聚合，本学期在前、往届在后） */
     public List<Map<String, Object>> myClasses(String term, String keyword) {
         CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
-                SELECT lc.lesson_no, lc.tc_id, tc.term, tc.course_id, c.course_name, c.credit,
-                       c.open_college, tc.class_ids, tc.actual_num,
-                       (SELECT COUNT(*) FROM sc WHERE sc.tc_id = lc.tc_id AND sc.select_status = 1) AS student_count,
+                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, tc.course_id, c.course_name, c.credit,
+                       c.open_college, GROUP_CONCAT(DISTINCT tc.class_ids ORDER BY tc.class_ids SEPARATOR '、') AS class_ids,
+                       (SELECT COUNT(*) FROM sc JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND sc.select_status = 1) AS student_count,
                        (SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                         WHERE sc.tc_id = lc.tc_id AND s.exam_type = 1 AND s.score_status = 1) AS submitted_count
+                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS submitted_count
                 FROM lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
@@ -45,8 +46,9 @@ public class ScoreService {
                 """);
         List<Object> args = new ArrayList<>();
         if (u.role() == RoleEnum.TEACHER) {
-            sql.append(" AND TRIM(tc.teacher_id) = ? ");
+            sql.append(" AND (TRIM(tc.teacher_id) = ? OR TRIM(tc.teacher_id) = ?) ");
             args.add(u.empId());
+            args.add(u.teacherCode8() == null ? "" : u.teacherCode8());
         }
         if (term != null && !term.isBlank()) {
             sql.append(" AND tc.term = ? ");
@@ -58,47 +60,51 @@ public class ScoreService {
             args.add(like);
             args.add(like);
         }
+        sql.append(" GROUP BY lc.lesson_no, tc.term, tc.course_id, c.course_name, c.credit, c.open_college ");
         sql.append(" ORDER BY tc.term DESC, lc.lesson_no ASC ");
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
-    /** 3.1 课堂名单与已录成绩 */
+    /** 3.1 课堂名单与已录成绩（聚合该课堂号下全部教学班） */
     public Map<String, Object> roster(String lessonNo) {
         Map<String, Object> head = requireClass(lessonNo);
         UserContext.requireUser();
         CurrentUser u = UserContext.get();
-        if (u.role() == RoleEnum.TEACHER && !Objects.equals(String.valueOf(head.get("teacher_id")).trim(), u.empId())) {
+        if (u.role() == RoleEnum.TEACHER && !owns(head, u)) {
             throw BizException.forbidden("该课堂不属于当前教师");
         }
+        List<String> tcIds = tcIds(head);
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT sc.sc_id, sc.student_id, st.student_name, st.class_name, sc.study_type, sc.stu_level,
+                SELECT sc.sc_id, sc.tc_id, sc.student_id, st.student_name, st.class_name, sc.study_type, sc.stu_level,
                        s.score_id, s.usual_ratio, s.usual_score, s.exam_score, s.exam_flag, s.score_type,
                        s.score_level, s.total_score, s.grade_point, s.score_status
                 FROM sc
                 JOIN student st ON sc.student_id = st.student_id
                 LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
-                WHERE sc.tc_id = ? AND sc.select_status = 1
+                WHERE sc.tc_id IN (%s) AND sc.select_status = 1
                 ORDER BY sc.student_id
-                """, head.get("tc_id"));
-        int ratioMin = ratioMin();
+                """.formatted(marks(tcIds)), tcIds.toArray());
         Map<String, Object> data = new LinkedHashMap<>(head);
         data.put("students", rows);
-        data.put("ratio_min", ratioMin);
-        data.put("verify_code", rows.isEmpty() ? null : buildCode(lessonNo, head.get("tc_id")));
+        data.put("ratio_min", ratioMin());
+        boolean canSeeCode = u.role() == RoleEnum.TEACHER || u.role() == RoleEnum.SYS_ADMIN;
+        data.put("verify_code", canSeeCode && !rows.isEmpty() ? buildCode(lessonNo) : null);
         return data;
     }
 
-    /** 3.1 保存成绩草稿（课堂号 + 名单，含不同班级/重修/辅修） */
+    /** 3.1 保存成绩草稿 */
     @Transactional
     public Map<String, Object> saveGrades(String lessonNo, List<Map<String, Object>> items) {
         Map<String, Object> head = requireClass(lessonNo);
         CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER);
-        if (!Objects.equals(String.valueOf(head.get("teacher_id")).trim(), u.empId())) {
+        if (!owns(head, u)) {
             throw BizException.forbidden("只能录入本人任教的课堂");
         }
         int min = ratioMin();
+        List<String> tcIds = tcIds(head);
         Set<Long> allowed = new HashSet<>(jdbc.queryForList(
-                "SELECT sc_id FROM sc WHERE tc_id = ? AND select_status = 1", Long.class, head.get("tc_id")));
+                "SELECT sc_id FROM sc WHERE tc_id IN (" + marks(tcIds) + ") AND select_status = 1",
+                Long.class, tcIds.toArray()));
         int saved = 0;
         for (Map<String, Object> item : items) {
             Long scId = toLong(item.get("sc_id"));
@@ -138,22 +144,22 @@ public class ScoreService {
         return Map.of("saved", saved, "ratio_min", min);
     }
 
-    /** 3.2 总评计算与提交：校验数据规范 → 计算 → 置 1 → 生成 6 位核对码 */
+    /** 3.2 总评计算与提交：只校验数据规范，计算后置 1，生成 6 位核对码 */
     @Transactional
     public Map<String, Object> submit(String lessonNo) {
         Map<String, Object> head = requireClass(lessonNo);
         CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER);
-        if (!Objects.equals(String.valueOf(head.get("teacher_id")).trim(), u.empId())) {
+        if (!owns(head, u)) {
             throw BizException.forbidden("只能提交本人任教的课堂");
         }
-        Object tcId = head.get("tc_id");
+        List<String> tcIds = tcIds(head);
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT sc.sc_id, sc.student_id, s.score_id, s.usual_ratio, s.usual_score, s.exam_score,
                        s.exam_flag, s.score_type, s.score_level
                 FROM sc
                 LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
-                WHERE sc.tc_id = ? AND sc.select_status = 1
-                """, tcId);
+                WHERE sc.tc_id IN (%s) AND sc.select_status = 1
+                """.formatted(marks(tcIds)), tcIds.toArray());
         if (rows.isEmpty()) {
             throw BizException.unprocessable("EMPTY_ROSTER", "该课堂没有已选中学生");
         }
@@ -196,7 +202,7 @@ public class ScoreService {
                 total = usual.multiply(BigDecimal.valueOf(ratio))
                         .add(exam.multiply(BigDecimal.valueOf(100 - ratio)))
                         .divide(BigDecimal.valueOf(100), 1, RoundingMode.HALF_UP);
-                gp = gradePoint(total);
+                gp = percentToPoint(total);
             } else if (flag == 1) {
                 total = BigDecimal.ZERO;
                 gp = BigDecimal.ZERO;
@@ -206,30 +212,32 @@ public class ScoreService {
                      WHERE sc_id = ? AND exam_type = 1
                     """, total, gp, r.get("sc_id"));
         }
-        String code = buildCode(lessonNo, tcId);
+        String code = buildCode(lessonNo);
         return Map.of("lesson_no", lessonNo, "submitted", rows.size(), "verify_code", code);
     }
 
     /** 3.2/3.3 成绩登记表（含核对码） */
     public Map<String, Object> sheet(String lessonNo) {
-        Map<String, Object> data = roster(lessonNo);
-        return data;
+        return roster(lessonNo);
     }
 
-    /** 3.3 学院待核对课堂 */
+    /** 3.3 学院待核对课堂（按课堂号聚合） */
     public List<Map<String, Object>> auditPending(String term) {
         CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
-                SELECT lc.lesson_no, lc.tc_id, tc.term, c.course_name, c.open_college, tc.class_ids,
+                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, c.course_name, c.open_college,
                        (SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                         WHERE sc.tc_id = lc.tc_id AND s.exam_type = 1 AND s.score_status = 1) AS wait_count,
+                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS wait_count,
                        (SELECT MAX(s.submit_time) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                         WHERE sc.tc_id = lc.tc_id AND s.exam_type = 1) AS submit_time
+                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1) AS submit_time
                 FROM lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE EXISTS (SELECT 1 FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                               WHERE sc.tc_id = lc.tc_id AND s.exam_type = 1 AND s.score_status = 1)
+                               JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                               WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1)
                 """);
         List<Object> args = new ArrayList<>();
         if (u.role() == RoleEnum.COLLEGE_SECRETARY && u.collegeId() != null) {
@@ -240,11 +248,12 @@ public class ScoreService {
             sql.append(" AND tc.term = ? ");
             args.add(term.trim());
         }
+        sql.append(" GROUP BY lc.lesson_no, tc.term, c.course_name, c.open_college ");
         sql.append(" ORDER BY tc.term DESC, lc.lesson_no ");
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
-    /** 3.3 输入 6 位核对码：通过置 2，退回置 4 并记审核意见 */
+    /** 3.3 输码核对：通过置 2，退回置 4 并记审核意见（按课堂号下每个教学班各写一条审核记录） */
     @Transactional
     public Map<String, Object> audit(String lessonNo, String verifyCode, int result, String opinion) {
         CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
@@ -259,25 +268,27 @@ public class ScoreService {
         if (result == 2 && (opinion == null || opinion.isBlank())) {
             throw BizException.unprocessable("OPINION_REQUIRED", "退回时必须填写差异说明");
         }
-        String expect = buildCode(lessonNo, head.get("tc_id"));
-        if (!expect.equals(verifyCode == null ? "" : verifyCode.trim())) {
+        if (!buildCode(lessonNo).equals(verifyCode == null ? "" : verifyCode.trim())) {
             throw BizException.unprocessable("CODE_MISMATCH", "核对码与系统不一致，请对照纸质成绩登记表重新输入");
         }
-        Integer status = jdbc.queryForObject("""
+        List<String> tcIds = tcIds(head);
+        Integer wait = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                 WHERE sc.tc_id = ? AND s.exam_type = 1 AND s.score_status = 1
-                """, Integer.class, head.get("tc_id"));
-        if (status == null || status == 0) {
+                 WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 1
+                """.formatted(marks(tcIds)), Integer.class, tcIds.toArray());
+        if (wait == null || wait == 0) {
             throw BizException.conflict("NOT_SUBMITTED", "该课堂没有待核对（已提交）的成绩");
         }
-        jdbc.update("""
-                INSERT INTO score_audit(tc_id, auditor_id, audit_result, audit_opinion, audit_time)
-                VALUES(?, ?, ?, ?, NOW())
-                """, head.get("tc_id"), u.empId(), result, opinion == null ? null : opinion.trim());
+        for (String tcId : tcIds) {
+            jdbc.update("""
+                    INSERT INTO score_audit(tc_id, auditor_id, audit_result, audit_opinion, audit_time)
+                    VALUES(?, ?, ?, ?, NOW())
+                    """, tcId, u.empId(), result, opinion == null ? null : opinion.trim());
+        }
         jdbc.update("""
                 UPDATE score SET score_status = ?
-                 WHERE sc_id IN (SELECT sc_id FROM sc WHERE tc_id = ?) AND exam_type = 1 AND score_status = 1
-                """, result == 1 ? 2 : 4, head.get("tc_id"));
+                 WHERE sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s)) AND exam_type = 1 AND score_status = 1
+                """.formatted(marks(tcIds)), append(new Object[]{result == 1 ? 2 : 4}, tcIds));
         return Map.of("lesson_no", lessonNo, "result", result,
                 "message", result == 1 ? "核对通过，等待教务处发布" : "已退回任课教师二次确认");
     }
@@ -292,15 +303,20 @@ public class ScoreService {
             args.add(term.trim());
         }
         return jdbc.queryForList("""
-                SELECT lc.lesson_no, lc.tc_id, tc.term, c.course_name,
+                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, c.course_name,
                        (SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                         WHERE sc.tc_id = lc.tc_id AND s.exam_type = 1 AND s.score_status = 2) AS ready_count
+                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2) AS ready_count
                 FROM lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE EXISTS (SELECT 1 FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                               WHERE sc.tc_id = lc.tc_id AND s.exam_type = 1 AND s.score_status = 2)
-                """ + termSql + " ORDER BY tc.term DESC, lc.lesson_no ", args.toArray());
+                               JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                               WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2)
+                """ + termSql + """
+                GROUP BY lc.lesson_no, tc.term, c.course_name
+                ORDER BY tc.term DESC, lc.lesson_no
+                """, args.toArray());
     }
 
     /** 3.4 发布：校验本次提交后的审核通过记录，置 3 并重算 is_final */
@@ -308,35 +324,36 @@ public class ScoreService {
     public Map<String, Object> publish(String lessonNo) {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         Map<String, Object> head = requireClass(lessonNo);
-        Object tcId = head.get("tc_id");
-        Integer pass = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM score_audit a
-                 WHERE a.tc_id = ? AND a.audit_result = 1
-                   AND a.audit_time >= COALESCE((SELECT MAX(s.submit_time)
-                                                   FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                                                  WHERE sc.tc_id = a.tc_id AND s.exam_type = 1), a.audit_time)
-                """, Integer.class, tcId);
+        List<String> tcIds = tcIds(head);
         Integer ready = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                 WHERE sc.tc_id = ? AND s.exam_type = 1 AND s.score_status = 2
-                """, Integer.class, tcId);
+                 WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 2
+                """.formatted(marks(tcIds)), Integer.class, tcIds.toArray());
         if (ready == null || ready == 0) {
             throw BizException.conflict("NOT_READY", "该课堂没有学院核对通过的成绩");
         }
+        List<Object> passArgs = new ArrayList<>(tcIds);
+        passArgs.addAll(tcIds);
+        Integer pass = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM score_audit a
+                 WHERE a.tc_id IN (%s) AND a.audit_result = 1
+                   AND a.audit_time >= COALESCE((SELECT MAX(s.submit_time)
+                                                   FROM score s JOIN sc ON s.sc_id = sc.sc_id
+                                                  WHERE sc.tc_id IN (%s) AND s.exam_type = 1), a.audit_time)
+                """.formatted(marks(tcIds), marks(tcIds)), Integer.class, passArgs.toArray());
         if (pass == null || pass == 0) {
             throw BizException.conflict("NO_AUDIT", "学院尚未核对本次提交，不能发布");
         }
         jdbc.update("""
                 UPDATE score SET score_status = 3, publish_time = NOW()
-                 WHERE sc_id IN (SELECT sc_id FROM sc WHERE tc_id = ?) AND exam_type = 1 AND score_status = 2
-                """, tcId);
-        // 重算 is_final：同一学生同一课程已发布成绩中最高的一条
-        List<Map<String, Object>> students = jdbc.queryForList("""
+                 WHERE sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s)) AND exam_type = 1 AND score_status = 2
+                """.formatted(marks(tcIds)), tcIds.toArray());
+        String courseId = String.valueOf(head.get("course_id"));
+        List<String> students = jdbc.queryForList("""
                 SELECT DISTINCT sc.student_id FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                 WHERE sc.tc_id = ? AND s.exam_type = 1 AND s.score_status = 3
-                """, tcId);
-        for (Map<String, Object> st : students) {
-            String sid = String.valueOf(st.get("student_id"));
+                 WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 3
+                """.formatted(marks(tcIds)), String.class, tcIds.toArray());
+        for (String sid : students) {
             jdbc.update("""
                     UPDATE score SET is_final = 0
                      WHERE sc_id IN (SELECT sc_id FROM sc WHERE student_id = ?)
@@ -344,10 +361,9 @@ public class ScoreService {
             Long best = jdbc.queryForObject("""
                     SELECT s.score_id FROM score s JOIN sc ON s.sc_id = sc.sc_id
                      JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                     WHERE sc.student_id = ? AND s.score_status = 3
-                       AND tc.course_id = (SELECT course_id FROM teaching_class WHERE tc_id = ?)
+                     WHERE sc.student_id = ? AND s.score_status = 3 AND tc.course_id = ?
                      ORDER BY s.total_score DESC, s.score_id DESC LIMIT 1
-                    """, Long.class, sid, tcId);
+                    """, Long.class, sid, courseId);
             if (best != null) {
                 jdbc.update("UPDATE score SET is_final = 1 WHERE score_id = ?", best);
             }
@@ -361,7 +377,7 @@ public class ScoreService {
         StringBuilder sql = new StringBuilder("""
                 SELECT convert_id, student_id, exchange_apply_id, term, stat_stage, host_school,
                        ext_course_code, ext_course_name, ext_credit, ext_score_raw, ext_scale_type,
-                       course_id, score_type, converted_score, converted_level, grade_point, is_final
+                       course_id, score_type, converted_score, converted_level, grade_point, is_final, audit_status
                 FROM exchange_score_convert WHERE 1=1
                 """);
         List<Object> args = new ArrayList<>();
@@ -440,19 +456,51 @@ public class ScoreService {
 
     // ---------- 内部工具 ----------
 
+    private static String marks(List<String> ids) {
+        return String.join(",", Collections.nCopies(ids.size(), "?"));
+    }
+
+    private static Object[] append(Object[] head, List<String> tail) {
+        Object[] all = Arrays.copyOf(head, head.length + tail.size());
+        for (int i = 0; i < tail.size(); i++) {
+            all[head.length + i] = tail.get(i);
+        }
+        return all;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> tcIds(Map<String, Object> head) {
+        return (List<String>) head.get("tc_ids");
+    }
+
+    private static boolean owns(Map<String, Object> head, CurrentUser u) {
+        return ((List<String>) head.get("teacher_ids")).stream()
+                .anyMatch(t -> t.equals(u.empId()) || t.equals(u.teacherCode8()));
+    }
+
     private Map<String, Object> requireClass(String lessonNo) {
         List<Map<String, Object>> list = jdbc.queryForList("""
                 SELECT lc.lesson_no, lc.tc_id, tc.term, tc.course_id, c.course_name, c.credit,
-                       c.open_college, tc.teacher_id, tc.class_ids, tc.actual_num
+                       c.open_college, tc.teacher_id, tc.class_ids
                 FROM lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE lc.lesson_no = ?
+                ORDER BY lc.tc_id
                 """, lessonNo);
         if (list.isEmpty()) {
             throw BizException.notFound("课堂号不存在：" + lessonNo);
         }
-        return list.get(0);
+        Map<String, Object> head = new LinkedHashMap<>(list.get(0));
+        List<String> ids = new ArrayList<>();
+        List<String> teachers = new ArrayList<>();
+        for (Map<String, Object> r : list) {
+            ids.add(String.valueOf(r.get("tc_id")));
+            teachers.add(String.valueOf(r.get("teacher_id")).trim());
+        }
+        head.put("tc_ids", ids);
+        head.put("teacher_ids", teachers);
+        return head;
     }
 
     private int ratioMin() {
@@ -471,11 +519,12 @@ public class ScoreService {
         }
     }
 
-    /** 6 位核对码：课堂号 + 选课记录号集合的摘要，打印在成绩登记表上，学院输码比对 */
-    private String buildCode(String lessonNo, Object tcId) {
+    /** 6 位核对码：课堂号 + 该课堂全部 sc_id 的摘要，打印在成绩登记表上 */
+    private String buildCode(String lessonNo) {
         List<Long> ids = jdbc.queryForList("""
-                SELECT sc.sc_id FROM sc WHERE sc.tc_id = ? AND sc.select_status = 1 ORDER BY sc.sc_id
-                """, Long.class, tcId);
+                SELECT sc.sc_id FROM sc JOIN lesson_class lc ON sc.tc_id = lc.tc_id
+                 WHERE lc.lesson_no = ? AND sc.select_status = 1 ORDER BY sc.sc_id
+                """, Long.class, lessonNo);
         long h = 17;
         for (Long id : ids) {
             h = h * 31 + id;
@@ -484,11 +533,7 @@ public class ScoreService {
         return String.format("%06d", Math.abs(h) % 1_000_000);
     }
 
-    private static BigDecimal gradePoint(BigDecimal total) {
-        return total == null ? null : percentToPoint(total);
-    }
-
-    /** 校发〔2021〕46 号附表 3：只有 4.00/3.70/3.40/3.00/2.40/2.00/1.00/0.00 八档 */
+    /** 校发〔2021〕46 号附表 3：4.00/3.70/3.40/3.00/2.40/2.00/1.00/0.00 八档 */
     private static BigDecimal percentToPoint(BigDecimal score) {
         double v = score.doubleValue();
         if (v >= 90) {
