@@ -6,9 +6,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 /**
- * 演示与开发阶段身份解析拦截器：
- * 通过请求头 X-Demo-User 解析预置的测试账号，后续接入 DBA t_user 鉴权只需替换此拦截器，
- * 所有业务模块的 UserContext.requireUser() 调用代码零修改。
+ * 统一身份解析拦截器：支持 Authorization Bearer 令牌与 X-Demo-User 头
  */
 @Component
 public class AuthInterceptor implements HandlerInterceptor {
@@ -17,10 +15,15 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        String userKey = request.getHeader(DEMO_USER_HEADER);
+        String userKey = null;
+        String auth = request.getHeader("Authorization");
+        if (auth != null && auth.startsWith("Bearer ") && auth.length() > 7) {
+            userKey = auth.substring(7).trim();
+        }
         if (userKey == null || userKey.isBlank()) {
-            // 默认以教务处经办身份方便浏览器直测 GET 接口；前端会显式携带所选账号
-            UserContext.set(DemoAuthController.findAccount("office_admin"));
+            userKey = request.getHeader(DEMO_USER_HEADER);
+        }
+        if (userKey == null || userKey.isBlank()) {
             return true;
         }
         CurrentUser user = DemoAuthController.findAccount(userKey.trim());

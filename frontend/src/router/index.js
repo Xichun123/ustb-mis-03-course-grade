@@ -1,7 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import MainLayout from '../layout/MainLayout.vue'
+import { getAuthToken } from '../api/request'
 
 const routes = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('../views/LoginView.vue'),
+    meta: { title: '登录', public: true }
+  },
   {
     path: '/',
     component: MainLayout,
@@ -15,12 +22,27 @@ const routes = [
       { path: 'correction', name: 'Correction', component: () => import('../views/correction/CorrectionView.vue'), meta: { title: '成绩更正申请' } },
       { path: 'admin', name: 'Admin', component: () => import('../views/admin/AdminView.vue'), meta: { title: '系统维护' } }
     ]
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/dashboard'
   }
 ]
 
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach((to) => {
+  const hasToken = !!getAuthToken()
+  if (!to.meta?.public && !hasToken) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+  if (to.path === '/login' && hasToken) {
+    return '/dashboard'
+  }
+  return true
 })
 
 export default router

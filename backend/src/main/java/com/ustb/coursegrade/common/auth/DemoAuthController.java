@@ -1,22 +1,23 @@
 package com.ustb.coursegrade.common.auth;
 
 import com.ustb.coursegrade.common.ApiResponse;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import com.ustb.coursegrade.common.BizException;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * 演示账号切换与当前身份查询接口（全组共用，与初始化测试数据完全对应）
+ * 统一身份认证与当前会话接口（兼容真实学号/工号登录与内部单测头）
  */
 @RestController
 @RequestMapping("/api/v1/auth")
 public class DemoAuthController {
 
     private static final Map<String, CurrentUser> DEMO_ACCOUNTS = new LinkedHashMap<>();
+    private static final Set<String> VALID_PASSWORDS = Set.of("123456", "ustb2026", "admin123");
 
     static {
         DEMO_ACCOUNTS.put("office_admin", new CurrentUser(
@@ -41,10 +42,10 @@ public class DemoAuthController {
                 "stu_undergrad", "张晨曦（本科·信管241）", RoleEnum.STUDENT,
                 "U202440001", null, null, "0001", null));
         DEMO_ACCOUNTS.put("stu_unrated", new CurrentUser(
-                "stu_unrated", "林思远（本科·未评教演示）", RoleEnum.STUDENT,
+                "stu_unrated", "林思远（本科·信管241）", RoleEnum.STUDENT,
                 "U202440002", null, null, "0001", null));
         DEMO_ACCOUNTS.put("stu_retake", new CurrentUser(
-                "stu_retake", "刘浩然（本科·重修生）", RoleEnum.STUDENT,
+                "stu_retake", "刘浩然（本科·信管231）", RoleEnum.STUDENT,
                 "U202340004", null, null, "0001", null));
         DEMO_ACCOUNTS.put("stu_grad", new CurrentUser(
                 "stu_grad", "许嘉豪（研究生·管科硕261）", RoleEnum.STUDENT,
@@ -53,7 +54,7 @@ public class DemoAuthController {
                 "stu_exchange", "Alex Mueller（来校交换生）", RoleEnum.STUDENT,
                 "EX20260001", null, null, "0001", null));
         DEMO_ACCOUNTS.put("grad_school", new CurrentUser(
-                "grad_school", "孙梅（研究生院审核）", RoleEnum.GRADUATE_SCHOOL,
+                "grad_school", "孙梅（研究生院）", RoleEnum.GRADUATE_SCHOOL,
                 null, "G000000001", null, null, "ORG901"));
         DEMO_ACCOUNTS.put("sys_admin", new CurrentUser(
                 "sys_admin", "系统管理员", RoleEnum.SYS_ADMIN,
@@ -61,7 +62,45 @@ public class DemoAuthController {
     }
 
     public static CurrentUser findAccount(String key) {
-        return DEMO_ACCOUNTS.get(key);
+        if (key == null || key.isBlank()) {
+            return null;
+        }
+        String q = key.trim();
+        CurrentUser direct = DEMO_ACCOUNTS.get(q);
+        if (direct != null) {
+            return direct;
+        }
+        for (CurrentUser u : DEMO_ACCOUNTS.values()) {
+            if (q.equalsIgnoreCase(u.studentId())
+                    || q.equalsIgnoreCase(u.empId())
+                    || q.equalsIgnoreCase(u.teacherCode8())) {
+                return u;
+            }
+        }
+        return null;
+    }
+
+    /** 账号密码登录（支持学号、教职工号或账号名） */
+    @PostMapping("/login")
+    public ApiResponse<Map<String, Object>> login(@RequestBody Map<String, String> body) {
+        String username = body == null ? null : body.get("username");
+        String password = body == null ? null : body.get("password");
+        if (username == null || username.isBlank() || password == null || password.isBlank()) {
+            throw BizException.unprocessable("INVALID_CREDENTIALS", "请输入学号/工号与密码");
+        }
+        CurrentUser user = findAccount(username);
+        if (user == null || !VALID_PASSWORDS.contains(password.trim())) {
+            throw BizException.unauthorized("学号/工号或密码错误");
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("token", user.userId());
+        data.put("user", user);
+        return ApiResponse.ok("登录成功", data);
+    }
+
+    @PostMapping("/logout")
+    public ApiResponse<Map<String, Object>> logout() {
+        return ApiResponse.ok("已退出登录", Map.of("logged_out", true));
     }
 
     @GetMapping("/demo-accounts")

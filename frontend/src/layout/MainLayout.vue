@@ -99,21 +99,10 @@
         </div>
 
         <div class="header-right">
-          <div class="identity-box">
+          <div class="user-pill">
             <span class="identity-dot">{{ currentInitial }}</span>
-            <el-select
-              v-model="userState.currentKey"
-              size="default"
-              class="identity-select"
-              @change="handleSwitch"
-            >
-              <el-option
-                v-for="acc in userState.accounts"
-                :key="acc.userId"
-                :label="acc.displayName"
-                :value="acc.userId"
-              />
-            </el-select>
+            <span class="user-name">{{ currentShortName }}</span>
+            <span class="user-role hide-xs">{{ currentRoleLabel }}</span>
           </div>
 
           <el-dropdown trigger="click" @command="setThemeMode">
@@ -149,6 +138,12 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+
+          <el-tooltip content="退出登录" placement="bottom">
+            <el-button text circle class="header-icon-btn" aria-label="退出登录" @click="handleLogout">
+              <el-icon :size="17"><SwitchButton /></el-icon>
+            </el-button>
+          </el-tooltip>
         </div>
       </header>
 
@@ -163,7 +158,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { initUserStore, switchDemoUser, userState } from '../stores/user'
+import { initUserStore, logoutSession, userState } from '../stores/user'
 import { setThemeMode, themeState } from '../stores/theme'
 import { canAccessPath, visibleModulesForRole } from '../stores/permissions'
 
@@ -192,9 +187,24 @@ watch([currentRole, () => route.path], ([role, path]) => {
   }
 }, { immediate: true })
 
+const currentShortName = computed(() => {
+  const full = userState.currentUser?.displayName || ''
+  return full.replace(/（.*）$/, '').trim() || full
+})
+
+const currentRoleLabel = computed(() => ({
+  ACADEMIC_OFFICE: '教务处',
+  ACADEMIC_DIRECTOR: '教务处处长',
+  COLLEGE_SECRETARY: '教学秘书',
+  TEACHER: '任课教师',
+  STUDENT: '学生',
+  GRADUATE_SCHOOL: '研究生院',
+  SYS_ADMIN: '系统管理员'
+}[currentRole.value] || ''))
+
 const currentInitial = computed(() => {
-  const name = (userState.currentUser?.displayName || '').trim()
-  return name ? name[0] : 'U'
+  const name = currentShortName.value
+  return name ? name[0].toUpperCase() : 'U'
 })
 
 function handleResize() {
@@ -207,8 +217,11 @@ function toggleCollapse() {
   localStorage.setItem(COLLAPSED_KEY, String(collapsed.value))
 }
 
-onMounted(() => {
-  initUserStore()
+onMounted(async () => {
+  const ok = await initUserStore()
+  if (!ok) {
+    router.replace('/login')
+  }
   window.addEventListener('resize', handleResize)
 })
 
@@ -216,9 +229,10 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
 })
 
-async function handleSwitch(val) {
-  await switchDemoUser(val)
-  ElMessage.success(`已切换身份：${userState.currentUser?.displayName || val}`)
+async function handleLogout() {
+  await logoutSession()
+  ElMessage.success('已退出登录')
+  router.replace('/login')
 }
 </script>
 
@@ -301,15 +315,32 @@ async function handleSwitch(val) {
   flex-shrink: 0;
 }
 
-.identity-box {
-  display: flex;
+.user-pill {
+  display: inline-flex;
   align-items: center;
   gap: 8px;
+  padding: 4px 12px 4px 5px;
+  border-radius: 999px;
+  background: var(--app-card-muted-bg);
+  border: 1px solid var(--app-border);
+}
+
+.user-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+
+.user-role {
+  font-size: 11.5px;
+  color: var(--app-text-secondary);
+  padding-left: 6px;
+  border-left: 1px solid var(--app-border-strong);
 }
 
 .identity-dot {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: linear-gradient(135deg, #003366 0%, #0b5cad 100%);
   color: #ffffff;
@@ -319,11 +350,6 @@ async function handleSwitch(val) {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(0, 51, 102, 0.22);
-}
-
-.identity-select {
-  width: 224px;
 }
 
 .header-icon-btn {
