@@ -203,7 +203,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { scoreApi } from '../../api/score'
 import { userState } from '../../stores/user'
@@ -372,6 +372,16 @@ onMounted(() => {
   if (isCollege.value || isAdmin.value) loadAudit()
   if (isOffice.value || isAdmin.value) loadPublish()
   if (isOffice.value || isCollege.value || isAdmin.value) loadExchange()
+})
+
+watch(role, (r) => {
+  activeTab.value = r === 'TEACHER' ? 'entry' : r === 'COLLEGE_SECRETARY' ? 'audit' : r === 'ACADEMIC_OFFICE' ? 'publish' : 'entry'
+  currentClass.value = null
+  classList.value = []
+  if (r === 'TEACHER' || r === 'SYS_ADMIN') loadClasses()
+  if (r === 'COLLEGE_SECRETARY' || r === 'SYS_ADMIN') loadAudit()
+  if (r === 'ACADEMIC_OFFICE' || r === 'SYS_ADMIN') loadPublish()
+  if (r === 'ACADEMIC_OFFICE' || r === 'COLLEGE_SECRETARY' || r === 'SYS_ADMIN') loadExchange()
 })
 </script>
 
