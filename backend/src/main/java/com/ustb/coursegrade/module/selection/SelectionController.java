@@ -1,36 +1,37 @@
 package com.ustb.coursegrade.module.selection;
 
 import com.ustb.coursegrade.common.ApiResponse;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import com.ustb.coursegrade.common.BizException;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
 
 /**
  * 【业务② 学生选课（2.1–2.7）· 负责人：张文浩】
- * 请在本包 com.ustb.coursegrade.module.selection 内补充 Service 与接口实现，参考 module/prep/。
+ * 接口复用公共身份与响应协议；2.5停开在编码确认前只提供预览。
  */
 @RestController
 @RequestMapping("/api/v1/selection")
 public class SelectionController {
 
-    @GetMapping("/module-info")
-    public ApiResponse<Map<String, Object>> moduleInfo() {
-        return ApiResponse.ok(Map.of(
-                "module", "业务② 学生选课",
-                "owner", "张文浩",
-                "status", "待开发（骨架已就绪）",
-                "leaf_modules", List.of(
-                        "2.1 课程查询与教学班选择",
-                        "2.2 选课与退选办理",
-                        "2.3 选课校验（冲突/容量/学分/限选/研究生方向/重修免听）",
-                        "2.4 录取与超额筛选",
-                        "2.5 停开处理",
-                        "2.6 选课结果与上课安排查询",
-                        "2.7 上课名单调整"
-                )
-        ));
+    private final SelectionService service;
+    public SelectionController(SelectionService service){this.service=service;}
+    @GetMapping("/module-info") public ApiResponse<?> info(){return ApiResponse.ok(Map.of("module","业务② 学生选课","owner","张文浩","status","核心流程已实现；停开仅预览","leaf_modules",List.of("2.1课程查询","2.2选课与退选","2.3选课校验","2.4录取与筛选","2.5停开预览","2.6结果与课表名单","2.7名单调整")));}
+    @GetMapping("/context") public ApiResponse<?> context(){return ApiResponse.ok(service.context());}
+    @GetMapping("/courses") public ApiResponse<?> courses(@RequestParam int roundId,@RequestParam(defaultValue="") String keyword,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="10") int pageSize){
+        if(page<1 || page>100000 || pageSize<1 || pageSize>100 || keyword.length()>100)throw BizException.unprocessable("BAD_QUERY","分页或查询条件无效");
+        return ApiResponse.ok(service.courses(roundId,keyword.trim(),page,pageSize));
     }
+    @GetMapping("/results") public ApiResponse<?> results(@RequestParam String term){return ApiResponse.ok(service.results(term(term)));}
+    @GetMapping("/timetable") public ApiResponse<?> timetable(@RequestParam String term,@RequestParam(defaultValue="1") int week){if(week<1 || week>60)throw BizException.unprocessable("BAD_WEEK","教学周须为1—60");return ApiResponse.ok(service.timetable(term(term),week));}
+    @PostMapping("/check") public ApiResponse<?> check(@RequestBody SelectionService.Application request){return ApiResponse.ok(service.check(request));}
+    @PostMapping("/applications") public ApiResponse<?> enroll(@RequestBody SelectionService.Application request){return ApiResponse.ok(service.enroll(request));}
+    @PostMapping("/records/{scId}/withdraw") public ApiResponse<?> withdraw(@PathVariable String scId,@RequestBody SelectionService.Withdrawal request){if(!scId.matches("[1-9][0-9]{0,18}"))throw BizException.unprocessable("BAD_ID","选课记录号无效");return ApiResponse.ok(service.withdraw(scId,request));}
+    @GetMapping("/teaching-classes") public ApiResponse<?> classes(@RequestParam String term){return ApiResponse.ok(service.teachingClasses(term(term)));}
+    @GetMapping("/teaching-classes/{tcId}/roster") public ApiResponse<?> roster(@PathVariable String tcId,@RequestParam(defaultValue="") String keyword){if(keyword.length()>100)throw BizException.unprocessable("BAD_QUERY","关键词过长");return ApiResponse.ok(service.roster(tcId,keyword.trim()));}
+    @PostMapping("/teaching-classes/{tcId}/adjustments") public ApiResponse<?> adjust(@PathVariable String tcId,@RequestBody SelectionService.Adjustment request){return ApiResponse.ok(service.adjust(tcId,request));}
+    @PostMapping("/rounds/{roundId}/screen") public ApiResponse<?> screen(@PathVariable int roundId){return ApiResponse.ok(service.screen(roundId));}
+    @GetMapping("/stop-preview") public ApiResponse<?> stop(@RequestParam String term){return ApiResponse.ok(service.stopPreview(term(term)));}
+    private String term(String term){if(term==null || !term.matches("[0-9]{4}-[0-9]{4}-[12]"))throw BizException.unprocessable("BAD_TERM","学年学期格式应为2026-2027-1");return term;}
 }
