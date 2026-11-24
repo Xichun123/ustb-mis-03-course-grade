@@ -18,6 +18,8 @@ html {
   --app-grid-bg: #f8fafc;
   --app-menu-active-bg: rgba(11, 92, 173, 0.09);
   --app-menu-hover-bg: rgba(15, 23, 42, 0.035);
+  --app-table-hover-bg: #f1f6fc;
+  --app-table-stripe-bg: #fafbfd;
   --app-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 4px 16px rgba(15, 23, 42, 0.035);
   --app-shadow-hover: 0 6px 16px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.06);
 
@@ -60,6 +62,8 @@ html[data-theme='dark'] {
   --app-grid-bg: #121922;
   --app-menu-active-bg: rgba(92, 156, 230, 0.14);
   --app-menu-hover-bg: rgba(255, 255, 255, 0.045);
+  --app-table-hover-bg: #1d2a3a;
+  --app-table-stripe-bg: #1a2430;
   --app-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25), 0 4px 16px rgba(0, 0, 0, 0.28);
   --app-shadow-hover: 0 8px 20px rgba(0, 0, 0, 0.32), 0 16px 36px rgba(0, 0, 0, 0.40);
 
@@ -313,7 +317,7 @@ html, body, #app {
   --el-table-border-color: var(--app-border);
   --el-table-bg-color: var(--app-card-bg);
   --el-table-tr-bg-color: var(--app-card-bg);
-  --el-table-row-hover-bg-color: var(--app-menu-active-bg);
+  --el-table-row-hover-bg-color: var(--app-table-hover-bg);
 }
 
 .el-table--border {
@@ -350,11 +354,17 @@ html, body, #app {
 }
 
 .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background-color: rgba(15, 23, 42, 0.012);
+  background-color: var(--app-table-stripe-bg);
 }
 
-html[data-theme='dark'] .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background-color: rgba(255, 255, 255, 0.018);
+.el-table__body tr.hover-row > td.el-table__cell,
+.el-table__body tr:hover > td.el-table__cell {
+  background-color: var(--app-table-hover-bg) !important;
+}
+
+.el-table .el-table-fixed-column--right,
+.el-table .el-table-fixed-column--left {
+  background-color: var(--app-card-bg);
 }
 
 /* ===== 控件、按钮、输入框与弹窗质感 ===== */

@@ -361,8 +361,8 @@
             />
           </el-select>
           <el-select v-if="reportQuery.report_type === 'DISTRIBUTION'" v-model="reportQuery.exam_type" style="width: 130px">
-            <el-option label="1 正常考试" :value="1" />
-            <el-option label="2 补考" :value="2" />
+            <el-option label="正常考试" :value="1" />
+            <el-option label="补考" :value="2" />
           </el-select>
           <el-button type="primary" :loading="loadingReport" @click="loadGradeReport">生成报表</el-button>
         </div>

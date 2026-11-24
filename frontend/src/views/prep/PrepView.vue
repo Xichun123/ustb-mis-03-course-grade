@@ -78,7 +78,7 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="260" fixed="right">
+          <el-table-column label="操作" :width="isStudent ? 110 : 210" fixed="right">
             <template #default="{ row }">
               <el-button type="primary" link @click="openRoundDialog(row.round_id)">
                 {{ row.round_status === 0 && canManageRound ? '编辑' : '查看通知' }}
@@ -142,26 +142,26 @@
           <el-col :span="8">
             <el-form-item label="轮次类型">
               <el-select v-model="roundForm.round_type">
-                <el-option label="1 预选" :value="1" />
-                <el-option label="2 正选" :value="2" />
-                <el-option label="3 补退选" :value="3" />
+                <el-option label="预选" :value="1" />
+                <el-option label="正选" :value="2" />
+                <el-option label="补退选" :value="3" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <el-form-item label="适用学生">
               <el-select v-model="roundForm.target_level">
-                <el-option label="1 本科生" :value="1" />
-                <el-option label="2 研究生" :value="2" />
-                <el-option label="3 全部" :value="3" />
+                <el-option label="本科生" :value="1" />
+                <el-option label="研究生" :value="2" />
+                <el-option label="全部" :value="3" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <el-form-item label="选课方式">
               <el-select v-model="roundForm.select_mode">
-                <el-option label="1 先到先得" :value="1" />
-                <el-option label="2 超额筛选" :value="2" />
+                <el-option label="先到先得" :value="1" />
+                <el-option label="超额筛选" :value="2" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -243,7 +243,7 @@ import { userState } from '../../stores/user'
 
 const ROUND_TYPE_MAP = { 1: '预选', 2: '正选', 3: '补退选' }
 const LEVEL_MAP = { 1: '本科生', 2: '研究生', 3: '全部' }
-const ROUND_STATUS_MAP = { 0: '0 草稿', 1: '1 待审批', 2: '2 已发布', 3: '3 进行中', 4: '4 已结束', 5: '5 已审批待发布' }
+const ROUND_STATUS_MAP = { 0: '草稿', 1: '待审批', 2: '已发布', 3: '进行中', 4: '已结束', 5: '已审批待发布' }
 
 const role = computed(() => userState.currentUser?.role)
 const isStudent = computed(() => role.value === 'STUDENT')
