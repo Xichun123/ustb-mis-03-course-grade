@@ -1,6 +1,7 @@
 <template>
   <div>
-    <el-tabs v-model="activeTab" type="border-card">
+    <el-alert v-if="role && !isTeacher && !isCollege && !isOffice && !isAdmin" title="请切换至任课教师、学院教学秘书、教务处经办或系统管理员账号使用成绩录入与审核模块。" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
+    <el-tabs v-else v-model="activeTab" type="border-card">
       <!-- 3.1 教师：我的课堂（本学期在前、往届在后） -->
       <el-tab-pane v-if="isTeacher || isAdmin" label="3.1 我的课堂与成绩录入" name="entry">
         <div class="toolbar">
@@ -413,9 +414,13 @@ async function decideExchange(row, stage, decision) {
 }
 
 function initByRole() {
-  if (!role.value) return
   currentClass.value = null
   roster.students = []
+  classList.value = []
+  auditList.value = []
+  publishList.value = []
+  exchangeList.value = []
+  if (!role.value) return
   if (isTeacher.value) {
     activeTab.value = 'entry'
     loadClasses()
