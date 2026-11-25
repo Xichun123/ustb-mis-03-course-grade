@@ -24,20 +24,39 @@
         <template v-if="isStudent">
           <el-tab-pane label="课程查询与选课" name="courses">
             <el-alert v-if="selectedRound" :title="selectedRound.round_name" :description="`${formatTime(selectedRound.start_time)} 至 ${formatTime(selectedRound.end_time)}；${selectedRound.notice_content || '请按本轮规则办理'}`" :type="selectedRound.window_open?'info':'warning'" :closable="false" class="notice" />
-            <div class="toolbar"><el-input v-model="keyword" placeholder="输入课程代码或名称" clearable style="width:300px" @keyup.enter="searchCourses" /><el-button type="primary" @click="searchCourses">查询</el-button><el-button @click="resetCourses">重置</el-button></div>
-            <el-table :data="courses" row-key="course_id" border empty-text="当前条件下没有开放课程" @expand-change="() => {}">
+            <div class="toolbar">
+              <el-input v-model="keyword" placeholder="输入课程代码或名称" clearable style="width:280px" @keyup.enter="searchCourses" />
+              <el-select v-model="courseType" aria-label="课程类型" placeholder="全部课程类型" clearable style="width:250px" @change="searchCourses">
+                <el-option v-for="type in context.course_types" :key="type.value" :value="type.value" :label="type.label" />
+              </el-select>
+              <el-button type="primary" @click="searchCourses">查询</el-button>
+              <el-button @click="resetCourses">重置</el-button>
+            </div>
+            <el-table :data="courses" row-key="course_id" border empty-text="当前条件下没有开放课程">
               <el-table-column type="expand"><template #default="{row}">
                 <div class="class-detail"><el-table :data="row.classes" size="small" border>
                   <el-table-column prop="tc_id" label="教学班号" min-width="150" />
-                  <el-table-column label="上课安排" min-width="260"><template #default="{row:tc}"><div v-for="(s,i) in tc.schedule" :key="i">{{ slotText(s) }}</div><span v-if="!tc.schedule.length" class="muted">排课待确认</span></template></el-table-column>
+                  <el-table-column label="面向对象" min-width="230">
+                    <template #default="{ row: tc }"><SelectionAudience :audience="tc.audience" detailed /></template>
+                  </el-table-column>
+                  <el-table-column label="上课安排" min-width="200"><template #default="{row:tc}"><div v-for="(s,i) in tc.schedule" :key="i">{{ slotText(s) }}</div><span v-if="!tc.schedule.length" class="muted">排课待确认</span></template></el-table-column>
                   <el-table-column label="已选 / 容量" width="110"><template #default="{row:tc}">{{tc.actual_num}} / {{tc.capacity}}</template></el-table-column>
                   <el-table-column label="选课状态" width="115"><template #default="{row:tc}"><el-tag :type="statusType(tc.select_status)">{{statusText(tc.select_status)}}</el-tag></template></el-table-column>
                   <el-table-column v-if="selectedRound?.select_mode===2" label="各档志愿人数" min-width="150"><template #default="{row:tc}">{{ tc.preferences.map(p => `${p.priority ?? '未分档'}志愿 ${p.applicants}人`).join('；') || '暂无申请' }}</template></el-table-column>
                   <el-table-column label="办理" width="130"><template #default="{row:tc}"><el-button size="small" type="primary" :disabled="!canApply(tc)" @click="openApply(tc)">{{ selectedRound?.select_mode===2?'登记志愿':'选课' }}</el-button></template></el-table-column>
                 </el-table></div>
               </template></el-table-column>
-              <el-table-column prop="course_id" label="课程代码" width="140" /><el-table-column prop="course_name" label="课程名称" min-width="240" />
-              <el-table-column prop="credit" label="学分" width="90" /><el-table-column label="教学班" width="100"><template #default="{row}">{{row.classes.length}} 个</template></el-table-column>
+              <el-table-column prop="course_id" label="课程代码" width="125" />
+              <el-table-column prop="course_name" label="课程名称" min-width="170" />
+              <el-table-column prop="course_type_label" label="课程类型" min-width="172" />
+              <el-table-column label="面向对象" min-width="230">
+                <template #default="{ row }">
+                  <span v-if="row.audience === null" class="muted">各教学班要求不同，展开查看</span>
+                  <SelectionAudience v-else :audience="row.audience" />
+                </template>
+              </el-table-column>
+              <el-table-column prop="credit" label="学分" width="75" />
+              <el-table-column label="教学班" width="85"><template #default="{row}">{{row.classes.length}} 个</template></el-table-column>
             </el-table>
             <el-pagination v-model:current-page="coursePage" :page-size="10" :total="courseTotal" layout="total, prev, pager, next" @current-change="() => perform(loadCourses)" />
           </el-tab-pane>
@@ -117,7 +136,29 @@
       </el-tabs>
     </template>
     <el-dialog v-model="applyVisible" title="选课申请" width="620px" :close-on-click-modal="false">
-      <template v-if="target"><p><strong>{{target.course_name}}</strong> · {{target.tc_id}} · {{target.credit}} 学分</p><p v-for="(s,i) in target.schedule" :key="i">{{slotText(s)}}</p><el-form label-width="90px"><el-form-item label="选课类别"><el-select v-model="application.studyType" @change="checkResult=''"><el-option label="初修" :value="1" /><el-option label="重修" :value="2" /><el-option v-if="target.tc_type==='3'" label="辅修" :value="3" /></el-select></el-form-item><el-form-item v-if="selectedRound?.select_mode===2" label="志愿档位"><el-select v-model="application.priority" @change="checkResult=''"><el-option v-for="n in 3" :key="n" :value="n" :label="`第${n}志愿`" /></el-select></el-form-item></el-form><el-alert v-if="checkResult" :title="checkResult" type="info" :closable="false" /></template>
+      <template v-if="target">
+        <p><strong>{{ target.course_name }}</strong> · {{ target.tc_id }} · {{ target.credit }} 学分</p>
+        <el-descriptions :column="1" border size="small" class="notice">
+          <el-descriptions-item label="课程类型">{{ target.course_type_label }}</el-descriptions-item>
+          <el-descriptions-item label="面向对象"><SelectionAudience :audience="target.audience" detailed /></el-descriptions-item>
+        </el-descriptions>
+        <p v-for="(s, i) in target.schedule" :key="i">{{ slotText(s) }}</p>
+        <el-form label-width="90px">
+          <el-form-item label="选课类别">
+            <el-select v-model="application.studyType" @change="checkResult = ''">
+              <el-option label="初修" :value="1" />
+              <el-option label="重修" :value="2" />
+              <el-option v-if="target.tc_type === '3'" label="辅修" :value="3" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="selectedRound?.select_mode === 2" label="志愿档位">
+            <el-select v-model="application.priority" @change="checkResult = ''">
+              <el-option v-for="n in 3" :key="n" :value="n" :label="`第${n}志愿`" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+        <el-alert v-if="checkResult" :title="checkResult" type="info" :closable="false" />
+      </template>
       <template #footer><el-button @click="applyVisible=false">取消</el-button><el-button :loading="busy" @click="precheck">先校验</el-button><el-button type="primary" :loading="busy" @click="enroll">确认提交</el-button></template>
     </el-dialog>
     <el-dialog v-model="adjustVisible" :title="adjustment.operation==='add'?'补加学生':'移出名单'" width="520px" :close-on-click-modal="false"><el-form label-width="90px"><el-form-item label="学号"><el-input v-model="adjustment.studentId" maxlength="20" :disabled="adjustment.operation==='remove'" /></el-form-item><el-form-item v-if="adjustment.operation==='add'" label="修读类别"><el-select v-model="adjustment.studyType"><el-option v-for="(s,i) in ['初修','重修','辅修']" :key="s" :label="s" :value="i+1" /></el-select></el-form-item><el-form-item label="调整原因" required><el-input v-model="adjustment.reason" type="textarea" maxlength="200" show-word-limit :rows="3" /></el-form-item></el-form><template #footer><el-button @click="adjustVisible=false">取消</el-button><el-button type="primary" :loading="busy" @click="submitAdjustment">确认调整</el-button></template></el-dialog>
@@ -153,6 +194,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { selectionApi as api } from '../../api/selection'
 import { userState } from '../../stores/user'
 import { themeState } from '../../stores/theme'
+import SelectionAudience from './SelectionAudience.vue'
 
 const PERIOD_TIMES = [
   { label: '1-2节', time: '08:00-09:35' },
@@ -175,6 +217,7 @@ const COURSE_COLORS_DARK = [
 
 const context = ref({ rounds: [], terms: [], user: {} }), busy = ref(false), error = ref(''), active = ref('courses')
 const term = ref('2026-2027-1'), roundId = ref(null), keyword = ref(''), coursePage = ref(1), courses = ref([]), courseTotal = ref(0), summary = ref({})
+const courseType = ref('')
 const resultRows = ref([]), resultKeyword = ref(''), statusFilter = ref(null), week = ref(1), timetableMode = ref('week'), timetable = ref({ blocks: [] })
 const teachingClasses = ref([]), tcId = ref(''), rosterKeyword = ref(''), roster = ref({}), stop = ref({}), screenResult = ref('')
 const applyVisible = ref(false), target = ref(null), application = ref({}), checkResult = ref(''), adjustVisible = ref(false), adjustment = ref({}), printData = ref(null)
@@ -241,7 +284,23 @@ const scheduleGrid = computed(() => {
 })
 const canApply = tc => selectedRound.value?.window_open && ![0,1].includes(tc.select_status) && (selectedRound.value.select_mode === 2 || tc.actual_num < tc.capacity)
 async function perform(task) { if(busy.value) return; busy.value=true; error.value=''; try { await task() } catch(e) { if(e !== 'cancel' && e !== 'close') error.value=e?.response?.data?.message || e?.message || '操作失败，请刷新核实' } finally { busy.value=false } }
-async function loadCourses(){ if(!roundId.value){courses.value=[];courseTotal.value=0;return} const r=await api.courses({roundId:roundId.value,keyword:keyword.value,page:coursePage.value,pageSize:10});courses.value=r.data.items;courseTotal.value=r.data.total;summary.value=r.data.summary }
+async function loadCourses() {
+  if (!roundId.value) {
+    courses.value = []
+    courseTotal.value = 0
+    return
+  }
+  const r = await api.courses({
+    roundId: roundId.value,
+    keyword: keyword.value,
+    courseType: courseType.value || undefined,
+    page: coursePage.value,
+    pageSize: 10
+  })
+  courses.value = r.data.items
+  courseTotal.value = r.data.total
+  summary.value = r.data.summary
+}
 async function loadResults(){const r=await api.results(term.value);resultRows.value=r.data.items;summary.value=r.data.summary}
 async function loadTimetable(){
   if (timetableMode.value === 'full') {
@@ -262,7 +321,7 @@ function chooseRound(){roundId.value=(termRounds.value.find(r=>r.window_open)||t
 function changeTerm(){chooseRound();coursePage.value=1;summary.value={};perform(refresh)}
 function changeRound(){coursePage.value=1;perform(refresh)}
 function searchCourses(){coursePage.value=1;perform(loadCourses)}
-function resetCourses(){keyword.value='';searchCourses()}
+function resetCourses(){keyword.value='';courseType.value='';searchCourses()}
 function openApply(tc){target.value=tc;application.value={roundId:roundId.value,tcId:tc.tc_id,studyType:1,priority:selectedRound.value.select_mode===2?1:null,expectedVersion:tc.version || null};checkResult.value='';applyVisible.value=true}
 function precheck(){perform(async()=>{try{checkResult.value=(await api.check(application.value)).data.message}catch(e){checkResult.value=e?.response?.data?.message || '校验未完成，请稍后重试';throw e}})}
 function enroll(){perform(async()=>{try{const r=await api.enroll(application.value);ElMessage.success(r.data.message);applyVisible.value=false;await loadCourses()}catch(e){if(!e.response){await loadResults();await loadCourses();applyVisible.value=false;error.value='提交未获得明确回执，已重新读取选课记录，请核对结果后再办理。';active.value='results';return}throw e}})}
