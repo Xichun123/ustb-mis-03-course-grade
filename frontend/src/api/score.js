@@ -25,6 +25,12 @@ export const scoreApi = {
       timeout: 60000
     })
   },
+  downloadTemplate(lessonNo) {
+    return request.get(`/score/classes/${lessonNo}/template`, {
+      responseType: 'blob',
+      timeout: 30000
+    })
+  },
   submit(lessonNo) {
     return request.post(`/score/classes/${lessonNo}/submit`)
   },

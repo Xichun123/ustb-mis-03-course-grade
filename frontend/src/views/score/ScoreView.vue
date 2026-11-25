@@ -12,15 +12,25 @@
           <el-button type="primary" @click="loadClasses">查询</el-button>
         </div>
         <el-table :data="classList" border stripe v-loading="loadingClasses" @row-click="openClass">
-          <el-table-column prop="lesson_no" label="课堂号" width="140" />
+          <el-table-column label="课堂号" width="185">
+            <template #default="{ row }">
+              <span>{{ row.lesson_no }}</span>
+              <el-tag v-if="row.correction_pending_count > 0" type="danger" size="small" style="margin-left: 6px">
+                更正待重录 {{ row.correction_pending_count }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="course_name" label="课程" min-width="150" />
           <el-table-column prop="class_ids" label="面向班级" min-width="140" />
-          <el-table-column prop="student_count" label="选课人数" width="90" />
-          <el-table-column prop="submitted_count" label="已提交" width="85" />
+          <el-table-column prop="student_count" label="选课人数" width="85" />
+          <el-table-column prop="submitted_count" label="待核对" width="75" />
+          <el-table-column prop="published_count" label="已发布" width="75" />
           <el-table-column label="操作" width="100">
             <template #default="{ row }">
-              <el-button type="primary" link @click.stop="openClass(row)">录入</el-button>
+              <el-button type="primary" link @click.stop="openClass(row)">
+                {{ row.correction_pending_count > 0 ? '更正重录' : '录入' }}
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -29,16 +39,31 @@
           <el-divider content-position="left">
             {{ currentClass.lesson_no }} {{ currentClass.course_name }}（{{ currentClass.term }}）
           </el-divider>
+          <el-alert
+            v-if="roster.has_active_correction"
+            type="warning"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 12px"
+            title="本课堂存在学院已批准的成绩更正记录：系统仅解锁对应学生的原成绩（其余已发布学生保持锁定防误改）。修改后请点击「总评计算并提交」生成新 6 位核对码，打印新版纸质成绩登记表交学院核对，待教务处重新发布后生效。"
+          />
           <div class="toolbar">
             <el-tag type="warning">平时占比下限 {{ roster.ratio_min }}%</el-tag>
-            <span class="ratio-label">课堂平时占比</span>
-            <el-input-number v-model="classRatio" :min="roster.ratio_min" :max="100" size="small" :disabled="readOnly" />
-            <el-button size="small" :disabled="readOnly" @click="applyRatio">应用到全课堂</el-button>
+            <template v-if="roster.default_score_type === 1">
+              <span class="ratio-label">课堂统一占比：平时</span>
+              <el-input-number v-model="classRatio" :min="roster.ratio_min" :max="100" size="small" :disabled="readOnly" />
+              <span class="ratio-label">% ＋ 考试/期末 <b>{{ 100 - classRatio }}%</b>（按课堂填一次即可）</span>
+              <el-button size="small" :disabled="readOnly" @click="applyRatio">应用到全课堂</el-button>
+            </template>
+            <el-tag v-else type="info">本课堂为等级制课程，无需设置平时占比</el-tag>
             <el-button type="primary" :disabled="readOnly" @click="saveAll">保存成绩</el-button>
             <el-button type="success" :disabled="readOnly" @click="submitAll">总评计算并提交</el-button>
-            <el-button @click="showSheet">成绩登记表 / 核对码</el-button>
+            <el-button @click="showSheet">纸质成绩登记表 / 核对码</el-button>
           </div>
           <div class="toolbar">
+            <el-button type="primary" plain :loading="templateLoading" @click="downloadTemplate">
+              下载本课堂 Excel 模板 (.xlsx)
+            </el-button>
             <el-upload
               ref="uploadRef"
               :auto-upload="false"
@@ -53,19 +78,32 @@
             <el-button type="warning" :disabled="readOnly || !importFile || importLoading" :loading="importLoading" @click="doImport">
               导入成绩
             </el-button>
-            <span class="muted">支持 .xlsx / .csv，表头需包含：学号、平时成绩、期末成绩（等级制课堂填等级成绩，可选考试情况）</span>
+            <span class="muted">先下载模板填好平时成绩与考试成绩后上传（支持 .xlsx / .csv，占比按课堂统一设置，表内无需填写占比）</span>
           </div>
           <el-table :data="roster.students" border stripe max-height="440">
             <el-table-column prop="student_id" label="学号" width="135" />
-            <el-table-column prop="student_name" label="姓名" width="100" />
+            <el-table-column label="姓名" width="135">
+              <template #default="{ row }">
+                <div>{{ row.student_name }}</div>
+                <el-tag v-if="row.correction_apply_id" type="danger" size="small" effect="dark" style="margin-top: 2px">
+                  更正重录
+                </el-tag>
+                <div v-if="row.correction_apply_id" class="corr-note">
+                  原 {{ row.score_type === 1 ? row.correction_old_score : row.correction_old_level }} → 拟 {{ row.score_type === 1 ? row.correction_target_score : row.correction_target_level }}
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column prop="class_name" label="班级" width="120" />
-            <el-table-column label="修读" width="80">
+            <el-table-column label="修读" width="75">
               <template #default="{ row }">{{ { 1: '初修', 2: '重修', 3: '辅修' }[row.study_type] || '初修' }}</template>
             </el-table-column>
-            <el-table-column label="平时占比%" width="100">
+            <el-table-column label="平时/考试占比" width="115">
               <template #default="{ row }">
-                <span v-if="isLockedRow(row)">{{ row.usual_ratio ?? '—' }}<template v-if="row.usual_ratio != null">%</template></span>
-                <span v-else>{{ classRatio }}%</span>
+                <template v-if="row.score_type === 1">
+                  <span v-if="isLockedRow(row)">{{ row.usual_ratio ?? '—' }}<template v-if="row.usual_ratio != null">% / {{ 100 - row.usual_ratio }}%</template></span>
+                  <span v-else>{{ classRatio }}% / {{ 100 - classRatio }}%</span>
+                </template>
+                <span v-else class="muted">—</span>
               </template>
             </el-table-column>
             <el-table-column label="平时成绩" width="120">
@@ -74,7 +112,7 @@
                 <span v-else class="muted">等级制</span>
               </template>
             </el-table-column>
-            <el-table-column label="期末/等级" width="125">
+            <el-table-column label="考试/等级成绩" width="130">
               <template #default="{ row }">
                 <el-input-number v-if="row.score_type === 1" v-model="row.exam_score" :min="0" :max="100" :precision="1" :disabled="readOnly || isLockedRow(row)" size="small" />
                 <el-select v-else-if="row.score_type === 2" v-model="row.score_level" :disabled="readOnly || isLockedRow(row)" size="small" placeholder="选等级">
@@ -97,7 +135,7 @@
             </el-table-column>
             <el-table-column prop="total_score" label="总评" width="80" />
             <el-table-column prop="grade_point" label="绩点" width="70" />
-            <el-table-column label="状态" width="90">
+            <el-table-column label="状态" width="95">
               <template #default="{ row }">
                 <el-tag size="small" :type="statusType(row.score_status)">{{ statusText(row.score_status) }}</el-tag>
               </template>
@@ -115,7 +153,14 @@
           <el-button type="primary" @click="loadAudit">刷新待核对</el-button>
         </div>
         <el-table :data="auditList" border stripe v-loading="loadingAudit">
-          <el-table-column prop="lesson_no" label="课堂号" width="140" />
+          <el-table-column label="课堂号" width="185">
+            <template #default="{ row }">
+              <span>{{ row.lesson_no }}</span>
+              <el-tag v-if="row.correction_count > 0" type="danger" size="small" style="margin-left: 6px">
+                含更正 {{ row.correction_count }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="course_name" label="课程" min-width="150" />
           <el-table-column label="开课学院" min-width="145">
@@ -142,7 +187,14 @@
           <el-button type="primary" @click="loadPublish">刷新待发布</el-button>
         </div>
         <el-table :data="publishList" border stripe v-loading="loadingPublish">
-          <el-table-column prop="lesson_no" label="课堂号" width="140" />
+          <el-table-column label="课堂号" width="185">
+            <template #default="{ row }">
+              <span>{{ row.lesson_no }}</span>
+              <el-tag v-if="row.correction_count > 0" type="danger" size="small" style="margin-left: 6px">
+                含更正 {{ row.correction_count }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="course_name" label="课程" min-width="160" />
           <el-table-column prop="ready_count" label="可发布人数" width="105" />
@@ -203,10 +255,68 @@
       </el-tab-pane>
     </el-tabs>
 
-    <!-- 提交成功：核对码 -->
-    <el-dialog v-model="codeVisible" title="成绩提交成功" width="420px">
-      <el-result icon="success" :title="`核对码：${verifyCode}`" sub-title="请把核对码打印在纸质成绩登记表上交学院" />
-      <div class="sheet-line">课堂号：{{ currentClass?.lesson_no }} ｜ 课程：{{ currentClass?.course_name }}</div>
+    <!-- 成绩登记表（纸质提交版）与 6 位核对码 -->
+    <el-dialog v-model="codeVisible" title="成绩登记表（纸质提交版）" width="780px">
+      <div class="paper-sheet">
+        <div class="paper-header">
+          <div>
+            <div class="paper-title">课程成绩登记表</div>
+            <div class="paper-sub">
+              课堂号：<b>{{ sheetData.lesson_no || currentClass?.lesson_no }}</b>
+              ｜ 课程：<b>{{ sheetData.course_name || currentClass?.course_name }}</b>
+              ｜ 学期：{{ sheetData.term || currentClass?.term }}
+            </div>
+            <div class="paper-sub" v-if="(sheetData.default_score_type || 1) === 1">
+              记分方式：百分制 ｜ 课堂统一占比：平时 {{ sheetData.usual_ratio ?? classRatio }}% ＋ 考试 {{ 100 - (sheetData.usual_ratio ?? classRatio) }}%
+            </div>
+            <div class="paper-sub" v-else>
+              记分方式：等级制 ｜ 学生人数：{{ sheetData.students.length }}
+            </div>
+          </div>
+          <div class="code-box">
+            <div class="code-box-label">6 位核对码</div>
+            <div class="code-box-val">{{ verifyCode || '尚未提交' }}</div>
+          </div>
+        </div>
+        <el-alert
+          v-if="isCorrectionResubmit || sheetData.has_active_correction"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+          title="本批次包含成绩更正重报记录：请打印此新版纸质成绩登记表，由任课教师签字后交学院教务秘书核对，再经教务处重新发布生效。"
+        />
+        <el-table :data="sheetData.students" border size="small" max-height="360">
+          <el-table-column prop="student_id" label="学号" width="130" />
+          <el-table-column prop="student_name" label="姓名" width="95" />
+          <el-table-column prop="class_name" label="班级" width="110" />
+          <el-table-column label="平时成绩" width="85">
+            <template #default="{ row }">{{ row.score_type === 1 ? (row.usual_score ?? '—') : '—' }}</template>
+          </el-table-column>
+          <el-table-column label="考试成绩" width="85">
+            <template #default="{ row }">{{ row.score_type === 1 ? (row.exam_score ?? '—') : '—' }}</template>
+          </el-table-column>
+          <el-table-column label="总评/等级" width="90">
+            <template #default="{ row }">{{ row.score_type === 1 ? (row.total_score ?? '—') : (row.score_level || '—') }}</template>
+          </el-table-column>
+          <el-table-column prop="grade_point" label="绩点" width="65" />
+          <el-table-column label="状态/备注" min-width="105">
+            <template #default="{ row }">
+              <span>{{ statusText(row.score_status) }}</span>
+              <el-tag v-if="row.correction_apply_id" type="danger" size="small" style="margin-left: 4px">更正</el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="paper-sign">
+          <span>任课教师签字：________________</span>
+          <span>学院核对签字：________________</span>
+          <span>上交日期：____年__月__日</span>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="codeVisible = false">关闭</el-button>
+        <el-button type="primary" @click="printSheet">打印纸质成绩登记表</el-button>
+      </template>
     </el-dialog>
 
     <!-- 学院核对 -->
@@ -335,12 +445,14 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { scoreApi } from '../../api/score'
 import { userState } from '../../stores/user'
 import { TERM_OPTIONS } from '../../constants/terms'
 import { getCollegeName } from '../../constants/dicts'
 
+const route = useRoute()
 const role = computed(() => userState.currentUser?.role)
 const isTeacher = computed(() => role.value === 'TEACHER')
 const isCollege = computed(() => role.value === 'COLLEGE_SECRETARY')
@@ -352,9 +464,10 @@ const classQuery = reactive({ term: '', keyword: '' })
 const classList = ref([])
 const loadingClasses = ref(false)
 const currentClass = ref(null)
-const roster = reactive({ students: [], ratio_min: 30, verify_code: null })
+const roster = reactive({ students: [], ratio_min: 30, verify_code: null, default_score_type: 1, has_active_correction: false })
 const classRatio = ref(30)
 const readOnly = computed(() => !isTeacher.value && !isAdmin.value)
+const templateLoading = ref(false)
 
 async function loadClasses() {
   loadingClasses.value = true
@@ -387,12 +500,33 @@ async function openClass(row, options = {}) {
   roster.students = res.data.students || []
   roster.ratio_min = res.data.ratio_min
   roster.verify_code = res.data.verify_code
+  roster.default_score_type = defaultScoreType
+  roster.has_active_correction = Boolean(res.data.has_active_correction)
   classRatio.value = options.overrideRatio ?? res.data.usual_ratio ?? res.data.ratio_min ?? 30
   roster.students.forEach((s) => {
     if (s.usual_ratio == null) s.usual_ratio = classRatio.value
     if (s.exam_flag == null) s.exam_flag = 0
     if (s.score_type == null) s.score_type = defaultScoreType
   })
+}
+
+async function downloadTemplate() {
+  if (!currentClass.value) return
+  templateLoading.value = true
+  try {
+    const blob = await scoreApi.downloadTemplate(currentClass.value.lesson_no)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `成绩录入模板_${currentClass.value.lesson_no}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    ElMessage.success('Excel 模板已下载，请填写平时成绩与考试成绩后上传')
+  } finally {
+    templateLoading.value = false
+  }
 }
 
 async function applyRatio() {
@@ -453,20 +587,53 @@ async function saveAll() {
 
 const codeVisible = ref(false)
 const verifyCode = ref('')
+const isCorrectionResubmit = ref(false)
+const sheetData = reactive({
+  lesson_no: '',
+  course_name: '',
+  term: '',
+  usual_ratio: null,
+  default_score_type: 1,
+  has_active_correction: false,
+  students: []
+})
+
+function fillSheetData(data) {
+  sheetData.lesson_no = data?.lesson_no || currentClass.value?.lesson_no || ''
+  sheetData.course_name = data?.course_name || currentClass.value?.course_name || ''
+  sheetData.term = data?.term || currentClass.value?.term || ''
+  sheetData.usual_ratio = data?.usual_ratio ?? classRatio.value
+  sheetData.default_score_type = data?.default_score_type || 1
+  sheetData.has_active_correction = Boolean(data?.has_active_correction)
+  sheetData.students = data?.students || []
+}
 
 async function submitAll() {
-  await ElMessageBox.confirm('提交后成绩锁定，学院将按核对码核对，确认提交？', '提示', { type: 'warning' })
+  const prompt = roster.has_active_correction
+    ? '提交后更正成绩将重新锁定并生成新的 6 位核对码，请打印新版纸质成绩登记表交学院核对，确认提交？'
+    : '提交后成绩锁定，学院将按核对码核对，确认提交？'
+  await ElMessageBox.confirm(prompt, '提示', { type: 'warning' })
   const res = await scoreApi.submit(currentClass.value.lesson_no)
   verifyCode.value = res.data.verify_code
-  codeVisible.value = true
+  isCorrectionResubmit.value = Boolean(res.data.is_correction_resubmit)
   await loadClasses()
   await openClass(currentClass.value)
+  const sheetRes = await scoreApi.sheet(currentClass.value.lesson_no)
+  fillSheetData(sheetRes.data)
+  verifyCode.value = sheetRes.data.verify_code || res.data.verify_code
+  codeVisible.value = true
 }
 
 async function showSheet() {
   const res = await scoreApi.sheet(currentClass.value.lesson_no)
-  verifyCode.value = res.data.verify_code
+  fillSheetData(res.data)
+  verifyCode.value = res.data.verify_code || ''
+  isCorrectionResubmit.value = Boolean(res.data.has_active_correction)
   codeVisible.value = true
+}
+
+function printSheet() {
+  window.print()
 }
 
 const statusText = (s) => ({ 0: '录入中', 1: '已提交', 2: '学院已核对', 3: '已发布', 4: '退回修改' }[s] ?? '未录入')
@@ -535,9 +702,13 @@ async function loadPublish() {
 }
 
 async function doPublish(row) {
-  await ElMessageBox.confirm(`确认发布课堂 ${row.lesson_no} 的成绩？发布后学生可查。`, '发布确认', { type: 'warning' })
-  await scoreApi.publish(row.lesson_no)
-  ElMessage.success('成绩已发布')
+  const tip = row.correction_count > 0
+    ? `确认发布课堂 ${row.lesson_no} 的成绩？其中包含 ${row.correction_count} 条成绩更正重报记录，发布后将同步生效并通知学生。`
+    : `确认发布课堂 ${row.lesson_no} 的成绩？发布后学生可查。`
+  await ElMessageBox.confirm(tip, '发布确认', { type: 'warning' })
+  const res = await scoreApi.publish(row.lesson_no)
+  const fin = res.data?.finalized_corrections || 0
+  ElMessage.success(fin > 0 ? `成绩已发布，同步完结 ${fin} 条成绩更正并生效` : '成绩已发布')
   await loadPublish()
 }
 
@@ -612,28 +783,39 @@ async function recognizeExchange(row) {
   await loadExchange()
 }
 
-function initByRole() {
+async function initByRole() {
   currentClass.value = null
   roster.students = []
+  roster.has_active_correction = false
   classList.value = []
   auditList.value = []
   publishList.value = []
   exchangeList.value = []
   if (!role.value) return
+  const qTab = typeof route.query.tab === 'string' ? route.query.tab : ''
+  const qLesson = typeof route.query.lesson_no === 'string' ? route.query.lesson_no : ''
   if (isTeacher.value) {
     activeTab.value = 'entry'
-    loadClasses()
+    await loadClasses()
+    if (qLesson) {
+      const target = classList.value.find((c) => c.lesson_no === qLesson)
+      if (target) await openClass(target)
+    }
   } else if (isCollege.value) {
-    activeTab.value = 'audit'
-    loadAudit()
+    activeTab.value = ['audit', 'exchange'].includes(qTab) ? qTab : 'audit'
+    await loadAudit()
     loadExchange()
   } else if (isOffice.value) {
-    activeTab.value = 'publish'
-    loadPublish()
+    activeTab.value = ['publish', 'exchange'].includes(qTab) ? qTab : 'publish'
+    await loadPublish()
     loadExchange()
   } else if (isAdmin.value) {
-    activeTab.value = 'entry'
-    loadClasses()
+    activeTab.value = ['entry', 'audit', 'publish', 'exchange'].includes(qTab) ? qTab : 'entry'
+    await loadClasses()
+    if (qLesson) {
+      const target = classList.value.find((c) => c.lesson_no === qLesson)
+      if (target) await openClass(target)
+    }
     loadAudit()
     loadPublish()
     loadExchange()
@@ -642,6 +824,16 @@ function initByRole() {
 
 watch(() => userState.currentUser?.userId, () => {
   initByRole()
+})
+
+watch(() => route.query.lesson_no, async (lessonNo) => {
+  if (!lessonNo || (!isTeacher.value && !isAdmin.value)) return
+  if (!classList.value.length) await loadClasses()
+  const target = classList.value.find((c) => c.lesson_no === lessonNo)
+  if (target) {
+    activeTab.value = 'entry'
+    await openClass(target)
+  }
 })
 
 onMounted(() => {
@@ -669,5 +861,67 @@ onMounted(() => {
 .ratio-label {
   font-size: 13px;
   color: var(--app-text-secondary);
+}
+.corr-note {
+  font-size: 11.5px;
+  color: #c45656;
+  margin-top: 2px;
+}
+.paper-sheet {
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  padding: 16px;
+  background: #fff;
+}
+.paper-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.paper-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.paper-sub {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+}
+.code-box {
+  border: 2px solid #409eff;
+  border-radius: 6px;
+  padding: 8px 16px;
+  text-align: center;
+  min-width: 145px;
+  background: #ecf5ff;
+}
+.code-box-label {
+  font-size: 12px;
+  color: #409eff;
+}
+.code-box-val {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: #1d39c4;
+  margin-top: 2px;
+}
+.paper-sign {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px dashed #dcdfe6;
+  font-size: 13px;
+  color: #303133;
+}
+@media print {
+  .paper-sheet {
+    border: none;
+    padding: 0;
+  }
 }
 </style>

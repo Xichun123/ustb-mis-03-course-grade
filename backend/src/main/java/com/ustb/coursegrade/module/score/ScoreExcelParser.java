@@ -16,10 +16,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 /**
- * 成绩表格解析器：支持 .xlsx（Zip + XML，不引入额外依赖）与 .csv。
- * 输出统一为 [{row_no, student_id, usual_score, exam_score, exam_flag, usual_ratio}]。
+ * 成绩表格解析与模板生成器：支持 .xlsx（Zip + XML，不引入额外依赖）与 .csv。
+ * 输出统一为 [{row_no, student_id, usual_score, exam_score, score_level, exam_flag, usual_ratio}]。
  */
 public final class ScoreExcelParser {
 
@@ -199,21 +200,24 @@ public final class ScoreExcelParser {
         List<String> header = grid.get(headerIdx);
         for (int i = 0; i < header.size(); i++) {
             String h = normalize(header.get(i));
+            boolean isRatioCol = h.contains("占比") || h.contains("比例");
             if ((h.contains("学号") || h.equalsIgnoreCase("student_id")) && !cols.containsKey("student_id")) {
                 cols.put("student_id", i);
-            } else if (h.contains("平时") && h.contains("成绩")) {
+            } else if (isRatioCol) {
+                cols.put("usual_ratio", i);
+            } else if (h.contains("平时")) {
                 cols.put("usual_score", i);
             } else if (h.contains("等级")) {
                 cols.put("score_level", i);
                 if (h.contains("期末")) {
                     cols.putIfAbsent("exam_score", i);
                 }
-            } else if (h.contains("期末") || (h.contains("考试") && !h.contains("情况"))) {
-                cols.putIfAbsent("exam_score", i);
             } else if (h.contains("考试情况") || h.equals("缺考")) {
                 cols.put("exam_flag", i);
-            } else if (h.contains("占比") || h.contains("比例")) {
-                cols.put("usual_ratio", i);
+            } else if ((h.contains("期末") || h.contains("考试"))
+                    && !h.contains("时间") && !h.contains("地点") && !h.contains("方式")
+                    && !h.contains("类别") && !h.contains("类型")) {
+                cols.putIfAbsent("exam_score", i);
             }
         }
         if (!cols.containsKey("student_id")) {
@@ -248,5 +252,172 @@ public final class ScoreExcelParser {
 
     private static String normalize(String s) {
         return s == null ? "" : s.replace("\u00A0", " ").replace(" ", "").trim();
+    }
+
+    // ---------- xlsx template export ----------
+
+    /**
+     * 按课堂生成标准 .xlsx 成绩录入模板（不含任何第三方依赖，Excel/WPS/Numbers 均可直接打开并回传导入）。
+     * 第 1 行为课堂号/课程/学期说明，第 2 行为表头（学号、姓名、班级、平时成绩、考试成绩、考试情况），
+     * 平时与期末占比在系统按课堂统一填一次即可，模板中不重复列占比。
+     */
+    @SuppressWarnings("unchecked")
+    public static byte[] buildTemplateXlsx(Map<String, Object> roster) {
+        String lessonNo = strVal(roster.get("lesson_no"));
+        String courseName = strVal(roster.get("course_name"));
+        String term = strVal(roster.get("term"));
+        int defaultScoreType = roster.get("default_score_type") instanceof Number n ? n.intValue() : 1;
+        List<Map<String, Object>> allStudents = (List<Map<String, Object>>) roster.getOrDefault("students", List.of());
+
+        List<Map<String, Object>> editable = new ArrayList<>();
+        for (Map<String, Object> s : allStudents) {
+            Object stObj = s.get("score_status");
+            int st = stObj instanceof Number n ? n.intValue() : -1;
+            if (st < 1 || st > 3) {
+                editable.add(s);
+            }
+        }
+        List<Map<String, Object>> targetRows = editable.isEmpty() ? allStudents : editable;
+
+        StringBuilder sheet = new StringBuilder();
+        sheet.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
+                .append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>");
+
+        int rowNum = 1;
+        appendStringRow(sheet, rowNum++, List.of(
+                "课堂号", lessonNo, "课程名称", courseName, "学期", term,
+                "说明：平时与期末占比按课堂在系统顶部统一填一次即可，表格内只填学生成绩"));
+
+        if (defaultScoreType == 1) {
+            appendStringRow(sheet, rowNum++, List.of("学号", "姓名", "班级", "平时成绩", "考试成绩", "考试情况"));
+        } else {
+            appendStringRow(sheet, rowNum++, List.of("学号", "姓名", "班级", "等级成绩", "考试情况"));
+        }
+
+        for (Map<String, Object> s : targetRows) {
+            sheet.append("<row r=\"").append(rowNum).append("\">");
+            int col = 0;
+            appendStringCell(sheet, col++, rowNum, strVal(s.get("student_id")));
+            appendStringCell(sheet, col++, rowNum, strVal(s.get("student_name")));
+            appendStringCell(sheet, col++, rowNum, strVal(s.get("class_name")));
+            if (defaultScoreType == 1) {
+                appendNumberOrBlankCell(sheet, col++, rowNum, s.get("usual_score"));
+                appendNumberOrBlankCell(sheet, col++, rowNum, s.get("exam_score"));
+            } else {
+                appendStringCell(sheet, col++, rowNum, strVal(s.get("score_level")));
+            }
+            int flag = s.get("exam_flag") instanceof Number n ? n.intValue() : 0;
+            String flagText = switch (flag) {
+                case 1 -> "缺考";
+                case 2 -> "缓考";
+                case 3 -> "违纪";
+                default -> "正常";
+            };
+            appendStringCell(sheet, col, rowNum, flagText);
+            sheet.append("</row>");
+            rowNum++;
+        }
+        sheet.append("</sheetData></worksheet>");
+
+        String contentTypes = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+                  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+                  <Default Extension="xml" ContentType="application/xml"/>
+                  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+                  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+                </Types>
+                """;
+        String rootRels = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+                </Relationships>
+                """;
+        String workbook = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <sheets>
+                    <sheet name="成绩录入表" sheetId="1" r:id="rId1"/>
+                  </sheets>
+                </workbook>
+                """;
+        String wbRels = """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+                </Relationships>
+                """;
+
+        try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
+             ZipOutputStream zos = new ZipOutputStream(bos, StandardCharsets.UTF_8)) {
+            putEntry(zos, "[Content_Types].xml", contentTypes);
+            putEntry(zos, "_rels/.rels", rootRels);
+            putEntry(zos, "xl/workbook.xml", workbook);
+            putEntry(zos, "xl/_rels/workbook.xml.rels", wbRels);
+            putEntry(zos, "xl/worksheets/sheet1.xml", sheet.toString());
+            zos.finish();
+            return bos.toByteArray();
+        } catch (Exception e) {
+            throw new IllegalStateException("生成 Excel 模板失败：" + e.getMessage(), e);
+        }
+    }
+
+    private static void putEntry(ZipOutputStream zos, String name, String content) throws Exception {
+        zos.putNextEntry(new ZipEntry(name));
+        zos.write(content.getBytes(StandardCharsets.UTF_8));
+        zos.closeEntry();
+    }
+
+    private static void appendStringRow(StringBuilder sb, int rowNum, List<String> values) {
+        sb.append("<row r=\"").append(rowNum).append("\">");
+        for (int c = 0; c < values.size(); c++) {
+            appendStringCell(sb, c, rowNum, values.get(c));
+        }
+        sb.append("</row>");
+    }
+
+    private static void appendStringCell(StringBuilder sb, int colIdx, int rowNum, String text) {
+        String ref = colLetter(colIdx) + rowNum;
+        sb.append("<c r=\"").append(ref).append("\" t=\"inlineStr\"><is><t>")
+                .append(escapeXml(text == null ? "" : text))
+                .append("</t></is></c>");
+    }
+
+    private static void appendNumberOrBlankCell(StringBuilder sb, int colIdx, int rowNum, Object val) {
+        if (val == null) {
+            return;
+        }
+        String text = String.valueOf(val).trim();
+        if (text.isEmpty()) {
+            return;
+        }
+        String ref = colLetter(colIdx) + rowNum;
+        sb.append("<c r=\"").append(ref).append("\"><v>")
+                .append(escapeXml(text))
+                .append("</v></c>");
+    }
+
+    private static String colLetter(int idx) {
+        StringBuilder sb = new StringBuilder();
+        int n = idx + 1;
+        while (n > 0) {
+            int rem = (n - 1) % 26;
+            sb.insert(0, (char) ('A' + rem));
+            n = (n - 1) / 26;
+        }
+        return sb.toString();
+    }
+
+    private static String strVal(Object o) {
+        return o == null ? "" : String.valueOf(o).trim();
+    }
+
+    private static String escapeXml(String s) {
+        return s.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;");
     }
 }

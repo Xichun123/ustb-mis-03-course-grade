@@ -181,16 +181,17 @@ public class CorrectionService {
         return Map.of("apply_id", String.valueOf(applyId), "apply_status", 0);
     }
 
-    /** 5.1/5.2 按角色范围检索更正申请列表（仅任课教师、学院教学秘书、系统管理员） */
+    /** 5.1/5.2 按角色范围检索更正申请列表（含当前成绩状态，便于跟踪重录/核对/重发进度） */
     public List<Map<String, Object>> listCorrections(Integer applyStatus, String term) {
         CurrentUser user = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.COLLEGE_SECRETARY,
-                RoleEnum.SYS_ADMIN);
+                RoleEnum.ACADEMIC_OFFICE, RoleEnum.ACADEMIC_DIRECTOR, RoleEnum.SYS_ADMIN);
 
         StringBuilder sql = new StringBuilder("""
                 SELECT CAST(cr.apply_id AS CHAR) AS apply_id,
                        CAST(cr.score_id AS CHAR) AS score_id,
                        sc.student_id, COALESCE(p.person_name, sc.student_id) AS student_name, tc.term, tc.tc_id, lc.lesson_no,
                        c.course_id, c.course_name, COALESCE(org.college_id, c.org_id) AS open_college, s.score_type,
+                       s.score_status AS current_score_status,
                        cr.apply_teacher_id, emp.emp_name AS teacher_name,
                        cr.old_score, cr.new_score, cr.old_level, cr.new_level,
                        cr.apply_reason, cr.submitted_at AS apply_time, cr.apply_status,
@@ -228,7 +229,12 @@ public class CorrectionService {
         return jdbc.queryForList(sql.toString(), params.toArray());
     }
 
-    /** 5.2/5.3 学院审核（仅学院审批：0 -> 2 通过并同事务生效 / 0 -> 3 驳回，驳回意见必填） */
+    /**
+     * 5.2 学院审核成绩更正申请：
+     * - 通过（decision=1）：0 -> 1（已批准待重录重发），并仅解锁该学生这一条 sel_score（score_status=4, is_final=0, published_at=NULL），
+     *   由任课教师重新录入、提交生成新 6 位核对码并上交新版纸质成绩单，再经学院核对与教务处重新发布后自动置 2 生效；
+     * - 驳回（decision=2）：0 -> 3（已驳回，驳回意见必填），原已发布成绩保持不变。
+     */
     @Transactional
     public Map<String, Object> collegeDecision(long applyId, int decision, String opinion) {
         CurrentUser user = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
@@ -241,8 +247,8 @@ public class CorrectionService {
         }
 
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT cr.*, s.score_type, s.total_score AS cur_score, s.score_level AS cur_level,
-                       sc.student_id, sc.stat_stage, tc.course_id, tc.term,
+                SELECT cr.*, s.score_type, s.score_status, s.total_score AS cur_score, s.score_level AS cur_level,
+                       sc.student_id, sc.stat_stage, tc.course_id, tc.term, lc.lesson_no,
                        COALESCE(org.college_id, c.org_id) AS open_college
                 FROM sel_score_correction cr
                 JOIN sel_score s ON cr.score_id = s.score_id
@@ -250,6 +256,7 @@ public class CorrectionService {
                 JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN aca_course c ON tc.course_id = c.course_id
                 LEFT JOIN org_organization org ON c.org_id = org.org_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 WHERE cr.apply_id = ? FOR UPDATE
                 """, applyId);
         if (rows.isEmpty()) {
@@ -270,62 +277,72 @@ public class CorrectionService {
                     SET apply_status = 3, college_auditor_id = ?, college_audit_opinion = ?, college_audit_time = NOW()
                     WHERE apply_id = ? AND apply_status = 0
                     """, user.empId(), op, applyId);
-            return Map.of("apply_id", String.valueOf(applyId), "apply_status", 3);
+            return Map.of("apply_id", String.valueOf(applyId), "apply_status", 3, "message", "学院已驳回该成绩更正申请");
         }
 
-        // 5.4 同事务生效：重核原值 -> 更新成绩与绩点 -> 重标 is_final -> 更新学业统计
+        int scoreStatus = ((Number) row.get("score_status")).intValue();
+        if (scoreStatus != 3) {
+            throw BizException.conflict("SCORE_NOT_PUBLISHED", "原成绩当前非已发布状态，无法重复解锁");
+        }
+
         long scoreId = ((Number) row.get("score_id")).longValue();
         int scoreType = ((Number) row.get("score_type")).intValue();
-        BigDecimal newGp;
         if (scoreType == 1) {
             BigDecimal oldVal = new BigDecimal(String.valueOf(row.get("old_score")));
-            BigDecimal curVal = new BigDecimal(String.valueOf(row.get("cur_score")));
-            if (oldVal.compareTo(curVal) != 0) {
-                throw BizException.conflict("SCORE_CHANGED", "成绩当前值已与申请原值不一致，拒绝覆盖");
+            BigDecimal curVal = row.get("cur_score") == null ? null : new BigDecimal(String.valueOf(row.get("cur_score")));
+            if (curVal == null || oldVal.compareTo(curVal) != 0) {
+                throw BizException.conflict("SCORE_CHANGED", "成绩当前值已与申请原值不一致，拒绝解锁");
             }
-            BigDecimal newVal = new BigDecimal(String.valueOf(row.get("new_score")));
-            newGp = calcPercentGradePoint(newVal);
-            jdbc.update("UPDATE sel_score SET total_score = ?, grade_point = ? WHERE score_id = ?",
-                    newVal, newGp, scoreId);
         } else {
             String oldLv = String.valueOf(row.get("old_level"));
-            String curLv = String.valueOf(row.get("cur_level"));
+            String curLv = row.get("cur_level") == null ? null : String.valueOf(row.get("cur_level"));
             if (!Objects.equals(oldLv, curLv)) {
-                throw BizException.conflict("SCORE_CHANGED", "成绩等级已变化，拒绝覆盖");
+                throw BizException.conflict("SCORE_CHANGED", "成绩等级已变化，拒绝解锁");
             }
-            String newLv = String.valueOf(row.get("new_level"));
-            newGp = calcLevelGradePoint(newLv);
-            jdbc.update("UPDATE sel_score SET score_level = ?, grade_point = ? WHERE score_id = ?",
-                    newLv, newGp, scoreId);
+        }
+
+        // 仅解锁被申请更正的该学生这一条成绩（4=退回修改/待重录），同课堂其他学生保持已发布锁定
+        int unlocked = jdbc.update("""
+                UPDATE sel_score
+                SET score_status = 4, is_final = 0, published_at = NULL
+                WHERE score_id = ? AND score_status = 3
+                """, scoreId);
+        if (unlocked == 0) {
+            throw BizException.conflict("SCORE_UNLOCK_FAILED", "原成绩状态已变化，解锁失败");
         }
 
         String studentId = String.valueOf(row.get("student_id"));
         int statStage = ((Number) row.get("stat_stage")).intValue();
         String courseId = String.valueOf(row.get("course_id"));
         String term = String.valueOf(row.get("term"));
-
         recomputeIsFinalForCourse(studentId, statStage, courseId);
         recomputeAcademicStatsSnapshot(studentId, statStage, term);
 
-        String finalOpinion = op.isEmpty() ? "学院审批通过，成绩已生效" : op;
+        String collegeOpinion = op.isEmpty()
+                ? "学院已批准更正并解锁该学生成绩，请任课教师重新录入并提交新版纸质成绩单"
+                : op;
         jdbc.update("""
                 UPDATE sel_score_correction
-                SET apply_status = 2,
+                SET apply_status = 1,
                     college_auditor_id = ?,
                     college_audit_opinion = ?,
-                    college_audit_time = NOW(),
-                    auditor_id = ?,
-                    audit_opinion = ?,
-                    reviewed_at = NOW()
+                    college_audit_time = NOW()
                 WHERE apply_id = ? AND apply_status = 0
-                """, user.empId(), finalOpinion, user.empId(), finalOpinion, applyId);
+                """, user.empId(), collegeOpinion, applyId);
 
-        return Map.of("apply_id", String.valueOf(applyId), "apply_status", 2, "new_grade_point", newGp.toPlainString());
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("apply_id", String.valueOf(applyId));
+        resp.put("score_id", String.valueOf(scoreId));
+        resp.put("lesson_no", row.get("lesson_no"));
+        resp.put("apply_status", 1);
+        resp.put("score_status", 4);
+        resp.put("message", "学院已批准更正并解锁该学生成绩，请教师前往成绩录入页修改、重新提交并上交新版纸质成绩登记表（含新核对码），经学院核对与教务处重新发布后生效");
+        return resp;
     }
 
-    /** 成绩更正仅学院审批生效，不涉及教务处审批 */
+    /** 成绩更正须经重录、纸质单核对与教务处成绩发布流程生效，不再单独走直接改分接口 */
     public Map<String, Object> officeDecision(long applyId, int decision, String opinion) {
-        throw BizException.forbidden("成绩更正由学院直接审批生效，不涉及教务处审批");
+        throw BizException.forbidden("成绩更正批准解锁后，须由教师重新录入并提交纸质成绩单，经学院核对后由教务处在『成绩发布』页面重新发布生效");
     }
 
     /** 5.4 学生查看本人已通过的成绩更正结果（隐藏审批工号与他生记录） */
@@ -444,13 +461,15 @@ public class CorrectionService {
                 ? scoreWeighted.divide(totalCredit, 2, RoundingMode.HALF_UP) : null;
 
         jdbc.update("""
-                INSERT INTO sel_stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, updated_at)
-                VALUES (?, ?, ?, ?, ?, NOW())
+                INSERT INTO sel_stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, major_rank, major_rank_total, updated_at)
+                VALUES (?, ?, ?, ?, ?, NULL, NULL, NOW())
                 ON DUPLICATE KEY UPDATE
                   earned_credit = VALUES(earned_credit),
                   failed_credit = VALUES(failed_credit),
                   gpa = VALUES(gpa),
                   avg_score = VALUES(avg_score),
+                  major_rank = CASE WHEN VALUES(avg_score) IS NULL THEN NULL ELSE major_rank END,
+                  major_rank_total = CASE WHEN VALUES(avg_score) IS NULL THEN NULL ELSE major_rank_total END,
                   updated_at = NOW()
                 """, studentId, earned, failed, gpa, avgScore);
 

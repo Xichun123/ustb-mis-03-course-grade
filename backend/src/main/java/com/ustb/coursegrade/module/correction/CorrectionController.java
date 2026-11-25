@@ -46,8 +46,10 @@ public class CorrectionController {
             @PathVariable long applyId, @RequestBody Map<String, Object> body) {
         int decision = Integer.parseInt(String.valueOf(body.get("decision")));
         String opinion = body.get("college_audit_opinion") == null ? null : String.valueOf(body.get("college_audit_opinion"));
-        return ApiResponse.ok(decision == 1 ? "学院审批通过，成绩已更正生效" : "学院已驳回申请",
-                correctionService.collegeDecision(applyId, decision, opinion));
+        Map<String, Object> data = correctionService.collegeDecision(applyId, decision, opinion);
+        return ApiResponse.ok(String.valueOf(data.getOrDefault("message",
+                decision == 1 ? "学院已批准更正并解锁该学生成绩，请教师重录并重新提交纸质成绩单" : "学院已驳回申请")),
+                data);
     }
 
     @PostMapping("/score-corrections/{applyId}/office-decision")
@@ -55,7 +57,7 @@ public class CorrectionController {
             @PathVariable long applyId, @RequestBody Map<String, Object> body) {
         int decision = Integer.parseInt(String.valueOf(body.get("decision")));
         String opinion = body.get("audit_opinion") == null ? null : String.valueOf(body.get("audit_opinion"));
-        return ApiResponse.ok(decision == 1 ? "教务处审批通过，成绩已生效" : "教务处已驳回申请",
+        return ApiResponse.ok("成绩更正重录后请在成绩发布页统一发布",
                 correctionService.officeDecision(applyId, decision, opinion));
     }
 

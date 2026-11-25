@@ -1,5 +1,13 @@
 <template>
   <div>
+    <el-alert
+      v-if="isStaff"
+      type="info"
+      show-icon
+      :closable="false"
+      style="margin-bottom: 14px"
+      title="成绩更正须重新提交纸质成绩登记表并重走发布流程：教师发起申请 → 学院批准并解锁该生原成绩 → 教师前往「成绩录入与审核」修改并重提生成新 6 位核对码、打印纸质单交学院 → 学院输码核对 → 教务处重新发布后自动生效并通知学生。"
+    />
     <el-tabs v-model="activeTab" type="border-card">
       <!-- 5.1 教师发起更正申请 -->
       <el-tab-pane v-if="isTeacher" label="发起成绩更正" name="candidates">
@@ -27,44 +35,49 @@
           <el-table-column label="操作" width="130">
             <template #default="{ row }">
               <el-button type="primary" link :disabled="row.pending_count > 0" @click="openApplyDialog(row)">
-                {{ row.pending_count > 0 ? '审批中' : '发起更正' }}
+                {{ row.pending_count > 0 ? '办理中' : '发起更正' }}
               </el-button>
             </template>
           </el-table-column>
         </el-table>
       </el-tab-pane>
 
-      <!-- 5.2 学院单级审批 -->
-      <el-tab-pane v-if="isStaff" :label="isTeacher ? '我的申请记录' : '更正审批'" name="list">
+      <!-- 5.2 更正审批与重录发布进度跟踪 -->
+      <el-tab-pane v-if="isStaff" :label="isTeacher ? '我的申请记录' : '更正审批与跟踪'" name="list">
         <div class="toolbar">
-          <el-select v-model="listQuery.apply_status" placeholder="申请状态" clearable style="width: 160px">
+          <el-select v-model="listQuery.apply_status" placeholder="申请状态" clearable style="width: 170px">
             <el-option label="待学院审批" :value="0" />
-            <el-option label="已通过生效" :value="2" />
+            <el-option label="待重录重发" :value="1" />
+            <el-option label="已重发生效" :value="2" />
             <el-option label="已驳回" :value="3" />
           </el-select>
           <el-button type="primary" @click="loadList">刷新</el-button>
         </div>
         <el-table :data="corrections" border stripe v-loading="loadingList">
-          <el-table-column prop="apply_id" label="申请号" width="80" />
+          <el-table-column prop="apply_id" label="申请号" width="78" />
+          <el-table-column prop="lesson_no" label="课堂号" width="128" />
           <el-table-column prop="course_name" label="课程" min-width="130" />
           <el-table-column label="学生" width="150">
             <template #default="{ row }">{{ row.student_name }} ({{ row.student_id }})</template>
           </el-table-column>
-          <el-table-column label="原值 → 新值" width="130">
+          <el-table-column label="原值 → 拟/终值" width="130">
             <template #default="{ row }">
               <span v-if="row.score_type === 1">{{ row.old_score }} → <b>{{ row.new_score }}</b></span>
               <span v-else>{{ row.old_level }} → <b>{{ row.new_level }}</b></span>
             </template>
           </el-table-column>
-          <el-table-column prop="apply_reason" label="更正原因" min-width="180" show-overflow-tooltip />
-          <el-table-column label="状态" width="120">
+          <el-table-column prop="apply_reason" label="更正原因" min-width="165" show-overflow-tooltip />
+          <el-table-column label="状态与流程进度" min-width="185">
             <template #default="{ row }">
               <el-tag :type="statusTag(row.apply_status)" size="small">
-                {{ STATUS_LABEL[row.apply_status] }}
+                {{ STATUS_LABEL[row.apply_status] || row.apply_status }}
               </el-tag>
+              <div v-if="row.apply_status === 1" class="stage-hint">
+                {{ resubmitStageText(row.current_score_status) }}
+              </div>
             </template>
           </el-table-column>
-          <el-table-column v-if="canCollegeAudit" label="审批操作" width="130" fixed="right">
+          <el-table-column label="操作" width="145" fixed="right">
             <template #default="{ row }">
               <el-button
                 v-if="row.apply_status === 0 && canCollegeAudit"
@@ -74,6 +87,31 @@
               >
                 学院审批
               </el-button>
+              <el-button
+                v-else-if="row.apply_status === 1 && (isTeacher || isAdmin) && [0, 4].includes(row.current_score_status)"
+                type="success"
+                link
+                @click="goScore('entry', row.lesson_no)"
+              >
+                前往重录成绩
+              </el-button>
+              <el-button
+                v-else-if="row.apply_status === 1 && canCollegeAudit && row.current_score_status === 1"
+                type="primary"
+                link
+                @click="goScore('audit', row.lesson_no)"
+              >
+                前往核对纸质单
+              </el-button>
+              <el-button
+                v-else-if="row.apply_status === 1 && (isOffice || isAdmin) && row.current_score_status === 2"
+                type="success"
+                link
+                @click="goScore('publish', row.lesson_no)"
+              >
+                前往重新发布
+              </el-button>
+              <span v-else class="muted">—</span>
             </template>
           </el-table-column>
         </el-table>
@@ -124,6 +162,12 @@
         <el-form-item label="更正原因">
           <el-input v-model="applyForm.apply_reason" type="textarea" :rows="3" maxlength="200" show-word-limit placeholder="请说明更正原因（必填）" />
         </el-form-item>
+        <el-alert
+          type="warning"
+          show-icon
+          :closable="false"
+          title="学院批准后将仅解锁该生原成绩，您需在「成绩录入与审核」中修改并重提生成新核对码，重新打印纸质成绩登记表交学院核对。"
+        />
       </el-form>
       <template #footer>
         <el-button @click="applyVisible = false">取消</el-button>
@@ -132,12 +176,12 @@
     </el-dialog>
 
     <!-- 5.2 学院审批弹窗 -->
-    <el-dialog v-model="auditVisible" title="学院审批" width="480px">
+    <el-dialog v-model="auditVisible" title="学院审批" width="520px">
       <el-form label-width="90px">
         <el-form-item label="审批决定">
           <el-radio-group v-model="auditForm.decision">
-            <el-radio :value="1">通过</el-radio>
-            <el-radio :value="2">驳回</el-radio>
+            <el-radio :value="1">通过（解锁该生原成绩，退回重录并重交纸质单）</el-radio>
+            <el-radio :value="2">驳回（维持原已发布成绩不变）</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="审核意见">
@@ -154,16 +198,20 @@
 
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { correctionApi } from '../../api/correction'
 import { userState } from '../../stores/user'
 import { TERM_OPTIONS } from '../../constants/terms'
 
-const STATUS_LABEL = { 0: '待学院审批', 2: '已通过生效', 3: '已驳回' }
+const router = useRouter()
+const STATUS_LABEL = { 0: '待学院审批', 1: '待重录重发', 2: '已重发生效', 3: '已驳回' }
 const role = computed(() => userState.currentUser?.role)
 const isStudent = computed(() => role.value === 'STUDENT')
 const isStaff = computed(() => role.value && role.value !== 'STUDENT')
 const isTeacher = computed(() => role.value === 'TEACHER')
+const isOffice = computed(() => ['ACADEMIC_OFFICE', 'ACADEMIC_DIRECTOR'].includes(role.value))
+const isAdmin = computed(() => role.value === 'SYS_ADMIN')
 const canCollegeAudit = computed(() => ['COLLEGE_SECRETARY', 'SYS_ADMIN'].includes(role.value))
 
 const activeTab = ref('list')
@@ -186,6 +234,17 @@ const auditForm = reactive({ decision: 1, opinion: '' })
 
 function statusTag(s) {
   return ({ 0: 'warning', 1: 'primary', 2: 'success', 3: 'danger' })[s] || 'info'
+}
+
+function resubmitStageText(scoreStatus) {
+  if (scoreStatus === 0 || scoreStatus === 4) return '待教师重录并交纸质单'
+  if (scoreStatus === 1) return '已重提，待学院核对纸质单'
+  if (scoreStatus === 2) return '学院已核对，待教务处重发'
+  return '重录与发布流程处理中'
+}
+
+function goScore(tab, lessonNo) {
+  router.push({ path: '/score', query: { tab, lesson_no: lessonNo } })
 }
 
 async function loadCandidates() {
@@ -253,11 +312,13 @@ function openAuditDialog(row) {
 }
 
 async function confirmAudit() {
-  await correctionApi.collegeDecision(auditApplyId.value, {
+  const res = await correctionApi.collegeDecision(auditApplyId.value, {
     decision: auditForm.decision,
     college_audit_opinion: auditForm.opinion
   })
-  ElMessage.success(auditForm.decision === 1 ? '学院审批通过，成绩已生效' : '已驳回申请')
+  ElMessage.success(res.message || (auditForm.decision === 1
+    ? '学院已批准更正并解锁该生成绩，等待教师重录并重走发布流程'
+    : '已驳回申请'))
   auditVisible.value = false
   loadList()
 }
@@ -279,4 +340,6 @@ watch(role, (val) => {
 
 <style scoped>
 .toolbar { display: flex; gap: 10px; margin-bottom: 14px; }
+.stage-hint { font-size: 12px; color: var(--app-text-secondary); margin-top: 4px; }
+.muted { color: var(--app-text-secondary); font-size: 12.5px; }
 </style>

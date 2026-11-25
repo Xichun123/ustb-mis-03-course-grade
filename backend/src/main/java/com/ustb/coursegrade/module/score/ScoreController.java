@@ -2,9 +2,14 @@ package com.ustb.coursegrade.module.score;
 
 import com.ustb.coursegrade.common.ApiResponse;
 import com.ustb.coursegrade.common.BizException;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -69,6 +74,20 @@ public class ScoreController {
         Map<String, Object> data = scoreService.importGrades(
                 lessonNo, file.getInputStream(), file.getOriginalFilename(), ratio, dryRun);
         return ApiResponse.ok(String.valueOf(data.get("message")), data);
+    }
+
+    /** 3.1 下载本课堂 Excel 成绩录入模板（.xlsx，预填学号与姓名，表内无需填占比） */
+    @GetMapping("/classes/{lessonNo}/template")
+    public ResponseEntity<byte[]> downloadTemplate(@PathVariable String lessonNo) {
+        byte[] xlsx = scoreService.exportTemplate(lessonNo);
+        String safeLessonNo = lessonNo.replaceAll("[^A-Za-z0-9_-]", "_");
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+        headers.setContentDisposition(ContentDisposition.attachment()
+                .filename("grades_" + safeLessonNo + ".xlsx", StandardCharsets.UTF_8)
+                .build());
+        return ResponseEntity.ok().headers(headers).body(xlsx);
     }
 
     /** 兼容统一字典 DECIMAL(5,2) 格式（如 "30.00"），同时要求平时占比必须为 0~100 的整数 */
@@ -143,7 +162,12 @@ public class ScoreController {
     /** 3.4 发布 */
     @PostMapping("/classes/{lessonNo}/publish")
     public ApiResponse<Map<String, Object>> publish(@PathVariable String lessonNo) {
-        return ApiResponse.ok("成绩已发布", scoreService.publish(lessonNo));
+        Map<String, Object> data = scoreService.publish(lessonNo);
+        int finalized = data.get("finalized_corrections") instanceof Number n ? n.intValue() : 0;
+        String msg = finalized > 0
+                ? "成绩已发布，同步完结 " + finalized + " 条成绩更正并生效"
+                : "成绩已发布";
+        return ApiResponse.ok(msg, data);
     }
 
     /** 3.5 校外交流成绩认定列表 */

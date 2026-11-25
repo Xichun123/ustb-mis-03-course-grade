@@ -46,7 +46,12 @@ public class ScoreService {
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS submitted_count,
                        (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
-                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 3) AS published_count
+                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 3) AS published_count,
+                       (SELECT COUNT(*) FROM sel_score_correction cr
+                         JOIN sel_score s ON cr.score_id = s.score_id
+                         JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                         JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND cr.apply_status = 1 AND s.score_status IN (0, 4)) AS correction_pending_count
                 FROM sel_lesson_class lc
                 JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN aca_course c ON tc.course_id = c.course_id
@@ -73,7 +78,7 @@ public class ScoreService {
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
-    /** 3.1 课堂名单与已录成绩（聚合该课堂号下全部教学班，兼容来校交换生） */
+    /** 3.1 课堂名单与已录成绩（聚合该课堂号下全部教学班，兼容来校交换生并标注更正重录学生） */
     public Map<String, Object> roster(String lessonNo) {
         Map<String, Object> head = requireClass(lessonNo);
         CurrentUser u = UserContext.requireUser();
@@ -88,19 +93,30 @@ public class ScoreService {
                        sc.study_type, sc.stu_level,
                        CAST(s.score_id AS CHAR) AS score_id,
                        s.usual_ratio, s.usual_score, s.exam_score, s.exam_flag, s.score_type,
-                       s.score_level, s.total_score, s.grade_point, s.score_status
+                       s.score_level, s.total_score, s.grade_point, s.score_status,
+                       CAST(cr.apply_id AS CHAR) AS correction_apply_id,
+                       cr.old_score AS correction_old_score,
+                       cr.new_score AS correction_target_score,
+                       cr.old_level AS correction_old_level,
+                       cr.new_level AS correction_target_level,
+                       cr.apply_reason AS correction_reason
                 FROM sel_sc sc
                 LEFT JOIN std_student st ON sc.student_id = st.student_id
                 LEFT JOIN sys_person p ON st.person_id = p.person_id
                 LEFT JOIN aca_class cls ON st.class_id = cls.class_id
                 LEFT JOIN v_exchange_student ex ON ex.temp_student_no = sc.student_id
                 LEFT JOIN sel_score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
+                LEFT JOIN sel_score_correction cr ON cr.score_id = s.score_id AND cr.apply_status = 1
                 WHERE sc.tc_id IN (%s) AND sc.select_status = 1
                 ORDER BY sc.student_id
                 """.formatted(marks(tcIds)), tcIds.toArray());
+        boolean hasActiveCorrection = false;
         for (Map<String, Object> r : rows) {
             if (r.get("usual_ratio") instanceof BigDecimal bd && bd.stripTrailingZeros().scale() <= 0) {
                 r.put("usual_ratio", bd.intValueExact());
+            }
+            if (r.get("correction_apply_id") != null) {
+                hasActiveCorrection = true;
             }
         }
         Map<String, Object> data = new LinkedHashMap<>(head);
@@ -108,6 +124,7 @@ public class ScoreService {
         data.put("ratio_min", ratioMin());
         data.put("usual_ratio", classRatio(lessonNo));
         data.put("default_score_type", defaultScoreType(head));
+        data.put("has_active_correction", hasActiveCorrection);
         boolean canSeeCode = u.role() == RoleEnum.TEACHER || u.role() == RoleEnum.SYS_ADMIN;
         data.put("verify_code", canSeeCode ? latestVerifyCode(lessonNo) : null);
         return data;
@@ -428,6 +445,13 @@ public class ScoreService {
         return result;
     }
 
+    /** 3.1 按课堂号导出标准 Excel (.xlsx) 成绩录入模板（预填学生名单，便于离线录入后直接回传导入） */
+    public byte[] exportTemplate(String lessonNo) {
+        UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
+        Map<String, Object> data = roster(lessonNo);
+        return ScoreExcelParser.buildTemplateXlsx(data);
+    }
+
     private static String parseOptionalLevel(String raw, int scoreType) {
         String v = raw == null ? "" : raw.trim();
         if (v.isEmpty() || v.equals("—") || v.equals("-")) {
@@ -516,9 +540,10 @@ public class ScoreService {
                 continue;
             }
             int st = ((Number) r.get("score_status")).intValue();
-            if (st == 0 || st == 4) {
-                hasDraft = true;
+            if (st != 0 && st != 4) {
+                continue;
             }
+            hasDraft = true;
             int flag = r.get("exam_flag") == null ? 0 : ((Number) r.get("exam_flag")).intValue();
             int scoreType = r.get("score_type") == null ? 1 : ((Number) r.get("score_type")).intValue();
             int ratio = r.get("usual_ratio") == null ? -1 : ((Number) r.get("usual_ratio")).intValue();
@@ -556,6 +581,8 @@ public class ScoreService {
 
         LocalDateTime submitTime = nextUniqueSubmitTime(lessonNo);
         Timestamp ts = Timestamp.valueOf(submitTime);
+        int submittedCount = 0;
+        List<Long> submittedScoreIds = new ArrayList<>();
         for (Map<String, Object> r : rows) {
             int st = ((Number) r.get("score_status")).intValue();
             if (st != 0 && st != 4) {
@@ -592,6 +619,17 @@ public class ScoreService {
                            score_status = 1, submitted_at = ?
                      WHERE sc_id = ? AND exam_type = 1
                     """, total, scoreType == 1 ? null : (level.isEmpty() ? null : level), gp, ts, r.get("sc_id"));
+            submittedCount++;
+            submittedScoreIds.add(((Number) r.get("score_id")).longValue());
+        }
+
+        boolean hasCorrection = false;
+        if (!submittedScoreIds.isEmpty()) {
+            String ph = String.join(",", Collections.nCopies(submittedScoreIds.size(), "?"));
+            Integer corrCnt = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM sel_score_correction WHERE apply_status = 1 AND score_id IN (" + ph + ")",
+                    Integer.class, submittedScoreIds.toArray());
+            hasCorrection = corrCnt != null && corrCnt > 0;
         }
 
         String code = generateVerifyCode();
@@ -599,7 +637,13 @@ public class ScoreService {
                 INSERT INTO sel_score_audit (lesson_no, submitted_at, verify_code, auditor_id, audit_result, audit_opinion, reviewed_at)
                 VALUES (?, ?, ?, NULL, 0, NULL, NULL)
                 """, lessonNo, ts, code);
-        return Map.of("lesson_no", lessonNo, "submitted", rows.size(), "verify_code", code, "submit_time", submitTime.toString());
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("lesson_no", lessonNo);
+        resp.put("submitted", submittedCount);
+        resp.put("verify_code", code);
+        resp.put("submit_time", submitTime.toString());
+        resp.put("is_correction_resubmit", hasCorrection);
+        return resp;
     }
 
     /** 3.2/3.3 成绩登记表（含核对码） */
@@ -607,7 +651,7 @@ public class ScoreService {
         return roster(lessonNo);
     }
 
-    /** 3.3 学院待核对课堂（按课堂号聚合） */
+    /** 3.3 学院待核对课堂（按课堂号聚合，标明是否含成绩更正重报） */
     public List<Map<String, Object>> auditPending(String term) {
         CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
@@ -616,6 +660,11 @@ public class ScoreService {
                        (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS wait_count,
+                       (SELECT COUNT(*) FROM sel_score_correction cr
+                         JOIN sel_score s ON cr.score_id = s.score_id
+                         JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                         JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND cr.apply_status = 1 AND s.score_status = 1) AS correction_count,
                        (SELECT MAX(s.submitted_at) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1) AS submit_time
@@ -697,7 +746,7 @@ public class ScoreService {
                 "message", result == 1 ? "核对通过，等待教务处发布" : "已退回任课教师二次确认");
     }
 
-    /** 3.4 待发布课堂 */
+    /** 3.4 待发布课堂（标明是否含成绩更正重报） */
     public List<Map<String, Object>> publishPending(String term) {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         List<Object> args = new ArrayList<>();
@@ -710,7 +759,12 @@ public class ScoreService {
                 SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, c.course_name,
                        (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
-                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2) AS ready_count
+                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2) AS ready_count,
+                       (SELECT COUNT(*) FROM sel_score_correction cr
+                         JOIN sel_score s ON cr.score_id = s.score_id
+                         JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                         JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND cr.apply_status = 1 AND s.score_status = 2) AS correction_count
                 FROM sel_lesson_class lc
                 JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN aca_course c ON tc.course_id = c.course_id
@@ -723,17 +777,20 @@ public class ScoreService {
                 """, args.toArray());
     }
 
-    /** 3.4 成绩发布：校验本次提交批次已审核通过（sel_score_audit.lesson_no），置 3、精准重标 is_final 并刷新学业统计 */
+    /** 3.4 成绩发布：校验本次提交批次已审核通过（sel_score_audit.lesson_no），置 3、精准重标 is_final、刷新学业统计，并自动闭环待重发的成绩更正申请 */
     @Transactional
     public Map<String, Object> publish(String lessonNo) {
-        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
+        CurrentUser u = UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         Map<String, Object> head = requireClass(lessonNo);
         List<String> tcIds = tcIds(head);
-        Integer ready = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+        List<Map<String, Object>> readyRows = jdbc.queryForList("""
+                SELECT s.score_id, s.score_type, s.total_score, s.score_level,
+                       sc.student_id, sc.stat_stage
+                FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                  WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 2
-                """.formatted(marks(tcIds)), Integer.class, tcIds.toArray());
-        if (ready == null || ready == 0) {
+                FOR UPDATE
+                """.formatted(marks(tcIds)), tcIds.toArray());
+        if (readyRows.isEmpty()) {
             throw BizException.conflict("NOT_READY", "该课堂没有学院核对通过的成绩");
         }
         List<Map<String, Object>> latestAudit = jdbc.queryForList("""
@@ -754,18 +811,47 @@ public class ScoreService {
 
         String courseId = String.valueOf(head.get("course_id"));
         String term = String.valueOf(head.get("term"));
-        List<Map<String, Object>> targets = jdbc.queryForList("""
-                SELECT DISTINCT sc.student_id, sc.stat_stage
-                FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 3
-                """.formatted(marks(tcIds)), tcIds.toArray());
-        for (Map<String, Object> st : targets) {
-            String sid = String.valueOf(st.get("student_id"));
-            int stage = ((Number) st.get("stat_stage")).intValue();
-            recomputeIsFinalJoint(sid, stage, courseId);
-            recomputeAcademicStats(sid, stage, term);
+        Set<String> recomputedKeys = new LinkedHashSet<>();
+        int finalizedCorrections = 0;
+        for (Map<String, Object> r : readyRows) {
+            long scoreId = ((Number) r.get("score_id")).longValue();
+            int scoreType = ((Number) r.get("score_type")).intValue();
+            String sid = String.valueOf(r.get("student_id"));
+            int stage = ((Number) r.get("stat_stage")).intValue();
+            if (recomputedKeys.add(sid + "|" + stage)) {
+                recomputeIsFinalJoint(sid, stage, courseId);
+                recomputeAcademicStats(sid, stage, term);
+            }
+            // 若该成绩处于“学院已批准待重录重发（apply_status=1）”，发布同时自动完结更正申请并同步最终发布成绩
+            int closed;
+            if (scoreType == 1) {
+                closed = jdbc.update("""
+                        UPDATE sel_score_correction
+                        SET apply_status = 2,
+                            new_score = COALESCE(?, new_score),
+                            auditor_id = ?,
+                            audit_opinion = '已完成更正重录、纸质单学院核对及教务处重新发布',
+                            reviewed_at = NOW()
+                        WHERE score_id = ? AND apply_status = 1
+                        """, r.get("total_score"), u.empId(), scoreId);
+            } else {
+                closed = jdbc.update("""
+                        UPDATE sel_score_correction
+                        SET apply_status = 2,
+                            new_level = COALESCE(?, new_level),
+                            auditor_id = ?,
+                            audit_opinion = '已完成更正重录、纸质单学院核对及教务处重新发布',
+                            reviewed_at = NOW()
+                        WHERE score_id = ? AND apply_status = 1
+                        """, r.get("score_level"), u.empId(), scoreId);
+            }
+            finalizedCorrections += closed;
         }
-        return Map.of("lesson_no", lessonNo, "published", ready);
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("lesson_no", lessonNo);
+        resp.put("published", readyRows.size());
+        resp.put("finalized_corrections", finalizedCorrections);
+        return resp;
     }
 
     /** 3.5 校外交流成绩认定：列表 */

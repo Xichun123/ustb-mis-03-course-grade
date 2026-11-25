@@ -4,6 +4,7 @@ import com.ustb.coursegrade.common.BizException;
 import com.ustb.coursegrade.common.auth.CurrentUser;
 import com.ustb.coursegrade.common.auth.RoleEnum;
 import com.ustb.coursegrade.common.auth.UserContext;
+import com.ustb.coursegrade.module.correction.CorrectionService;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +33,7 @@ class ScoreServiceTest {
 
     private JdbcTemplate jdbc;
     private ScoreService service;
+    private CorrectionService correctionService;
 
     @BeforeEach
     void setup() {
@@ -42,6 +44,7 @@ class ScoreServiceTest {
         for (String ddl : List.of(
                 "CREATE TABLE org_organization(org_id VARCHAR(6) PRIMARY KEY,org_name VARCHAR(100),college_id VARCHAR(4))",
                 "CREATE TABLE sys_person(person_id VARCHAR(20) PRIMARY KEY,person_name VARCHAR(100))",
+                "CREATE TABLE hr_employee(emp_id VARCHAR(10) PRIMARY KEY,emp_name VARCHAR(50))",
                 "CREATE TABLE aca_class(class_id VARCHAR(10) PRIMARY KEY,class_name VARCHAR(50))",
                 "CREATE TABLE std_student(student_id VARCHAR(20) PRIMARY KEY,person_id VARCHAR(20),class_id VARCHAR(10),major_id VARCHAR(6),org_id VARCHAR(6),grade VARCHAR(40),student_type VARCHAR(2),student_status VARCHAR(2))",
                 "CREATE TABLE v_exchange_student(temp_student_no VARCHAR(20),student_name VARCHAR(50),sender_school_name VARCHAR(100))",
@@ -52,6 +55,7 @@ class ScoreServiceTest {
                 "CREATE TABLE sel_sc(sc_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),study_type INT DEFAULT 1,stu_level VARCHAR(20) DEFAULT '本科',stat_stage INT DEFAULT 1,select_status INT DEFAULT 1)",
                 "CREATE TABLE sel_score(score_id BIGINT AUTO_INCREMENT PRIMARY KEY,sc_id BIGINT,exam_type INT DEFAULT 1,exam_flag INT DEFAULT 0,score_type INT DEFAULT 1,usual_ratio DECIMAL(5,2),usual_score DECIMAL(5,2),exam_score DECIMAL(5,2),score_level VARCHAR(10),total_score DECIMAL(5,2),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,score_status INT DEFAULT 0,input_teacher_id VARCHAR(10),submitted_at TIMESTAMP,published_at TIMESTAMP)",
                 "CREATE TABLE sel_score_audit(audit_id BIGINT AUTO_INCREMENT PRIMARY KEY,lesson_no VARCHAR(20),submitted_at TIMESTAMP,verify_code VARCHAR(6),auditor_id VARCHAR(10),audit_result INT DEFAULT 0,audit_opinion VARCHAR(500),reviewed_at TIMESTAMP)",
+                "CREATE TABLE sel_score_correction(apply_id BIGINT AUTO_INCREMENT PRIMARY KEY,score_id BIGINT,apply_teacher_id VARCHAR(10),old_score DECIMAL(5,2),new_score DECIMAL(5,2),old_level VARCHAR(20),new_level VARCHAR(20),apply_reason VARCHAR(500),submitted_at TIMESTAMP,apply_status INT DEFAULT 0,college_auditor_id VARCHAR(10),college_audit_opinion VARCHAR(200),college_audit_time TIMESTAMP,auditor_id VARCHAR(10),audit_opinion VARCHAR(500),reviewed_at TIMESTAMP)",
                 "CREATE TABLE sel_exchange_score_convert(convert_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),exchange_apply_id VARCHAR(50),term VARCHAR(11),stat_stage INT DEFAULT 1,host_school VARCHAR(200),ext_course_code VARCHAR(30),ext_course_name VARCHAR(100),ext_credit DECIMAL(5,1),ext_score_raw VARCHAR(20),ext_scale_type INT DEFAULT 1,course_id VARCHAR(10),score_type INT DEFAULT 1,converted_score DECIMAL(5,2),converted_level VARCHAR(20),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,proof_no VARCHAR(50),version_no INT DEFAULT 1,audit_status INT DEFAULT 0,submitted_at TIMESTAMP,college_auditor_id VARCHAR(10),college_audit_opinion VARCHAR(200),college_audit_time TIMESTAMP,school_auditor_id VARCHAR(10),school_audit_opinion VARCHAR(200),school_audit_time TIMESTAMP)",
                 "CREATE TABLE sel_stu_gpa(student_id VARCHAR(20) PRIMARY KEY,earned_credit DECIMAL(5,1),failed_credit DECIMAL(5,1),gpa DECIMAL(5,2),avg_score DECIMAL(5,2),major_rank INT,major_rank_total INT,updated_at TIMESTAMP)",
                 "CREATE TABLE sel_stu_term_gpa(student_id VARCHAR(20),term VARCHAR(11),term_credit DECIMAL(5,1),term_failed_credit DECIMAL(5,1),updated_at TIMESTAMP,PRIMARY KEY(student_id,term))",
@@ -59,6 +63,8 @@ class ScoreServiceTest {
         )) {
             jdbc.execute(ddl);
         }
+
+        jdbc.update("INSERT INTO hr_employee VALUES('E001','王老师'),('E002','学院秘书'),('E003','教务处')");
 
         jdbc.update("INSERT INTO sys_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','usual_ratio_min','30','01')");
         jdbc.update("INSERT INTO org_organization VALUES('ORG001','经济管理学院','0001')");
@@ -88,11 +94,18 @@ class ScoreServiceTest {
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S001','TC2',1,'本科',1,1)");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S002','TC2',1,'本科',1,1)");
 
-        ScoreService target = new ScoreService(jdbc);
-        ProxyFactory proxy = new ProxyFactory(target);
+        DataSourceTransactionManager txManager = new DataSourceTransactionManager(ds);
+        TransactionInterceptor txInterceptor = new TransactionInterceptor(txManager, new AnnotationTransactionAttributeSource());
+
+        ProxyFactory proxy = new ProxyFactory(new ScoreService(jdbc));
         proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(ds), new AnnotationTransactionAttributeSource()));
+        proxy.addAdvice(txInterceptor);
         service = (ScoreService) proxy.getProxy();
+
+        ProxyFactory corrProxy = new ProxyFactory(new CorrectionService(jdbc));
+        corrProxy.setProxyTargetClass(true);
+        corrProxy.addAdvice(txInterceptor);
+        correctionService = (CorrectionService) corrProxy.getProxy();
         asTeacher();
     }
 
@@ -112,6 +125,10 @@ class ScoreServiceTest {
 
     private void asOffice() {
         UserContext.set(new CurrentUser("o1", "教务处", RoleEnum.ACADEMIC_OFFICE, null, "E003", null, null, null));
+    }
+
+    private void asStudent(String studentId) {
+        UserContext.set(new CurrentUser("stu_" + studentId, "学生", RoleEnum.STUDENT, studentId, null, null, "0001", "120102"));
     }
 
     @Test
@@ -269,6 +286,170 @@ class ScoreServiceTest {
         assertNotNull(jdbc.queryForObject("SELECT college_auditor_id FROM sel_exchange_score_convert WHERE convert_id=?", String.class, convertId));
         assertEquals(0, new java.math.BigDecimal("4.00").compareTo(
                 jdbc.queryForObject("SELECT gpa FROM sel_stu_gpa WHERE student_id='S001'", java.math.BigDecimal.class)));
+    }
+
+    @Test
+    void excelTemplateExportRoundTripAndHeaderDisambiguation() throws Exception {
+        // 1. 导出百分制课堂模板：标准 .xlsx ZIP，可被解析器直接回读（自动跳过第 1 行课堂说明）
+        byte[] tpl = service.exportTemplate("KT1001");
+        assertTrue(tpl.length > 100 && tpl[0] == 'P' && tpl[1] == 'K');
+        List<Map<String, String>> parsedTpl = ScoreExcelParser.parse(new ByteArrayInputStream(tpl), "grades_KT1001.xlsx");
+        assertEquals(2, parsedTpl.size());
+        assertEquals("S001", parsedTpl.get(0).get("student_id"));
+        assertEquals("S002", parsedTpl.get(1).get("student_id"));
+        assertEquals("正常", parsedTpl.get(0).get("exam_flag"));
+
+        // 2. 导出五级制课堂模板同样合法可读
+        byte[] levelTpl = service.exportTemplate("KT1002");
+        assertTrue(levelTpl.length > 100 && levelTpl[0] == 'P' && levelTpl[1] == 'K');
+        List<Map<String, String>> parsedLevelTpl = ScoreExcelParser.parse(new ByteArrayInputStream(levelTpl), "grades_KT1002.xlsx");
+        assertEquals(2, parsedLevelTpl.size());
+
+        // 3. 表头兼容“平时分”“考试成绩”，且“期末占比”列不会被误识别为期末考试成绩；全课堂统一按 35% 生效
+        byte[] customXlsx = buildSimpleXlsx(List.of(
+                List.of("课堂号", "KT1001", "说明", "平时与考试占比统一填一次即可"),
+                List.of("学号", "姓名", "平时分", "期末占比", "考试成绩", "考试情况"),
+                List.of("S001", "张三", "80", "70", "90", "正常"),
+                List.of("S002", "李四", "86", "70", "94", "正常")
+        ));
+        Map<String, Object> imported = service.importGrades("KT1001", new ByteArrayInputStream(customXlsx), "custom.xlsx", 35, false);
+        assertEquals(2, imported.get("imported"));
+        assertEquals(0, imported.get("failed"));
+        assertEquals(0, new java.math.BigDecimal("90.00").compareTo(jdbc.queryForObject(
+                "SELECT s.exam_score FROM sel_score s JOIN sel_sc sc ON s.sc_id=sc.sc_id WHERE sc.student_id='S001' AND sc.tc_id='TC1'",
+                java.math.BigDecimal.class)));
+        assertEquals(0, new java.math.BigDecimal("80.00").compareTo(jdbc.queryForObject(
+                "SELECT s.usual_score FROM sel_score s JOIN sel_sc sc ON s.sc_id=sc.sc_id WHERE sc.student_id='S001' AND sc.tc_id='TC1'",
+                java.math.BigDecimal.class)));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM sel_score WHERE usual_ratio = 35", Integer.class));
+    }
+
+    @Test
+    void gradeCorrectionClosedLoopRequiresUnlockResubmitPaperVerifyAndRepublish() throws Exception {
+        // 阶段一：正常按课堂统一占比 30% 导入并完成首次提交 -> 学院核对 -> 教务处发布
+        byte[] initXlsx = buildSimpleXlsx(List.of(
+                List.of("学号", "平时成绩", "考试成绩", "考试情况"),
+                List.of("S001", "70", "80", "正常"),
+                List.of("S002", "90", "90", "正常")
+        ));
+        service.importGrades("KT1001", new ByteArrayInputStream(initXlsx), "init.xlsx", 30, false);
+        Map<String, Object> firstSubmit = service.submit("KT1001");
+        String code1 = String.valueOf(firstSubmit.get("verify_code"));
+        assertEquals(2, firstSubmit.get("submitted"));
+        assertEquals(false, firstSubmit.get("is_correction_resubmit"));
+
+        asCollege();
+        service.audit("KT1001", code1, 1, "首次纸质成绩单核对无误");
+        asOffice();
+        Map<String, Object> firstPub = service.publish("KT1001");
+        assertEquals(2, firstPub.get("published"));
+        assertEquals(0, firstPub.get("finalized_corrections"));
+
+        Long s1ScoreId = jdbc.queryForObject(
+                "SELECT s.score_id FROM sel_score s JOIN sel_sc sc ON s.sc_id=sc.sc_id WHERE sc.student_id='S001' AND sc.tc_id='TC1'",
+                Long.class);
+        Long s2ScId = jdbc.queryForObject("SELECT sc_id FROM sel_sc WHERE student_id='S002' AND tc_id='TC1'", Long.class);
+        assertEquals(0, new java.math.BigDecimal("2.40").compareTo(
+                jdbc.queryForObject("SELECT gpa FROM sel_stu_gpa WHERE student_id='S001'", java.math.BigDecimal.class)));
+
+        // 阶段二：教师发起成绩更正，学院批准后仅解锁 S001（apply_status=1, score_status=4），S002 仍锁定
+        asTeacher();
+        Map<String, Object> applyRes = correctionService.submitCorrection(Map.of(
+                "score_id", s1ScoreId,
+                "expected_score", 77.0,
+                "new_score", 91.5,
+                "apply_reason", "漏登平时作业加分"
+        ));
+        long applyId = Long.parseLong(String.valueOf(applyRes.get("apply_id")));
+        assertEquals(0, applyRes.get("apply_status"));
+
+        asOffice();
+        assertEquals("FORBIDDEN", assertThrows(BizException.class,
+                () -> correctionService.officeDecision(applyId, 1, "direct")).getCode());
+
+        asCollege();
+        Map<String, Object> approveRes = correctionService.collegeDecision(applyId, 1, "同意解锁重录并补交纸质单");
+        assertEquals(1, approveRes.get("apply_status"));
+        assertEquals(4, approveRes.get("score_status"));
+        assertEquals("KT1001", approveRes.get("lesson_no"));
+        assertEquals(4, jdbc.queryForObject("SELECT score_status FROM sel_score WHERE score_id=?", Integer.class, s1ScoreId));
+        assertEquals(0, jdbc.queryForObject("SELECT is_final FROM sel_score WHERE score_id=?", Integer.class, s1ScoreId));
+        assertNull(jdbc.queryForObject("SELECT published_at FROM sel_score WHERE score_id=?", Object.class, s1ScoreId));
+        assertEquals(3, jdbc.queryForObject("SELECT score_status FROM sel_score WHERE sc_id=?", Integer.class, s2ScId));
+
+        // 阶段三：教师端看到更正待重录提示；S002 受锁定保护；导出模板仅含待重录的 S001；Excel 导入新成绩并重提生成新核对码
+        asTeacher();
+        List<Map<String, Object>> myClasses = service.myClasses(TERM, "KT1001");
+        assertEquals(1, ((Number) myClasses.get(0).get("correction_pending_count")).intValue());
+        Map<String, Object> roster = service.roster("KT1001");
+        assertEquals(true, roster.get("has_active_correction"));
+        assertEquals("SCORE_LOCKED", assertThrows(BizException.class,
+                () -> service.saveGrades("KT1001", List.of(Map.of("sc_id", s2ScId, "usual_score", 60, "exam_score", 60)), 30)).getCode());
+
+        byte[] corrTpl = service.exportTemplate("KT1001");
+        List<Map<String, String>> corrTplRows = ScoreExcelParser.parse(new ByteArrayInputStream(corrTpl), "grades_KT1001.xlsx");
+        assertEquals(1, corrTplRows.size());
+        assertEquals("S001", corrTplRows.get(0).get("student_id"));
+
+        byte[] corrImport = buildSimpleXlsx(List.of(
+                List.of("学号", "平时成绩", "考试成绩", "考试情况"),
+                List.of("S001", "95", "90", "正常")
+        ));
+        Map<String, Object> reImp = service.importGrades("KT1001", new ByteArrayInputStream(corrImport), "corr.xlsx", 30, false);
+        assertEquals(1, reImp.get("imported"));
+
+        Map<String, Object> secondSubmit = service.submit("KT1001");
+        String code2 = String.valueOf(secondSubmit.get("verify_code"));
+        assertEquals(1, secondSubmit.get("submitted"));
+        assertEquals(true, secondSubmit.get("is_correction_resubmit"));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM sel_score_audit WHERE lesson_no='KT1001'", Integer.class));
+
+        // 阶段四：学院输新核对码核对新版纸质单 -> 教务处重新发布 -> 更正申请自动置 2 生效并刷新 GPA、通知学生
+        asCollege();
+        List<Map<String, Object>> auditPending = service.auditPending(TERM);
+        assertEquals(1, ((Number) auditPending.get(0).get("correction_count")).intValue());
+        service.audit("KT1001", code2, 1, "新版纸质成绩单核对一致");
+
+        asOffice();
+        List<Map<String, Object>> pubPending = service.publishPending(TERM);
+        assertEquals(1, ((Number) pubPending.get(0).get("correction_count")).intValue());
+        Map<String, Object> secondPub = service.publish("KT1001");
+        assertEquals(1, secondPub.get("published"));
+        assertEquals(1, secondPub.get("finalized_corrections"));
+
+        assertEquals(2, jdbc.queryForObject("SELECT apply_status FROM sel_score_correction WHERE apply_id=?", Integer.class, applyId));
+        assertEquals("E003", jdbc.queryForObject("SELECT auditor_id FROM sel_score_correction WHERE apply_id=?", String.class, applyId));
+        assertNotNull(jdbc.queryForObject("SELECT reviewed_at FROM sel_score_correction WHERE apply_id=?", Object.class, applyId));
+        assertEquals(0, new java.math.BigDecimal("91.50").compareTo(
+                jdbc.queryForObject("SELECT new_score FROM sel_score_correction WHERE apply_id=?", java.math.BigDecimal.class, applyId)));
+        assertEquals(0, new java.math.BigDecimal("4.00").compareTo(
+                jdbc.queryForObject("SELECT gpa FROM sel_stu_gpa WHERE student_id='S001'", java.math.BigDecimal.class)));
+
+        asStudent("S001");
+        List<Map<String, Object>> stuNotices = correctionService.listMyCorrectionResults(TERM);
+        assertEquals(1, stuNotices.size());
+        assertEquals(0, new java.math.BigDecimal("91.50").compareTo(new java.math.BigDecimal(String.valueOf(stuNotices.get(0).get("new_score")))));
+        assertEquals(0, new java.math.BigDecimal("4.00").compareTo(new java.math.BigDecimal(String.valueOf(stuNotices.get(0).get("new_grade_point")))));
+    }
+
+    @Test
+    void gradeCorrectionCollegeRejectKeepsPublishedScoreLocked() {
+        Long sc1 = jdbc.queryForObject("SELECT sc_id FROM sel_sc WHERE student_id='S001' AND tc_id='TC1'", Long.class);
+        jdbc.update("INSERT INTO sel_score(sc_id,exam_type,score_type,usual_ratio,usual_score,exam_score,total_score,grade_point,is_final,score_status,input_teacher_id,submitted_at,published_at) VALUES(?,1,1,30,80,80,80,3.00,1,3,'E001',NOW(),NOW())", sc1);
+        Long scoreId = jdbc.queryForObject("SELECT score_id FROM sel_score WHERE sc_id=?", Long.class, sc1);
+
+        asTeacher();
+        Map<String, Object> applied = correctionService.submitCorrection(Map.of(
+                "score_id", scoreId, "expected_score", 80.0, "new_score", 88.0, "apply_reason", "复核加分"));
+        long applyId = Long.parseLong(String.valueOf(applied.get("apply_id")));
+
+        asCollege();
+        assertEquals("OPINION_REQUIRED", assertThrows(BizException.class,
+                () -> correctionService.collegeDecision(applyId, 2, "  ")).getCode());
+        Map<String, Object> rej = correctionService.collegeDecision(applyId, 2, "佐证材料不足");
+        assertEquals(3, rej.get("apply_status"));
+        assertEquals(3, jdbc.queryForObject("SELECT score_status FROM sel_score WHERE score_id=?", Integer.class, scoreId));
+        assertEquals(1, jdbc.queryForObject("SELECT is_final FROM sel_score WHERE score_id=?", Integer.class, scoreId));
     }
 
     private static byte[] buildSimpleXlsx(List<List<String>> rows) throws Exception {
