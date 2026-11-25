@@ -14,66 +14,125 @@
 SET NAMES utf8mb4;
 
 -- ---------------------------------------------------------------------
--- 1. 外部桩表基础数据（教职工、学生、课程、教学班、排课、研究生方案、交换生）
+-- 1. 上游公共/外部表基础数据（完全按 DBA 统一字典 v1.3 正式表名与字段）
 -- ---------------------------------------------------------------------
-INSERT INTO t_employee (emp_id, emp_name, org_id) VALUES
-  ('T000010001', '王明远', 'ORG001'),  -- 经管学院任课教师（对应教学班 teacher_id='T0010001'）
-  ('T000010002', '李晓静', 'ORG001'),  -- 经管学院任课教师
-  ('T000020001', '陈志强', 'ORG002'),  -- 计算机学院任课教师
-  ('E000010001', '周敏（经管教学秘书）', 'ORG001'),
-  ('E000020001', '赵刚（计通教学秘书）', 'ORG002'),
-  ('A000000001', '林建华（教务处经办）', 'ORG900'),
-  ('A000000002', '吴海峰（教务处处长）', 'ORG900'),
-  ('G000000001', '孙梅（研究生院审核）', 'ORG901'),
-  ('S000000001', '系统管理员',           'ORG999')
+INSERT INTO org_organization (org_id, org_code, org_name, org_short, org_type, college_id, org_status) VALUES
+  ('ORG001', 'COL0001', '经济管理学院',       '经管学院', '01', '0001', '01'),
+  ('ORG002', 'COL0002', '计算机与通信工程学院', '计通学院', '01', '0002', '01'),
+  ('ORG900', 'DEP900',  '教务处',             '教务处',   '02', NULL,   '01'),
+  ('ORG901', 'DEP901',  '研究生院',           '研究生院', '02', NULL,   '01'),
+  ('ORG999', 'DEP999',  '信息化建设与管理办公室', '信息办', '02', NULL,   '01')
+ON DUPLICATE KEY UPDATE org_name = VALUES(org_name);
+
+INSERT INTO aca_term (term, academic_year, term_no, start_date, end_date, term_status) VALUES
+  ('2025-2026-1', '2025-2026', 1, '2025-09-01', '2026-01-20', '02'),
+  ('2025-2026-2', '2025-2026', 2, '2026-02-25', '2026-07-10', '02'),
+  ('2026-2027-1', '2026-2027', 1, '2026-09-01', '2027-01-20', '01'),
+  ('2026-2027-2', '2026-2027', 2, '2027-02-25', '2027-07-10', '00')
+ON DUPLICATE KEY UPDATE term_status = VALUES(term_status);
+
+INSERT INTO aca_major (major_id, major_name, org_id, college_id, duration, degree_name, min_credit, major_status) VALUES
+  ('120102', '信息管理与信息系统', 'ORG001', '0001', 4, '管理学学士', 160.0, '01'),
+  ('080901', '计算机科学与技术',   'ORG002', '0002', 4, '工学学士',   165.0, '01'),
+  ('120100', '管理科学与工程',     'ORG001', '0001', 3, '管理学硕士',  34.0, '01')
+ON DUPLICATE KEY UPDATE major_name = VALUES(major_name);
+
+INSERT INTO sys_person (person_id, person_no, person_name, person_type, gender) VALUES
+  ('P_T000010001', 'T000010001', '王明远',             '02', '1'),
+  ('P_T000010002', 'T000010002', '李晓静',             '02', '2'),
+  ('P_T000020001', 'T000020001', '陈志强',             '02', '1'),
+  ('P_E000010001', 'E000010001', '周敏（经管教学秘书）', '02', '2'),
+  ('P_E000020001', 'E000020001', '赵刚（计通教学秘书）', '02', '1'),
+  ('P_A000000001', 'A000000001', '林建华（教务处经办）', '02', '1'),
+  ('P_A000000002', 'A000000002', '吴海峰（教务处处长）', '02', '1'),
+  ('P_G000000001', 'G000000001', '孙梅（研究生院审核）', '02', '2'),
+  ('P_S000000001', 'S000000001', '系统管理员',          '02', '9'),
+  ('P_U202440001', 'U202440001', '张晨曦',             '01', '2'),
+  ('P_U202440002', 'U202440002', '林思远',             '01', '1'),
+  ('P_U202440003', 'U202440003', '陈雨桐',             '01', '2'),
+  ('P_U202340004', 'U202340004', '刘浩然',             '01', '1'),
+  ('P_U202440005', 'U202440005', '赵子涵',             '01', '1'),
+  ('P_M202610001', 'M202610001', '许嘉豪',             '01', '1'),
+  ('P_M202610002', 'M202610002', '宋婉清',             '01', '2'),
+  ('P_EX20260001', 'EX20260001', 'Alex Mueller',       '03', '1')
+ON DUPLICATE KEY UPDATE person_name = VALUES(person_name);
+
+INSERT INTO hr_employee (emp_id, person_id, emp_name, id_card, org_id, post_type, hire_date, emp_status, salary) VALUES
+  ('T000010001', 'P_T000010001', '王明远',             '110101198001010001', 'ORG001', 'TEACHER', '2015-09-01', '01', 12000.00),
+  ('T000010002', 'P_T000010002', '李晓静',             '110101198201010002', 'ORG001', 'TEACHER', '2016-09-01', '01', 11500.00),
+  ('T000020001', 'P_T000020001', '陈志强',             '110101197901010003', 'ORG002', 'TEACHER', '2014-09-01', '01', 12500.00),
+  ('E000010001', 'P_E000010001', '周敏（经管教学秘书）', '110101198801010004', 'ORG001', 'ADMIN',   '2018-09-01', '01',  9000.00),
+  ('E000020001', 'P_E000020001', '赵刚（计通教学秘书）', '110101198701010005', 'ORG002', 'ADMIN',   '2018-09-01', '01',  9000.00),
+  ('A000000001', 'P_A000000001', '林建华（教务处经办）', '110101198501010006', 'ORG900', 'ADMIN',   '2017-09-01', '01',  9500.00),
+  ('A000000002', 'P_A000000002', '吴海峰（教务处处长）', '110101197501010007', 'ORG900', 'ADMIN',   '2010-09-01', '01', 15000.00),
+  ('G000000001', 'P_G000000001', '孙梅（研究生院审核）', '110101198301010008', 'ORG901', 'ADMIN',   '2016-09-01', '01', 10000.00),
+  ('S000000001', 'P_S000000001', '系统管理员',          '110101199001010009', 'ORG999', 'ADMIN',   '2020-09-01', '01',  9800.00)
 ON DUPLICATE KEY UPDATE emp_name = VALUES(emp_name);
 
-INSERT INTO student (student_id, student_name, grade, degree_level, class_name, major_id, college_id, final_enroll) VALUES
-  ('U202440001', '张晨曦', 2024, '本科',   '信管241',   '120102', '0001', '在籍'),
-  ('U202440002', '林思远', 2024, '本科',   '信管241',   '120102', '0001', '在籍'),
-  ('U202440003', '陈雨桐', 2024, '本科',   '信管242',   '120102', '0001', '在籍'),
-  ('U202340004', '刘浩然', 2023, '本科',   '信管231',   '120102', '0001', '在籍'),  -- 重修生场景
-  ('U202440005', '赵子涵', 2024, '本科',   '计科241',   '080901', '0002', '在籍'),  -- 辅修/跨学院场景
-  ('M202610001', '许嘉豪', 2026, '研究生', '管科硕261', '120100', '0001', '在籍'),  -- 研究生场景
-  ('M202610002', '宋婉清', 2026, '研究生', '管科硕261', '120100', '0001', '在籍')
-ON DUPLICATE KEY UPDATE student_name = VALUES(student_name);
+INSERT INTO aca_class (class_id, class_name, grade, major_id, org_id) VALUES
+  ('CLS_XG241', '信管241',   '2024', '120102', 'ORG001'),
+  ('CLS_XG242', '信管242',   '2024', '120102', 'ORG001'),
+  ('CLS_XG231', '信管231',   '2023', '120102', 'ORG001'),
+  ('CLS_JK241', '计科241',   '2024', '080901', 'ORG002'),
+  ('CLS_GK261', '管科硕261', '2026', '120100', 'ORG001')
+ON DUPLICATE KEY UPDATE class_name = VALUES(class_name);
 
-INSERT INTO course (course_id, course_name, course_type, credit, assess_type, open_college, course_level) VALUES
-  ('CS201001', '管理信息系统',     '12', 3.0, '1', '0001', 1),
-  ('CS201002', '数据库原理与应用', '12', 3.5, '1', '0001', 1),
-  ('CS202003', 'Java企业级开发',   '14', 2.5, '1', '0002', 1),
-  ('GE101001', '大学英语（三）',   '11', 2.0, '1', '0001', 1),
-  ('PR301001', '信息系统开发实践', '16', 2.0, '2', '0001', 1),  -- 五级制考查课
-  ('GR501001', '高级管理科学研究方法', '12', 3.0, '1', '0001', 2), -- 研究生课
-  ('GR502002', '数据挖掘与商务智能',   '14', 2.0, '1', '0001', 2)
+INSERT INTO std_student (student_id, person_id, class_id, major_id, org_id, grade, enrollment_year, student_type, student_status) VALUES
+  ('U202440001', 'P_U202440001', 'CLS_XG241', '120102', 'ORG001', '2024', 2024, '01', '01'),
+  ('U202440002', 'P_U202440002', 'CLS_XG241', '120102', 'ORG001', '2024', 2024, '01', '01'),
+  ('U202440003', 'P_U202440003', 'CLS_XG242', '120102', 'ORG001', '2024', 2024, '01', '01'),
+  ('U202340004', 'P_U202340004', 'CLS_XG231', '120102', 'ORG001', '2023', 2023, '01', '01'),
+  ('U202440005', 'P_U202440005', 'CLS_JK241', '080901', 'ORG002', '2024', 2024, '01', '01'),
+  ('M202610001', 'P_M202610001', 'CLS_GK261', '120100', 'ORG001', '2026', 2026, '02', '01'),
+  ('M202610002', 'P_M202610002', 'CLS_GK261', '120100', 'ORG001', '2026', 2026, '02', '01')
+ON DUPLICATE KEY UPDATE student_status = VALUES(student_status);
+
+INSERT INTO aca_course (course_id, course_code, course_name, course_type, credit, total_hours, org_id, course_status) VALUES
+  ('CS201001', 'CS201001', '管理信息系统',         '12', 3.0, 48.00, 'ORG001', '01'),
+  ('CS201002', 'CS201002', '数据库原理与应用',     '12', 3.5, 56.00, 'ORG001', '01'),
+  ('CS202003', 'CS202003', 'Java企业级开发',       '14', 2.5, 40.00, 'ORG002', '01'),
+  ('GE101001', 'GE101001', '大学英语（三）',       '11', 2.0, 32.00, 'ORG001', '01'),
+  ('PR301001', 'PR301001', '信息系统开发实践',     '16', 2.0, 32.00, 'ORG001', '01'),
+  ('GR501001', 'GR501001', '高级管理科学研究方法', '12', 3.0, 48.00, 'ORG001', '01'),
+  ('GR502002', 'GR502002', '数据挖掘与商务智能',   '14', 2.0, 32.00, 'ORG001', '01')
 ON DUPLICATE KEY UPDATE course_name = VALUES(course_name);
 
-INSERT INTO program_course (major_id, grade, course_id) VALUES
-  ('120102', '2024', 'CS201001'),
-  ('120102', '2024', 'CS201002'),
-  ('120102', '2024', 'PR301001'),
-  ('080901', '2024', 'CS202003')
-ON DUPLICATE KEY UPDATE course_id = VALUES(course_id);
+INSERT INTO aca_course_id (course_id, course_name, course_type, credit, total_hours, assess_type, open_college, course_status) VALUES
+  ('CS201001', '管理信息系统',         '12', 3.0, 48.00, '1', '0001', '1'),
+  ('CS201002', '数据库原理与应用',     '12', 3.5, 56.00, '1', '0001', '1'),
+  ('CS202003', 'Java企业级开发',       '14', 2.5, 40.00, '1', '0002', '1'),
+  ('GE101001', '大学英语（三）',       '11', 2.0, 32.00, '1', '0001', '1'),
+  ('PR301001', '信息系统开发实践',     '16', 2.0, 32.00, '2', '0001', '1'),
+  ('GR501001', '高级管理科学研究方法', '12', 3.0, 48.00, '1', '0001', '1'),
+  ('GR502002', '数据挖掘与商务智能',   '14', 2.0, 32.00, '1', '0001', '1')
+ON DUPLICATE KEY UPDATE assess_type = VALUES(assess_type);
 
-INSERT INTO teaching_class (tc_id, term, course_id, teacher_id, class_ids, capacity, tc_type, tc_status, actual_num) VALUES
-  ('TC20261001', '2026-2027-1', 'CS201001', 'T0010001', '信管241',      60, '1', '4', 3),
-  ('TC20261002', '2026-2027-1', 'CS201001', 'T0010001', '信管242',      60, '1', '4', 2), -- 与 TC20261001 合班上课
-  ('TC20261003', '2026-2027-1', 'CS201002', 'T0010002', '信管241,信管242', 80, '1', '4', 2),
-  ('TC20261004', '2026-2027-1', 'CS202003', 'T0020001', '全校选修',     50, '2', '4', 1),
-  ('TC20261005', '2026-2027-1', 'PR301001', 'T0010001', '信管241',      40, '1', '4', 2),
-  ('TC20261006', '2026-2027-1', 'GR501001', 'T0010002', '管科硕261',    30, '1', '4', 2),
-  ('TC20261007', '2026-2027-1', 'GR502002', 'T0020001', '管科硕261',    30, '2', '4', 0),
-  ('TC20261008', '2026-2027-1', 'GE101001', 'T0010002', '信管241',      45, '1', '2', 0)  -- 状态2不开课（校验不可加入轮次）
+INSERT INTO aca_program_course (major_id, grade, program_type, course_id, course_type, credit, hours, open_college, open_semester, cross_status) VALUES
+  ('120102', '2024', '1', 'CS201001', '12', 3.0, 48.00, '0001', 5, '0'),
+  ('120102', '2024', '1', 'CS201002', '12', 3.5, 56.00, '0001', 5, '0'),
+  ('120102', '2024', '1', 'PR301001', '16', 2.0, 32.00, '0001', 5, '0'),
+  ('080901', '2024', '1', 'CS202003', '14', 2.5, 40.00, '0002', 5, '0')
+ON DUPLICATE KEY UPDATE credit = VALUES(credit);
+
+INSERT INTO aca_teaching_class (tc_id, term, course_id, emp_id, class_name, class_ids, capacity, selected_count, actual_num, hours, student_num, tc_type, teach_type, tc_status, week_count) VALUES
+  ('TC20261001', '2026-2027-1', 'CS201001', 'T000010001', '管理信息系统-01班', '信管241',         60, 3, 3, 48.00, 30, '1', '1', '4', 16),
+  ('TC20261002', '2026-2027-1', 'CS201001', 'T000010001', '管理信息系统-02班', '信管242',         60, 2, 2, 48.00, 30, '1', '1', '4', 16),
+  ('TC20261003', '2026-2027-1', 'CS201002', 'T000010002', '数据库原理-01班',   '信管241,信管242', 80, 2, 2, 56.00, 60, '1', '1', '4', 16),
+  ('TC20261004', '2026-2027-1', 'CS202003', 'T000020001', 'Java企业级-01班',   '全校选修',        50, 1, 1, 40.00, 50, '2', '1', '4', 16),
+  ('TC20261005', '2026-2027-1', 'PR301001', 'T000010001', '开发实践-01班',     '信管241',         40, 2, 2, 32.00, 30, '1', '2', '4',  8),
+  ('TC20261006', '2026-2027-1', 'GR501001', 'T000010002', '管理研究方法-01班', '管科硕261',       30, 2, 2, 48.00, 20, '1', '1', '4', 16),
+  ('TC20261007', '2026-2027-1', 'GR502002', 'T000020001', '数据挖掘-01班',     '管科硕261',       30, 0, 0, 32.00, 20, '2', '1', '4', 16),
+  ('TC20261008', '2026-2027-1', 'GE101001', 'T000010002', '大学英语-01班',     '信管241',         45, 0, 0, 32.00, 30, '1', '1', '2', 16)
 ON DUPLICATE KEY UPDATE capacity = VALUES(capacity);
 
-INSERT INTO schedule_result (schedule_id, tc_id, week_range, week_day, start_slot, end_slot, room_id) VALUES
-  (1, 'TC20261001', '1-16', 1, 1, 2, '经管楼301'),
-  (2, 'TC20261002', '1-16', 1, 1, 2, '经管楼301'), -- 同时间同地点同教师，合班 KT202610001
-  (3, 'TC20261003', '1-16', 2, 3, 4, '经管楼205'),
-  (4, 'TC20261004', '1-16', 1, 1, 2, '逸夫楼402'), -- 与 TC20261001 撞课（用于测冲突 & 重修免听）
-  (5, 'TC20261005', '9-16', 3, 5, 6, '信息实验楼B201'),
-  (6, 'TC20261006', '1-16', 4, 1, 3, '经管楼502'),
-  (7, 'TC20261007', '1-16', 5, 3, 4, '逸夫楼308')
+INSERT INTO aca_schedule_result (sched_id, tc_id, week_range, week_day, start_slot, end_slot, room_id, lock_flag, sched_status) VALUES
+  ('SCH20261000001', 'TC20261001', '1-16', '1', 1, 2, '经管楼301',    1, '1'),
+  ('SCH20261000002', 'TC20261002', '1-16', '1', 1, 2, '经管楼301',    1, '1'),
+  ('SCH20261000003', 'TC20261003', '1-16', '2', 3, 4, '经管楼205',    1, '1'),
+  ('SCH20261000004', 'TC20261004', '1-16', '1', 1, 2, '逸夫楼402',    1, '1'),
+  ('SCH20261000005', 'TC20261005', '9-16', '3', 5, 6, '信息实验楼B201', 1, '1'),
+  ('SCH20261000006', 'TC20261006', '1-16', '4', 1, 3, '经管楼502',    1, '1'),
+  ('SCH20261000007', 'TC20261007', '1-16', '5', 3, 4, '逸夫楼308',    1, '1')
 ON DUPLICATE KEY UPDATE room_id = VALUES(room_id);
 
 INSERT INTO grad_direction (direction_id, direction_name) VALUES
@@ -81,23 +140,43 @@ INSERT INTO grad_direction (direction_id, direction_name) VALUES
   ('DIR02', '智能供应链与运营管理')
 ON DUPLICATE KEY UPDATE direction_name = VALUES(direction_name);
 
-INSERT INTO scheme_assignment (student_id, scheme_id, direction_id, effective_from, effective_to) VALUES
-  ('M202610001', 'SCH_MS_2026', 'DIR01', '2026-09-01', NULL),
-  ('M202610002', 'SCH_MS_2026', 'DIR02', '2026-09-01', NULL);
+INSERT INTO grad_scheme_assignment (assignment_id, student_id, scheme_id, direction_id, method, valid_from, valid_to) VALUES
+  ('ASN_M202610001_SCH_MS_2026', 'M202610001', 'SCH_MS_2026', 'DIR01', 'DEFAULT', '2026-09-01', NULL),
+  ('ASN_M202610002_SCH_MS_2026', 'M202610002', 'SCH_MS_2026', 'DIR02', 'DEFAULT', '2026-09-01', NULL)
+ON DUPLICATE KEY UPDATE direction_id = VALUES(direction_id);
 
-INSERT INTO scheme_course (scheme_id, course_id, direction_id, course_category, suggest_term) VALUES
-  ('SCH_MS_2026', 'GR501001', NULL,    1, 1), -- 年度必修
-  ('SCH_MS_2026', 'GR502002', 'DIR01', 2, 1); -- 方向必修
+INSERT INTO grad_scheme_course (scheme_course_id, scheme_id, course_id, direction_id, group_code, course_category, suggest_term) VALUES
+  ('GSC_SCH_MS_2026_GR501001', 'SCH_MS_2026', 'GR501001', NULL,    'CORE', 1, 1),
+  ('GSC_SCH_MS_2026_GR502002', 'SCH_MS_2026', 'GR502002', 'DIR01', 'DIR',  2, 1)
+ON DUPLICATE KEY UPDATE course_category = VALUES(course_category);
 
--- 第 15 组交换生桩数据
-INSERT INTO stub_ex_credit_ready (application_no, student_id, term_ref, partner_school_snapshot, ready_flag) VALUES
-  ('SQ20260001', 'U202440001', '2026-2027-1', '新加坡国立大学 (NUS)', 1),
-  ('SQ20260002', 'U202440002', '2026-2027-1', '慕尼黑工业大学 (TUM)', 0)
-ON DUPLICATE KEY UPDATE ready_flag = VALUES(ready_flag);
+-- 第 15 组交换生统一表数据（支撑 v_exchange_student 与 v_exchange_credit_ready 视图）
+INSERT INTO exg_application (apply_id, person_id, student_name, id_card_no, home_school, home_student_no, apply_college_name, apply_major_name, apply_term, apply_status) VALUES
+  ('EXAPP20260001', 'P_EX20260001', 'Alex Mueller', 'DE2026000000000001', 'RWTH Aachen University', 'RWTH2026001', '经济管理学院', '信息管理与信息系统', '2026-2027-1', '01')
+ON DUPLICATE KEY UPDATE home_school = VALUES(home_school);
 
-INSERT INTO stub_ex_incoming_student (temp_student_no, student_name, sender_school_name, term_ref, college_ref, major_ref, start_on, end_on, status_code) VALUES
-  ('EX20260001', 'Alex Mueller', 'RWTH Aachen University', '2026-2027-1', '0001', '120102', '2026-09-01', '2027-01-31', 'ACTIVE')
-ON DUPLICATE KEY UPDATE status_code = VALUES(status_code);
+INSERT INTO exg_admission (admission_id, apply_id, person_id, student_name, college_name, major_name, term, interview_score, approver_name, admission_time, admission_status) VALUES
+  ('EXADM20260001', 'EXAPP20260001', 'P_EX20260001', 'Alex Mueller', '经济管理学院', '信息管理与信息系统', '2026-2027-1', 92.00, '教务处', '2026-07-01', '01')
+ON DUPLICATE KEY UPDATE admission_status = VALUES(admission_status);
+
+INSERT INTO exg_temp_student (temp_student_id, admission_id, person_id, student_name, id_card_no, org_id, college_name, major_name, start_date, end_date, student_status, creator_name) VALUES
+  ('EX20260001', 'EXADM20260001', 'P_EX20260001', 'Alex Mueller', 'DE2026000000000001', 'ORG001', '经济管理学院', '信息管理与信息系统', '2026-09-01', '2027-01-31', '01', '国际处')
+ON DUPLICATE KEY UPDATE student_status = VALUES(student_status);
+
+INSERT INTO exg_vst_departure (departure_id, apply_id, student_id, host_country, partner_school, departure_date, planned_return_date, actual_return_date, return_status) VALUES
+  ('DEP20260001', 'SQ20260001', 'U202440001', '新加坡', '新加坡国立大学 (NUS)', '2026-09-01', '2026-11-15', '2026-11-14', '02'),
+  ('DEP20260002', 'SQ20260002', 'U202440002', '德国',   '慕尼黑工业大学 (TUM)', '2026-09-01', '2027-01-15', NULL,         '01')
+ON DUPLICATE KEY UPDATE partner_school = VALUES(partner_school);
+
+INSERT INTO exg_vst_return_report (report_id, departure_id, student_id, actual_return_date, report_date, return_apply_file, report_note) VALUES
+  ('REP20260001', 'DEP20260001', 'U202440001', '2026-11-14', '2026-11-15', 'return_sq20260001.pdf', '已提交外校官方成绩单'),
+  ('REP20260002', 'DEP20260002', 'U202440002', '2027-01-15', '2027-01-16', 'return_sq20260002.pdf', '待返校核验')
+ON DUPLICATE KEY UPDATE report_note = VALUES(report_note);
+
+INSERT INTO exg_vst_return_filing (return_filing_id, report_id, student_id, actual_return_date, filing_date, filer, filing_status) VALUES
+  ('FIL20260001', 'REP20260001', 'U202440001', '2026-11-14', '2026-11-16', '国际处', '01'),
+  ('FIL20260002', 'REP20260002', 'U202440002', '2027-01-15', '2027-01-16', '国际处', '00')
+ON DUPLICATE KEY UPDATE filing_status = VALUES(filing_status);
 
 -- ---------------------------------------------------------------------
 -- 2. 业务① 选课准备与发布（sel_select_round、sel_round_class、sel_select_limit）
@@ -255,17 +334,30 @@ INSERT INTO sel_stu_term_gpa (student_id, term, term_credit, term_failed_credit,
   ('U202340004', '2026-2027-1', 3.0, 0.0, '2026-11-19 09:35:00');
 
 -- ---------------------------------------------------------------------
--- 7. 业务⑥ 系统参数与编码初始值
+-- 7. 业务⑥ DBA 统一字典项与备份日志初始值（sys_dict_type / sys_dict_item）
 -- ---------------------------------------------------------------------
-INSERT INTO sys_code_dict (dict_group, dict_code, dict_name, remark) VALUES
-  ('system_param', 'current_term',     '2026-2027-1', '当前默认学年学期'),
-  ('system_param', 'usual_ratio_min',  '30',          '平时成绩最低占比（%），3.1 录入保存时校验一次'),
-  ('college_map',  '0001',             '经济管理学院', '对应第4组 org_id=ORG001'),
-  ('college_map',  '0002',             '计算机与通信工程学院', '对应第4组 org_id=ORG002'),
-  ('teacher_map',  'T0010001',         'T000010001',  '第2组8位teacher_id -> 第4组10位emp_id映射'),
-  ('teacher_map',  'T0010002',         'T000010002',  '第2组8位teacher_id -> 第4组10位emp_id映射'),
-  ('teacher_map',  'T0020001',         'T000020001',  '第2组8位teacher_id -> 第4组10位emp_id映射')
-ON DUPLICATE KEY UPDATE dict_name = VALUES(dict_name);
+INSERT INTO sys_dict_type (dict_type, type_name, is_system, dict_status, remark) VALUES
+  ('system_param',   '选课与成绩系统运行参数', 1, '01', '当前学期、平时成绩最低占比等核心配置'),
+  ('STUDENT_TYPE',   '学生类别',               1, '01', '01本科 02硕士 03博士 04交流生'),
+  ('STUDENT_STATUS', '学籍状态',               1, '01', '01在籍'),
+  ('COURSE_TYPE',    '课程性质',               1, '01', '11校级必修 12院级必修 13专业必修 14专业选修 15通识 16实践')
+ON DUPLICATE KEY UPDATE type_name = VALUES(type_name);
+
+INSERT INTO sys_dict_item (dict_type, item_code, item_name, sort_no, version, effective_from, item_status) VALUES
+  ('system_param',   'current_term',    '2026-2027-1', 1, '当前默认学年学期',        '2026-01-01', '01'),
+  ('system_param',   'usual_ratio_min', '30',          2, '平时成绩最低占比(%)',     '2026-01-01', '01'),
+  ('STUDENT_TYPE',   '01',              '本科',        1, '2026',                    '2026-01-01', '01'),
+  ('STUDENT_TYPE',   '02',              '硕士',        2, '2026',                    '2026-01-01', '01'),
+  ('STUDENT_TYPE',   '03',              '博士',        3, '2026',                    '2026-01-01', '01'),
+  ('STUDENT_TYPE',   '04',              '交流生',      4, '2026',                    '2026-01-01', '01'),
+  ('STUDENT_STATUS', '01',              '在籍',        1, '2026',                    '2026-01-01', '01'),
+  ('COURSE_TYPE',    '11',              '校级必修',    1, '2026',                    '2026-01-01', '01'),
+  ('COURSE_TYPE',    '12',              '院级必修',    2, '2026',                    '2026-01-01', '01'),
+  ('COURSE_TYPE',    '13',              '专业必修',    3, '2026',                    '2026-01-01', '01'),
+  ('COURSE_TYPE',    '14',              '专业选修',    4, '2026',                    '2026-01-01', '01'),
+  ('COURSE_TYPE',    '15',              '通识选修',    5, '2026',                    '2026-01-01', '01'),
+  ('COURSE_TYPE',    '16',              '实践环节',    6, '2026',                    '2026-01-01', '01')
+ON DUPLICATE KEY UPDATE item_name = VALUES(item_name);
 
 INSERT INTO sys_backup_log (backup_id, backup_type, file_name, file_size_kb, operator_id, backup_time, status, remark) VALUES
   (1, 1, 'course_grade_mgmt_20261123.sql', 128, 'S000000001', '2026-11-23 23:00:00', 1, '系统初始化全量备份')

@@ -14,7 +14,7 @@ import java.util.Map;
 
 /**
  * 【业务⑥ 系统维护 6.1–6.2 · 蒋作】
- * 6.1 编码参数维护（sys_code_dict，如 usual_ratio_min 平时占比下限）
+ * 6.1 编码参数维护（DBA 统一字典表 sys_dict_type / sys_dict_item，如 usual_ratio_min 平时占比下限）
  * 6.2 数据备份与恢复（sys_backup_log，恢复前先记应急快照）
  */
 @Service
@@ -26,26 +26,32 @@ public class AdminService {
         this.jdbc = jdbc;
     }
 
-    /** 6.1 编码列表 */
+    /** 6.1 编码列表（对接 DBA 统一字典表 sys_dict_item，兼容原前端返回字段） */
     public List<Map<String, Object>> listCodes(String group, String keyword) {
         UserContext.requireRole(RoleEnum.SYS_ADMIN, RoleEnum.ACADEMIC_OFFICE);
         StringBuilder sql = new StringBuilder("""
-                SELECT dict_id, dict_group, dict_code, dict_name, remark, is_enabled, update_time
-                FROM sys_code_dict WHERE 1=1
+                SELECT dict_id,
+                       dict_type AS dict_group,
+                       item_code AS dict_code,
+                       item_name AS dict_name,
+                       version AS remark,
+                       CASE WHEN item_status IN ('01', '1') THEN 1 ELSE 0 END AS is_enabled,
+                       effective_from AS update_time
+                FROM sys_dict_item WHERE 1=1
                 """);
         List<Object> args = new ArrayList<>();
         if (group != null && !group.isBlank()) {
-            sql.append(" AND dict_group = ? ");
+            sql.append(" AND dict_type = ? ");
             args.add(group.trim());
         }
         if (keyword != null && !keyword.isBlank()) {
-            sql.append(" AND (dict_code LIKE ? OR dict_name LIKE ? OR remark LIKE ?) ");
+            sql.append(" AND (item_code LIKE ? OR item_name LIKE ? OR version LIKE ?) ");
             String like = "%" + keyword.trim() + "%";
             args.add(like);
             args.add(like);
             args.add(like);
         }
-        sql.append(" ORDER BY dict_group, dict_code LIMIT 500");
+        sql.append(" ORDER BY dict_type, sort_no, item_code LIMIT 500");
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
@@ -59,19 +65,29 @@ public class AdminService {
         if (group.isEmpty() || code.isEmpty() || name.isEmpty()) {
             throw BizException.unprocessable("MISSING_FIELD", "编码分组、编码键、名称不能为空");
         }
-        if (group.length() > 40 || code.length() > 40 || name.length() > 100) {
-            throw BizException.unprocessable("TOO_LONG", "编码分组/键不超过 40 字符，名称不超过 100 字符");
+        if (group.length() > 40 || code.length() > 100 || name.length() > 200) {
+            throw BizException.unprocessable("TOO_LONG", "编码分组不超过 40 字符，编码键不超过 100 字符，名称不超过 200 字符");
         }
         Integer dup = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM sys_code_dict WHERE dict_group = ? AND dict_code = ?
+                SELECT COUNT(*) FROM sys_dict_item WHERE dict_type = ? AND item_code = ?
                 """, Integer.class, group, code);
         if (dup != null && dup > 0) {
             throw BizException.conflict("DUPLICATE_CODE", "同一分组下编码键已存在");
         }
+        Integer typeExists = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sys_dict_type WHERE dict_type = ?", Integer.class, group);
+        if (typeExists == null || typeExists == 0) {
+            jdbc.update("""
+                    INSERT INTO sys_dict_type(dict_type, type_name, is_system, dict_status, remark)
+                    VALUES(?, ?, 0, '01', ?)
+                    """, group, group, "由系统维护界面自动登记");
+        }
+        String remark = str(body.get("remark"));
+        String version = remark.isEmpty() ? "2026" : (remark.length() > 40 ? remark.substring(0, 40) : remark);
         jdbc.update("""
-                INSERT INTO sys_code_dict(dict_group, dict_code, dict_name, remark, is_enabled)
-                VALUES(?, ?, ?, ?, 1)
-                """, group, code, name, str(body.get("remark")));
+                INSERT INTO sys_dict_item(dict_type, item_code, item_name, sort_no, version, effective_from, item_status)
+                VALUES(?, ?, ?, 0, ?, CURRENT_DATE, '01')
+                """, group, code, name, version);
         return Map.of("dict_group", group, "dict_code", code, "message", "编码已新增");
     }
 
@@ -79,7 +95,7 @@ public class AdminService {
     @Transactional
     public Map<String, Object> updateCode(int id, Map<String, Object> body) {
         UserContext.requireRole(RoleEnum.SYS_ADMIN);
-        Integer exists = jdbc.queryForObject("SELECT COUNT(*) FROM sys_code_dict WHERE dict_id = ?", Integer.class, id);
+        Integer exists = jdbc.queryForObject("SELECT COUNT(*) FROM sys_dict_item WHERE dict_id = ?", Integer.class, id);
         if (exists == null || exists == 0) {
             throw BizException.notFound("编码不存在：" + id);
         }
@@ -87,16 +103,17 @@ public class AdminService {
         String remark = body.get("remark") == null ? null : str(body.get("remark"));
         Integer enabled = body.get("is_enabled") == null ? null : Integer.parseInt(String.valueOf(body.get("is_enabled")));
         if (!name.isEmpty()) {
-            jdbc.update("UPDATE sys_code_dict SET dict_name = ? WHERE dict_id = ?", name, id);
+            jdbc.update("UPDATE sys_dict_item SET item_name = ? WHERE dict_id = ?", name, id);
         }
         if (body.containsKey("remark")) {
-            jdbc.update("UPDATE sys_code_dict SET remark = ? WHERE dict_id = ?", remark, id);
+            String ver = (remark == null || remark.isEmpty()) ? "2026" : (remark.length() > 40 ? remark.substring(0, 40) : remark);
+            jdbc.update("UPDATE sys_dict_item SET version = ? WHERE dict_id = ?", ver, id);
         }
         if (enabled != null) {
             if (enabled != 0 && enabled != 1) {
                 throw BizException.unprocessable("INVALID_ENABLED", "启用状态参数无效");
             }
-            jdbc.update("UPDATE sys_code_dict SET is_enabled = ? WHERE dict_id = ?", enabled, id);
+            jdbc.update("UPDATE sys_dict_item SET item_status = ? WHERE dict_id = ?", enabled == 1 ? "01" : "02", id);
         }
         return Map.of("dict_id", id, "message", "编码已更新");
     }

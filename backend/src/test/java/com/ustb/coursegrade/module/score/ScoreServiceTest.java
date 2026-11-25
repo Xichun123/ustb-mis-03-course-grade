@@ -40,10 +40,14 @@ class ScoreServiceTest {
         jdbc = new JdbcTemplate(ds);
 
         for (String ddl : List.of(
-                "CREATE TABLE student(student_id VARCHAR(20) PRIMARY KEY,student_name VARCHAR(50),grade INT,degree_level VARCHAR(20),class_name VARCHAR(50),major_id VARCHAR(6),college_id VARCHAR(4))",
+                "CREATE TABLE org_organization(org_id VARCHAR(6) PRIMARY KEY,org_name VARCHAR(100),college_id VARCHAR(4))",
+                "CREATE TABLE sys_person(person_id VARCHAR(20) PRIMARY KEY,person_name VARCHAR(100))",
+                "CREATE TABLE aca_class(class_id VARCHAR(10) PRIMARY KEY,class_name VARCHAR(50))",
+                "CREATE TABLE std_student(student_id VARCHAR(20) PRIMARY KEY,person_id VARCHAR(20),class_id VARCHAR(10),major_id VARCHAR(6),org_id VARCHAR(6),grade VARCHAR(40),student_type VARCHAR(2),student_status VARCHAR(2))",
                 "CREATE TABLE v_exchange_student(temp_student_no VARCHAR(20),student_name VARCHAR(50),sender_school_name VARCHAR(100))",
-                "CREATE TABLE course(course_id VARCHAR(10) PRIMARY KEY,course_name VARCHAR(100),course_type VARCHAR(2),credit DECIMAL(5,1),assess_type VARCHAR(2),open_college VARCHAR(10))",
-                "CREATE TABLE teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),teacher_id VARCHAR(10),class_ids VARCHAR(100))",
+                "CREATE TABLE aca_course(course_id VARCHAR(10) PRIMARY KEY,course_name VARCHAR(100),course_type VARCHAR(2),credit DECIMAL(5,1),org_id VARCHAR(6))",
+                "CREATE TABLE aca_course_id(course_id VARCHAR(10) PRIMARY KEY,assess_type VARCHAR(20),open_college VARCHAR(20))",
+                "CREATE TABLE aca_teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),emp_id VARCHAR(10),class_ids VARCHAR(100))",
                 "CREATE TABLE sel_lesson_class(tc_id VARCHAR(20) PRIMARY KEY,lesson_no VARCHAR(20))",
                 "CREATE TABLE sel_sc(sc_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),study_type INT DEFAULT 1,stu_level VARCHAR(20) DEFAULT '本科',stat_stage INT DEFAULT 1,select_status INT DEFAULT 1)",
                 "CREATE TABLE sel_score(score_id BIGINT AUTO_INCREMENT PRIMARY KEY,sc_id BIGINT,exam_type INT DEFAULT 1,exam_flag INT DEFAULT 0,score_type INT DEFAULT 1,usual_ratio DECIMAL(5,2),usual_score DECIMAL(5,2),exam_score DECIMAL(5,2),score_level VARCHAR(10),total_score DECIMAL(5,2),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,score_status INT DEFAULT 0,input_teacher_id VARCHAR(10),submitted_at TIMESTAMP,published_at TIMESTAMP)",
@@ -51,30 +55,35 @@ class ScoreServiceTest {
                 "CREATE TABLE sel_exchange_score_convert(convert_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),exchange_apply_id VARCHAR(50),term VARCHAR(11),stat_stage INT DEFAULT 1,host_school VARCHAR(200),ext_course_code VARCHAR(30),ext_course_name VARCHAR(100),ext_credit DECIMAL(5,1),ext_score_raw VARCHAR(20),ext_scale_type INT DEFAULT 1,course_id VARCHAR(10),score_type INT DEFAULT 1,converted_score DECIMAL(5,2),converted_level VARCHAR(20),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,proof_no VARCHAR(50),version_no INT DEFAULT 1,audit_status INT DEFAULT 0,submitted_at TIMESTAMP,college_auditor_id VARCHAR(10),college_audit_opinion VARCHAR(200),college_audit_time TIMESTAMP,school_auditor_id VARCHAR(10),school_audit_opinion VARCHAR(200),school_audit_time TIMESTAMP)",
                 "CREATE TABLE sel_stu_gpa(student_id VARCHAR(20) PRIMARY KEY,earned_credit DECIMAL(5,1),failed_credit DECIMAL(5,1),gpa DECIMAL(5,2),avg_score DECIMAL(5,2),major_rank INT,major_rank_total INT,updated_at TIMESTAMP)",
                 "CREATE TABLE sel_stu_term_gpa(student_id VARCHAR(20),term VARCHAR(11),term_credit DECIMAL(5,1),term_failed_credit DECIMAL(5,1),updated_at TIMESTAMP,PRIMARY KEY(student_id,term))",
-                "CREATE TABLE sys_code_dict(dict_id INT AUTO_INCREMENT PRIMARY KEY,dict_group VARCHAR(40),dict_code VARCHAR(40),dict_name VARCHAR(100),is_enabled INT DEFAULT 1)"
+                "CREATE TABLE sys_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),item_status VARCHAR(2) DEFAULT '01')"
         )) {
             jdbc.execute(ddl);
         }
 
-        jdbc.update("INSERT INTO sys_code_dict(dict_group,dict_code,dict_name,is_enabled) VALUES('system_param','usual_ratio_min','30',1)");
-        jdbc.update("INSERT INTO student VALUES('S001','张三',2024,'本科','信管241','120102','0001')");
-        jdbc.update("INSERT INTO student VALUES('S002','李四',2024,'本科','信管241','120102','0001')");
+        jdbc.update("INSERT INTO sys_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','usual_ratio_min','30','01')");
+        jdbc.update("INSERT INTO org_organization VALUES('ORG001','经济管理学院','0001')");
+        jdbc.update("INSERT INTO org_organization VALUES('ORG002','计通学院','0002')");
+        jdbc.update("INSERT INTO aca_class VALUES('CLS241','信管241')");
+        jdbc.update("INSERT INTO sys_person VALUES('P_S001','张三'),('P_S002','李四')");
+        jdbc.update("INSERT INTO std_student VALUES('S001','P_S001','CLS241','120102','ORG001','2024','01','01')");
+        jdbc.update("INSERT INTO std_student VALUES('S002','P_S002','CLS241','120102','ORG001','2024','01','01')");
 
-        jdbc.update("INSERT INTO course VALUES('C11','大学英语','11',2.0,'1','0001')");
-        jdbc.update("INSERT INTO course VALUES('C12','管理信息系统','12',3.0,'1','0001')");
-        jdbc.update("INSERT INTO course VALUES('C13','数据结构','13',3.5,'1','0001')");
-        jdbc.update("INSERT INTO course VALUES('C14','Java企业级开发','14',2.5,'1','0002')");
-        jdbc.update("INSERT INTO course VALUES('C15','音乐鉴赏','15',2.0,'1','0001')");
-        jdbc.update("INSERT INTO course VALUES('C16','信息系统实训','16',2.0,'2','0001')");
+        jdbc.update("INSERT INTO aca_course VALUES('C11','大学英语','11',2.0,'ORG001')");
+        jdbc.update("INSERT INTO aca_course VALUES('C12','管理信息系统','12',3.0,'ORG001')");
+        jdbc.update("INSERT INTO aca_course VALUES('C13','数据结构','13',3.5,'ORG001')");
+        jdbc.update("INSERT INTO aca_course VALUES('C14','Java企业级开发','14',2.5,'ORG002')");
+        jdbc.update("INSERT INTO aca_course VALUES('C15','音乐鉴赏','15',2.0,'ORG001')");
+        jdbc.update("INSERT INTO aca_course VALUES('C16','信息系统实训','16',2.0,'ORG001')");
+        jdbc.update("INSERT INTO aca_course_id VALUES('C11','1','0001'),('C12','1','0001'),('C13','1','0001'),('C14','1','0002'),('C15','1','0001'),('C16','2','0001')");
 
         // 百分制课堂 KT1001（未录入）
-        jdbc.update("INSERT INTO teaching_class VALUES('TC1',?,'C12','T001','信管241')", TERM);
+        jdbc.update("INSERT INTO aca_teaching_class VALUES('TC1',?,'C12','E001','信管241')", TERM);
         jdbc.update("INSERT INTO sel_lesson_class VALUES('TC1','KT1001')");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S001','TC1',1,'本科',1,1)");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S002','TC1',1,'本科',1,1)");
 
         // 五级制考查课课堂 KT1002
-        jdbc.update("INSERT INTO teaching_class VALUES('TC2',?,'C16','T001','信管241')", TERM);
+        jdbc.update("INSERT INTO aca_teaching_class VALUES('TC2',?,'C16','E001','信管241')", TERM);
         jdbc.update("INSERT INTO sel_lesson_class VALUES('TC2','KT1002')");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S001','TC2',1,'本科',1,1)");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S002','TC2',1,'本科',1,1)");

@@ -37,7 +37,7 @@ public class CorrectionService {
         StringBuilder sql = new StringBuilder("""
                 SELECT CAST(s.score_id AS CHAR) AS score_id,
                        CAST(s.sc_id AS CHAR) AS sc_id,
-                       sc.student_id, st.student_name, tc.term, tc.tc_id,
+                       sc.student_id, COALESCE(p.person_name, sc.student_id) AS student_name, tc.term, tc.tc_id,
                        lc.lesson_no, c.course_id, c.course_name, c.credit,
                        s.exam_type, s.score_type, s.total_score, s.score_level,
                        s.grade_point, s.published_at AS publish_time,
@@ -45,24 +45,25 @@ public class CorrectionService {
                         WHERE cr.score_id = s.score_id AND cr.apply_status IN (0, 1)) AS pending_count
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
-                LEFT JOIN student st ON sc.student_id = st.student_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN std_student st ON sc.student_id = st.student_id
+                LEFT JOIN sys_person p ON st.person_id = p.person_id
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 WHERE s.score_status = 3
                 """);
         List<Object> params = new ArrayList<>();
         if (user.role() == RoleEnum.TEACHER) {
-            sql.append(" AND (s.input_teacher_id = ? OR tc.teacher_id = ?) ");
+            sql.append(" AND (s.input_teacher_id = ? OR tc.emp_id = ?) ");
             params.add(user.empId());
-            params.add(user.teacherCode8());
+            params.add(user.empId());
         }
         if (term != null && !term.isBlank()) {
             sql.append(" AND tc.term = ? ");
             params.add(term.trim());
         }
         if (keyword != null && !keyword.isBlank()) {
-            sql.append(" AND (sc.student_id LIKE ? OR st.student_name LIKE ? OR c.course_name LIKE ? OR lc.lesson_no LIKE ?) ");
+            sql.append(" AND (sc.student_id LIKE ? OR p.person_name LIKE ? OR c.course_name LIKE ? OR lc.lesson_no LIKE ?) ");
             String like = "%" + keyword.trim() + "%";
             params.add(like);
             params.add(like);
@@ -85,10 +86,10 @@ public class CorrectionService {
 
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT s.score_id, s.score_type, s.total_score, s.score_level, s.score_status,
-                       s.input_teacher_id, tc.teacher_id
+                       s.input_teacher_id, tc.emp_id
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                 WHERE s.score_id = ? FOR UPDATE
                 """, scoreId);
         if (rows.isEmpty()) {
@@ -97,7 +98,7 @@ public class CorrectionService {
         Map<String, Object> scoreRow = rows.get(0);
         if (user.role() == RoleEnum.TEACHER
                 && !Objects.equals(user.empId(), scoreRow.get("input_teacher_id"))
-                && !Objects.equals(user.teacherCode8(), scoreRow.get("teacher_id"))) {
+                && !Objects.equals(user.empId(), scoreRow.get("emp_id"))) {
             throw BizException.forbidden("仅任课教师本人可对本课堂已发布成绩发起更正申请");
         }
         if (((Number) scoreRow.get("score_status")).intValue() != 3) {
@@ -188,8 +189,8 @@ public class CorrectionService {
         StringBuilder sql = new StringBuilder("""
                 SELECT CAST(cr.apply_id AS CHAR) AS apply_id,
                        CAST(cr.score_id AS CHAR) AS score_id,
-                       sc.student_id, st.student_name, tc.term, tc.tc_id, lc.lesson_no,
-                       c.course_id, c.course_name, c.open_college, s.score_type,
+                       sc.student_id, COALESCE(p.person_name, sc.student_id) AS student_name, tc.term, tc.tc_id, lc.lesson_no,
+                       c.course_id, c.course_name, COALESCE(org.college_id, c.org_id) AS open_college, s.score_type,
                        cr.apply_teacher_id, emp.emp_name AS teacher_name,
                        cr.old_score, cr.new_score, cr.old_level, cr.new_level,
                        cr.apply_reason, cr.submitted_at AS apply_time, cr.apply_status,
@@ -198,11 +199,13 @@ public class CorrectionService {
                 FROM sel_score_correction cr
                 JOIN sel_score s ON cr.score_id = s.score_id
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
-                LEFT JOIN student st ON sc.student_id = st.student_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
+                LEFT JOIN std_student st ON sc.student_id = st.student_id
+                LEFT JOIN sys_person p ON st.person_id = p.person_id
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
-                LEFT JOIN t_employee emp ON cr.apply_teacher_id = emp.emp_id
+                LEFT JOIN hr_employee emp ON cr.apply_teacher_id = emp.emp_id
                 WHERE 1=1
                 """);
         List<Object> params = new ArrayList<>();
@@ -210,7 +213,7 @@ public class CorrectionService {
             sql.append(" AND cr.apply_teacher_id = ? ");
             params.add(user.empId());
         } else if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
-            sql.append(" AND c.open_college = ? ");
+            sql.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
             params.add(user.collegeId());
         }
         if (applyStatus != null) {
@@ -239,12 +242,14 @@ public class CorrectionService {
 
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT cr.*, s.score_type, s.total_score AS cur_score, s.score_level AS cur_level,
-                       sc.student_id, sc.stat_stage, tc.course_id, tc.term, c.open_college
+                       sc.student_id, sc.stat_stage, tc.course_id, tc.term,
+                       COALESCE(org.college_id, c.org_id) AS open_college
                 FROM sel_score_correction cr
                 JOIN sel_score s ON cr.score_id = s.score_id
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 WHERE cr.apply_id = ? FOR UPDATE
                 """, applyId);
         if (rows.isEmpty()) {
@@ -334,8 +339,8 @@ public class CorrectionService {
                 FROM sel_score_correction cr
                 JOIN sel_score s ON cr.score_id = s.score_id
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND cr.apply_status = 2
                 """);
         List<Object> params = new ArrayList<>();
@@ -377,7 +382,7 @@ public class CorrectionService {
                 SELECT s.score_id, s.total_score, s.grade_point, s.published_at
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND tc.course_id = ? AND s.score_status = 3
                 ORDER BY COALESCE(s.grade_point, 0) DESC, COALESCE(s.total_score, 0) DESC, s.published_at DESC, s.score_id DESC
                 """, studentId, statStage, courseId);
@@ -400,15 +405,15 @@ public class CorrectionService {
                 SELECT c.credit, s.score_type, s.total_score, s.score_level, s.grade_point
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
                   AND s.score_status = 3 AND s.is_final = 1
                 UNION ALL
                 SELECT c.credit, e.score_type, e.converted_score AS total_score,
                        e.converted_level AS score_level, e.grade_point
                 FROM sel_exchange_score_convert e
-                JOIN course c ON e.course_id = c.course_id
+                JOIN aca_course c ON e.course_id = c.course_id
                 WHERE e.student_id = ? AND e.stat_stage = ?
                   AND e.audit_status = 2 AND e.is_final = 1
                 """, studentId, statStage, studentId, statStage);
@@ -454,8 +459,8 @@ public class CorrectionService {
                 SELECT tc.course_id, MAX(c.credit) AS credit, MAX(COALESCE(s.grade_point, 0)) AS best_gp
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
                   AND tc.term = ? AND s.score_status = 3
                 GROUP BY tc.course_id
@@ -482,14 +487,14 @@ public class CorrectionService {
 
         // 同步刷新同专业同年级排名（同分并列跳号）
         List<Map<String, Object>> stuMeta = jdbc.queryForList(
-                "SELECT major_id, grade FROM student WHERE student_id = ?", studentId);
+                "SELECT major_id, grade FROM std_student WHERE student_id = ?", studentId);
         if (!stuMeta.isEmpty() && stuMeta.get(0).get("major_id") != null && stuMeta.get(0).get("grade") != null) {
             String majorId = String.valueOf(stuMeta.get(0).get("major_id"));
-            Object grade = stuMeta.get(0).get("grade");
+            String grade = String.valueOf(stuMeta.get(0).get("grade"));
             List<Map<String, Object>> peers = jdbc.queryForList("""
                     SELECT g.student_id, g.avg_score
                     FROM sel_stu_gpa g
-                    JOIN student st ON g.student_id = st.student_id
+                    JOIN std_student st ON g.student_id = st.student_id
                     WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NOT NULL
                     ORDER BY g.avg_score DESC, g.student_id ASC
                     """, majorId, grade);

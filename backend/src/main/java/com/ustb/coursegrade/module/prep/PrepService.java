@@ -42,10 +42,10 @@ public class PrepService {
 
         CurrentUser user = UserContext.requireUser();
         if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
-            where.append(" AND c.open_college = ? ");
+            where.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
             params.add(user.collegeId());
         } else if (collegeId != null && !collegeId.isBlank()) {
-            where.append(" AND c.open_college = ? ");
+            where.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
             params.add(collegeId.trim());
         }
 
@@ -65,7 +65,12 @@ public class PrepService {
             params.add(like);
         }
 
-        String countSql = "SELECT COUNT(*) FROM teaching_class tc JOIN course c ON tc.course_id = c.course_id " + where;
+        String countSql = """
+                SELECT COUNT(*)
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
+                """ + where;
         Long total = jdbc.queryForObject(countSql, Long.class, params.toArray());
         if (total == null) {
             total = 0L;
@@ -78,12 +83,14 @@ public class PrepService {
 
         String dataSql = """
                 SELECT tc.tc_id, tc.term, tc.course_id, c.course_name, c.course_type, c.credit,
-                       c.open_college, tc.teacher_id, tc.class_ids, tc.capacity, tc.actual_num,
+                       COALESCE(org.college_id, c.org_id) AS open_college,
+                       tc.emp_id AS teacher_id, tc.emp_id, tc.class_ids, tc.capacity, tc.actual_num,
                        tc.tc_type, tc.tc_status,
                        (SELECT COUNT(*) FROM sel_select_limit sl WHERE sl.tc_id = tc.tc_id) AS limit_count,
                        (SELECT lc.lesson_no FROM sel_lesson_class lc WHERE lc.tc_id = tc.tc_id LIMIT 1) AS lesson_no
-                FROM teaching_class tc
-                JOIN course c ON tc.course_id = c.course_id
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 """ + where + " ORDER BY tc.term DESC, tc.tc_id ASC LIMIT ? OFFSET ?";
 
         List<Map<String, Object>> items = jdbc.queryForList(dataSql, dataParams.toArray());
@@ -96,10 +103,12 @@ public class PrepService {
                 RoleEnum.ACADEMIC_OFFICE, RoleEnum.ACADEMIC_DIRECTOR, RoleEnum.SYS_ADMIN);
 
         List<Map<String, Object>> tcRows = jdbc.queryForList("""
-                SELECT tc.tc_id, tc.term, tc.course_id, c.course_name, c.open_college,
+                SELECT tc.tc_id, tc.term, tc.course_id, c.course_name,
+                       COALESCE(org.college_id, c.org_id) AS open_college,
                        tc.class_ids, tc.tc_type, tc.tc_status
-                FROM teaching_class tc
-                JOIN course c ON tc.course_id = c.course_id
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 WHERE tc.tc_id = ?
                 """, tcId);
         if (tcRows.isEmpty()) {
@@ -137,8 +146,10 @@ public class PrepService {
                 RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
 
         List<Map<String, Object>> tcRows = jdbc.queryForList("""
-                SELECT tc.tc_id, c.open_college
-                FROM teaching_class tc JOIN course c ON tc.course_id = c.course_id
+                SELECT tc.tc_id, COALESCE(org.college_id, c.org_id) AS open_college
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 WHERE tc.tc_id = ? FOR UPDATE
                 """, tcId);
         if (tcRows.isEmpty()) {
@@ -244,10 +255,10 @@ public class PrepService {
         }
         List<Map<String, Object>> classes = jdbc.queryForList("""
                 SELECT rc.tc_id, tc.term, tc.course_id, c.course_name, c.credit,
-                       tc.teacher_id, tc.capacity, tc.actual_num, tc.tc_type, tc.tc_status
+                       tc.emp_id AS teacher_id, tc.emp_id, tc.capacity, tc.actual_num, tc.tc_type, tc.tc_status
                 FROM sel_round_class rc
-                JOIN teaching_class tc ON rc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON rc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 WHERE rc.round_id = ? ORDER BY rc.tc_id
                 """, roundId);
         round.put("classes", classes);
@@ -409,7 +420,7 @@ public class PrepService {
     private void verifyBoundClassesPublished(int roundId) {
         List<String> invalid = jdbc.queryForList("""
                 SELECT rc.tc_id FROM sel_round_class rc
-                JOIN teaching_class tc ON rc.tc_id = tc.tc_id
+                JOIN aca_teaching_class tc ON rc.tc_id = tc.tc_id
                 WHERE rc.round_id = ? AND tc.tc_status <> '4'
                 """, String.class, roundId);
         if (!invalid.isEmpty()) {
@@ -431,7 +442,7 @@ public class PrepService {
         }
         for (String tcId : uniqueIds) {
             List<Map<String, Object>> tcRows = jdbc.queryForList(
-                    "SELECT term, tc_status FROM teaching_class WHERE tc_id = ?", tcId);
+                    "SELECT term, tc_status FROM aca_teaching_class WHERE tc_id = ?", tcId);
             if (tcRows.isEmpty()) {
                 throw BizException.unprocessable("CLASS_NOT_FOUND", "教学班不存在: " + tcId);
             }

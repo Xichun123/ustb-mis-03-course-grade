@@ -37,7 +37,8 @@ public class ScoreService {
         CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
                 SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, tc.course_id, c.course_name, c.credit,
-                       c.open_college, GROUP_CONCAT(DISTINCT tc.class_ids ORDER BY tc.class_ids SEPARATOR '、') AS class_ids,
+                       COALESCE(org.college_id, c.org_id) AS open_college,
+                       GROUP_CONCAT(DISTINCT tc.class_ids ORDER BY tc.class_ids SEPARATOR '、') AS class_ids,
                        (SELECT COUNT(*) FROM sel_sc sc JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND sc.select_status = 1) AS student_count,
                        (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
@@ -47,15 +48,15 @@ public class ScoreService {
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 3) AS published_count
                 FROM sel_lesson_class lc
-                JOIN teaching_class tc ON lc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 WHERE 1=1
                 """);
         List<Object> args = new ArrayList<>();
         if (u.role() == RoleEnum.TEACHER) {
-            sql.append(" AND (TRIM(tc.teacher_id) = ? OR TRIM(tc.teacher_id) = ?) ");
+            sql.append(" AND TRIM(tc.emp_id) = ? ");
             args.add(u.empId());
-            args.add(u.teacherCode8() == null ? "" : u.teacherCode8());
         }
         if (term != null && !term.isBlank()) {
             sql.append(" AND tc.term = ? ");
@@ -67,7 +68,7 @@ public class ScoreService {
             args.add(like);
             args.add(like);
         }
-        sql.append(" GROUP BY lc.lesson_no, tc.term, tc.course_id, c.course_name, c.credit, c.open_college ");
+        sql.append(" GROUP BY lc.lesson_no, tc.term, tc.course_id, c.course_name, c.credit, COALESCE(org.college_id, c.org_id) ");
         sql.append(" ORDER BY tc.term DESC, lc.lesson_no ASC ");
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
@@ -82,14 +83,16 @@ public class ScoreService {
         List<String> tcIds = tcIds(head);
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT CAST(sc.sc_id AS CHAR) AS sc_id, sc.tc_id, sc.student_id,
-                       COALESCE(st.student_name, ex.student_name, sc.student_id) AS student_name,
-                       COALESCE(st.class_name, ex.sender_school_name, '交流生') AS class_name,
+                       COALESCE(p.person_name, ex.student_name, sc.student_id) AS student_name,
+                       COALESCE(cls.class_name, ex.sender_school_name, '交流生') AS class_name,
                        sc.study_type, sc.stu_level,
                        CAST(s.score_id AS CHAR) AS score_id,
                        s.usual_ratio, s.usual_score, s.exam_score, s.exam_flag, s.score_type,
                        s.score_level, s.total_score, s.grade_point, s.score_status
                 FROM sel_sc sc
-                LEFT JOIN student st ON sc.student_id = st.student_id
+                LEFT JOIN std_student st ON sc.student_id = st.student_id
+                LEFT JOIN sys_person p ON st.person_id = p.person_id
+                LEFT JOIN aca_class cls ON st.class_id = cls.class_id
                 LEFT JOIN v_exchange_student ex ON ex.temp_student_no = sc.student_id
                 LEFT JOIN sel_score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
                 WHERE sc.tc_id IN (%s) AND sc.select_status = 1
@@ -608,7 +611,8 @@ public class ScoreService {
     public List<Map<String, Object>> auditPending(String term) {
         CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
-                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, c.course_name, c.open_college,
+                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, c.course_name,
+                       COALESCE(org.college_id, c.org_id) AS open_college,
                        (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS wait_count,
@@ -616,22 +620,23 @@ public class ScoreService {
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1) AS submit_time
                 FROM sel_lesson_class lc
-                JOIN teaching_class tc ON lc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 WHERE EXISTS (SELECT 1 FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                                JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                                WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1)
                 """);
         List<Object> args = new ArrayList<>();
         if (u.role() == RoleEnum.COLLEGE_SECRETARY && u.collegeId() != null) {
-            sql.append(" AND c.open_college = ? ");
+            sql.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
             args.add(u.collegeId());
         }
         if (term != null && !term.isBlank()) {
             sql.append(" AND tc.term = ? ");
             args.add(term.trim());
         }
-        sql.append(" GROUP BY lc.lesson_no, tc.term, c.course_name, c.open_college ");
+        sql.append(" GROUP BY lc.lesson_no, tc.term, c.course_name, COALESCE(org.college_id, c.org_id) ");
         sql.append(" ORDER BY tc.term DESC, lc.lesson_no ");
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
@@ -707,8 +712,8 @@ public class ScoreService {
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2) AS ready_count
                 FROM sel_lesson_class lc
-                JOIN teaching_class tc ON lc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 WHERE EXISTS (SELECT 1 FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                                JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                                WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2)
@@ -768,7 +773,7 @@ public class ScoreService {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
                 SELECT CAST(e.convert_id AS CHAR) AS convert_id, e.student_id,
-                       COALESCE(st.student_name, e.student_id) AS student_name,
+                       COALESCE(p.person_name, e.student_id) AS student_name,
                        e.exchange_apply_id, e.term, e.stat_stage, e.host_school,
                        e.ext_course_code, e.ext_course_name, e.ext_credit, e.ext_score_raw, e.ext_scale_type,
                        e.course_id, COALESCE(c.course_name, e.course_id) AS course_name,
@@ -776,8 +781,9 @@ public class ScoreService {
                        e.is_final, e.proof_no, e.audit_status,
                        e.college_audit_opinion, e.school_audit_opinion, e.submitted_at AS apply_time
                 FROM sel_exchange_score_convert e
-                LEFT JOIN student st ON e.student_id = st.student_id
-                LEFT JOIN course c ON e.course_id = c.course_id
+                LEFT JOIN std_student st ON e.student_id = st.student_id
+                LEFT JOIN sys_person p ON st.person_id = p.person_id
+                LEFT JOIN aca_course c ON e.course_id = c.course_id
                 WHERE 1=1
                 """);
         List<Object> args = new ArrayList<>();
@@ -814,7 +820,7 @@ public class ScoreService {
         }
         boolean extRequired = Boolean.parseBoolean(String.valueOf(body.getOrDefault("ext_required", "false")));
         List<Map<String, Object>> target = jdbc.queryForList(
-                "SELECT course_id, course_name, course_type, credit FROM course WHERE course_id = ?", courseId);
+                "SELECT course_id, course_name, course_type, credit FROM aca_course WHERE course_id = ?", courseId);
         if (target.isEmpty()) {
             throw BizException.notFound("本校课程号不存在：" + courseId);
         }
@@ -981,17 +987,20 @@ public class ScoreService {
     public List<Map<String, Object>> listCourseCandidates(String keyword) {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
-                SELECT course_id, course_name, course_type, credit, open_college
-                FROM course WHERE 1=1
+                SELECT c.course_id, c.course_name, c.course_type, c.credit,
+                       COALESCE(org.college_id, c.org_id) AS open_college
+                FROM aca_course c
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
+                WHERE 1=1
                 """);
         List<Object> args = new ArrayList<>();
         if (keyword != null && !keyword.isBlank()) {
-            sql.append(" AND (course_name LIKE ? OR course_id LIKE ?) ");
+            sql.append(" AND (c.course_name LIKE ? OR c.course_id LIKE ?) ");
             String like = "%" + keyword.trim() + "%";
             args.add(like);
             args.add(like);
         }
-        sql.append(" ORDER BY course_type, course_id LIMIT 50");
+        sql.append(" ORDER BY c.course_type, c.course_id LIMIT 50");
         List<Map<String, Object>> list = jdbc.queryForList(sql.toString(), args.toArray());
         for (Map<String, Object> c : list) {
             String type = str(c.get("course_type"));
@@ -1027,7 +1036,7 @@ public class ScoreService {
                        s.published_at AS eff_time
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND tc.course_id = ? AND s.score_status = 3
                 UNION ALL
                 SELECT 'EXCHANGE' AS src, e.convert_id AS rec_id,
@@ -1056,7 +1065,7 @@ public class ScoreService {
 
     /** 同事务刷新 sel_stu_gpa、sel_stu_term_gpa 与同专业同年级排名（严格排除 sel_sc.study_type=3 辅修） */
     private void recomputeAcademicStats(String studentId, int statStage, String term) {
-        Integer stuExists = jdbc.queryForObject("SELECT COUNT(*) FROM student WHERE student_id = ?", Integer.class, studentId);
+        Integer stuExists = jdbc.queryForObject("SELECT COUNT(*) FROM std_student WHERE student_id = ?", Integer.class, studentId);
         if (stuExists == null || stuExists == 0) {
             return;
         }
@@ -1064,15 +1073,15 @@ public class ScoreService {
                 SELECT c.credit, s.score_type, s.total_score, s.score_level, s.grade_point
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
                   AND s.score_status = 3 AND s.is_final = 1
                 UNION ALL
                 SELECT c.credit, e.score_type, e.converted_score AS total_score,
                        e.converted_level AS score_level, e.grade_point
                 FROM sel_exchange_score_convert e
-                JOIN course c ON e.course_id = c.course_id
+                JOIN aca_course c ON e.course_id = c.course_id
                 WHERE e.student_id = ? AND e.stat_stage = ?
                   AND e.audit_status = 2 AND e.is_final = 1
                 """, studentId, statStage, studentId, statStage);
@@ -1112,13 +1121,13 @@ public class ScoreService {
                 SELECT course_id, MAX(credit) AS credit, MAX(gp) AS best_gp FROM (
                   SELECT tc.course_id, c.credit, COALESCE(s.grade_point, 0) AS gp
                   FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                  JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                  JOIN course c ON tc.course_id = c.course_id
+                  JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                  JOIN aca_course c ON tc.course_id = c.course_id
                   WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
                     AND tc.term = ? AND s.score_status = 3
                   UNION ALL
                   SELECT e.course_id, c.credit, COALESCE(e.grade_point, 0) AS gp
-                  FROM sel_exchange_score_convert e JOIN course c ON e.course_id = c.course_id
+                  FROM sel_exchange_score_convert e JOIN aca_course c ON e.course_id = c.course_id
                   WHERE e.student_id = ? AND e.stat_stage = ? AND e.term = ? AND e.audit_status = 2
                 ) t GROUP BY course_id
                 """, studentId, statStage, term, studentId, statStage, term);
@@ -1141,13 +1150,13 @@ public class ScoreService {
                 """, studentId, term, termEarned, termFailed);
 
         List<Map<String, Object>> stuMeta = jdbc.queryForList(
-                "SELECT major_id, grade FROM student WHERE student_id = ?", studentId);
+                "SELECT major_id, grade FROM std_student WHERE student_id = ?", studentId);
         if (!stuMeta.isEmpty() && stuMeta.get(0).get("major_id") != null && stuMeta.get(0).get("grade") != null) {
             String majorId = String.valueOf(stuMeta.get(0).get("major_id"));
-            Object grade = stuMeta.get(0).get("grade");
+            String grade = String.valueOf(stuMeta.get(0).get("grade"));
             List<Map<String, Object>> peers = jdbc.queryForList("""
                     SELECT g.student_id, g.avg_score
-                    FROM sel_stu_gpa g JOIN student st ON g.student_id = st.student_id
+                    FROM sel_stu_gpa g JOIN std_student st ON g.student_id = st.student_id
                     WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NOT NULL
                     ORDER BY g.avg_score DESC, g.student_id ASC
                     """, majorId, grade);
@@ -1232,7 +1241,7 @@ public class ScoreService {
     @SuppressWarnings("unchecked")
     private static boolean owns(Map<String, Object> head, CurrentUser u) {
         return ((List<String>) head.get("teacher_ids")).stream()
-                .anyMatch(t -> t.equals(u.empId()) || t.equals(u.teacherCode8()));
+                .anyMatch(t -> t.equals(u.empId()));
     }
 
     private static int defaultScoreType(Map<String, Object> head) {
@@ -1242,10 +1251,14 @@ public class ScoreService {
     private Map<String, Object> requireClass(String lessonNo) {
         List<Map<String, Object>> list = jdbc.queryForList("""
                 SELECT lc.lesson_no, lc.tc_id, tc.term, tc.course_id, c.course_name, c.credit,
-                       c.open_college, c.assess_type, tc.teacher_id, tc.class_ids
+                       COALESCE(org.college_id, c.org_id) AS open_college,
+                       COALESCE(ci.assess_type, '1') AS assess_type,
+                       tc.emp_id AS teacher_id, tc.emp_id, tc.class_ids
                 FROM sel_lesson_class lc
-                JOIN teaching_class tc ON lc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
+                LEFT JOIN aca_course_id ci ON c.course_id = ci.course_id
                 WHERE lc.lesson_no = ?
                 ORDER BY lc.tc_id
                 """, lessonNo);
@@ -1257,7 +1270,7 @@ public class ScoreService {
         List<String> teachers = new ArrayList<>();
         for (Map<String, Object> r : list) {
             ids.add(String.valueOf(r.get("tc_id")));
-            teachers.add(String.valueOf(r.get("teacher_id")).trim());
+            teachers.add(String.valueOf(r.get("emp_id")).trim());
         }
         head.put("tc_ids", ids);
         head.put("teacher_ids", teachers);
@@ -1266,10 +1279,10 @@ public class ScoreService {
 
     private int ratioMin() {
         List<String> vals = jdbc.queryForList("""
-                SELECT dict_name FROM sys_code_dict
-                 WHERE is_enabled = 1
-                   AND ((dict_group = 'system_param' AND dict_code = 'usual_ratio_min')
-                        OR dict_group = 'usual_ratio_min')
+                SELECT item_name FROM sys_dict_item
+                 WHERE item_status IN ('01', '1')
+                   AND ((dict_type = 'system_param' AND item_code = 'usual_ratio_min')
+                        OR dict_type = 'usual_ratio_min')
                  ORDER BY dict_id LIMIT 1
                 """, String.class);
         if (vals.isEmpty()) {

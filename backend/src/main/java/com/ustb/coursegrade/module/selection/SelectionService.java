@@ -40,14 +40,17 @@ public class SelectionService {
         CurrentUser user=UserContext.requireUser();
         List<Map<String,Object>> rounds=jdbc.queryForList("SELECT r.*,r.start_at AS start_time,r.end_at AS end_time,r.approved_at AS approve_time,r.published_at AS publish_time FROM sel_select_round r WHERE r.round_status IN (2,3,4) ORDER BY r.start_at DESC,r.round_id DESC");
         for(var r:rounds)r.put("window_open",open(r));
-        return Map.of("user",user,"rounds",rounds,"terms",jdbc.queryForList("SELECT DISTINCT term FROM teaching_class WHERE term IS NOT NULL ORDER BY term DESC",String.class),"server_time",now(),"stop_write_enabled",false,"course_types",CourseType.options());
+        return Map.of("user",user,"rounds",rounds,"terms",jdbc.queryForList("SELECT DISTINCT term FROM aca_teaching_class WHERE term IS NOT NULL ORDER BY term DESC",String.class),"server_time",now(),"stop_write_enabled",false,"course_types",CourseType.options());
     }
     public Map<String,Object> courses(int roundId,String keyword,int page,int size,CourseType filter){
         CurrentUser u=UserContext.requireRole(RoleEnum.STUDENT);var round=visibleRound(roundId);student(u.studentId(),text(round,"term"),false);
         List<Map<String,Object>> classes=jdbc.queryForList("""
-          SELECT tc.*,c.course_name,c.course_type,c.credit,c.course_level,c.open_college,
+          SELECT tc.*,tc.emp_id AS teacher_id,c.course_name,c.course_type,c.credit,
+                 CASE WHEN EXISTS (SELECT 1 FROM grad_scheme_course gsc WHERE gsc.course_id=c.course_id) THEN 2 ELSE 1 END AS course_level,
+                 COALESCE(org.college_id,c.org_id) AS open_college,
                  sc.sc_id,sc.select_status,sc.study_type,sc.priority,sc.select_time,sc.round_id AS original_round_id
-          FROM sel_round_class rc JOIN teaching_class tc ON tc.tc_id=rc.tc_id JOIN course c ON c.course_id=tc.course_id
+          FROM sel_round_class rc JOIN aca_teaching_class tc ON tc.tc_id=rc.tc_id JOIN aca_course c ON c.course_id=tc.course_id
+          LEFT JOIN org_organization org ON org.org_id=c.org_id
           LEFT JOIN sel_sc sc ON sc.tc_id=tc.tc_id AND sc.student_id=?
           WHERE rc.round_id=? AND tc.term=? AND tc.tc_status='4' AND (c.course_id LIKE ? OR c.course_name LIKE ?)
           ORDER BY c.course_id,tc.tc_id
@@ -124,8 +127,8 @@ public class SelectionService {
     public Map<String,Object> results(String term){
         CurrentUser u=UserContext.requireRole(RoleEnum.STUDENT);
         var rows=jdbc.queryForList("""
-          SELECT sc.*,tc.term,tc.teacher_id,tc.capacity,tc.tc_status,c.course_id,c.course_name,c.course_type,c.credit
-          FROM sel_sc sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id JOIN course c ON c.course_id=tc.course_id
+          SELECT sc.*,tc.term,tc.emp_id AS teacher_id,tc.emp_id,tc.capacity,tc.tc_status,c.course_id,c.course_name,c.course_type,c.credit
+          FROM sel_sc sc JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id JOIN aca_course c ON c.course_id=tc.course_id
           WHERE sc.student_id=? AND tc.term=? ORDER BY sc.select_time DESC,sc.sc_id DESC
           """,u.studentId(),term);
         for(var row:rows){row.put("version",version(row));row.put("schedule",schedule(text(row,"tc_id")));
@@ -179,16 +182,20 @@ public class SelectionService {
         return receipt(relation(u.studentId(),text(tc,"tc_id"),false),"退选成功");
     }
     public List<Map<String,Object>> teachingClasses(String term){
-        var u=staff();String extra=u.role()==RoleEnum.TEACHER?" AND tc.teacher_id=?":"";List<Object> args=new ArrayList<>();args.add(term);if(u.role()==RoleEnum.TEACHER)args.add(teacherCode(u));
-        return jdbc.queryForList("SELECT tc.*,c.course_name,c.credit FROM teaching_class tc JOIN course c ON c.course_id=tc.course_id WHERE tc.term=?"+extra+" ORDER BY tc.tc_id",args.toArray());
+        var u=staff();String extra=u.role()==RoleEnum.TEACHER?" AND tc.emp_id=?":"";List<Object> args=new ArrayList<>();args.add(term);if(u.role()==RoleEnum.TEACHER)args.add(teacherEmpId(u));
+        return jdbc.queryForList("SELECT tc.*,tc.emp_id AS teacher_id,c.course_name,c.credit FROM aca_teaching_class tc JOIN aca_course c ON c.course_id=tc.course_id WHERE tc.term=?"+extra+" ORDER BY tc.tc_id",args.toArray());
     }
     public Map<String,Object> roster(String tcId,String keyword){
         var tc=teachingClass(tcId,false);authorizeClass(staff(),tc);
         var rows=jdbc.queryForList("""
-          SELECT sc.sc_id,sc.student_id,COALESCE(s.student_name,ex.student_name) AS student_name,s.class_name,
+          SELECT sc.sc_id,sc.student_id,COALESCE(p.person_name,ex.student_name) AS student_name,cls.class_name,
                  sc.study_type,sc.is_exempt_attend,sc.select_status
-          FROM sel_sc sc LEFT JOIN student s ON s.student_id=sc.student_id LEFT JOIN v_exchange_student ex ON ex.temp_student_no=sc.student_id
-          WHERE sc.tc_id=? AND sc.select_status=1 AND (sc.student_id LIKE ? OR COALESCE(s.student_name,ex.student_name) LIKE ?) ORDER BY sc.student_id
+          FROM sel_sc sc
+          LEFT JOIN std_student s ON s.student_id=sc.student_id
+          LEFT JOIN sys_person p ON p.person_id=s.person_id
+          LEFT JOIN aca_class cls ON cls.class_id=s.class_id
+          LEFT JOIN v_exchange_student ex ON ex.temp_student_no=sc.student_id
+          WHERE sc.tc_id=? AND sc.select_status=1 AND (sc.student_id LIKE ? OR COALESCE(p.person_name,ex.student_name) LIKE ?) ORDER BY sc.student_id
           """,tcId,"%"+keyword+"%","%"+keyword+"%");
         for(var row:rows)row.put("sc_id",stringId(row.get("sc_id")));tc.put("schedule",schedule(tcId));tc.put("actual_num",count(tcId));
         return Map.of("teaching_class",tc,"items",rows,"total",rows.size(),"effective_count",count(tcId));
@@ -240,7 +247,7 @@ public class SelectionService {
     }
     public Map<String,Object> stopPreview(String term){
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE);
-        return Map.of("write_enabled",false,"reason","停开状态与日志编码尚未由全组确认，仅预览，不执行失效写入","items",jdbc.queryForList("SELECT tc.tc_id,c.course_name,tc.tc_status,COUNT(sc.sc_id) AS affected_count FROM teaching_class tc JOIN course c ON c.course_id=tc.course_id LEFT JOIN sel_sc sc ON sc.tc_id=tc.tc_id AND sc.select_status IN (0,1) WHERE tc.term=? AND tc.tc_status IN ('2','5') GROUP BY tc.tc_id,c.course_name,tc.tc_status ORDER BY tc.tc_id",term));
+        return Map.of("write_enabled",false,"reason","停开状态与日志编码尚未由全组确认，仅预览，不执行失效写入","items",jdbc.queryForList("SELECT tc.tc_id,c.course_name,tc.tc_status,COUNT(sc.sc_id) AS affected_count FROM aca_teaching_class tc JOIN aca_course c ON c.course_id=tc.course_id LEFT JOIN sel_sc sc ON sc.tc_id=tc.tc_id AND sc.select_status IN (0,1) WHERE tc.term=? AND tc.tc_status IN ('2','5') GROUP BY tc.tc_id,c.course_name,tc.tc_status ORDER BY tc.tc_id",term));
     }
 
     private int validate(Application r,Map<String,Object> round,Map<String,Object> s,Map<String,Object> tc,boolean screening){
@@ -257,19 +264,33 @@ public class SelectionService {
         }
         if("1".equals(text(tc,"tc_type")) && !retake){String names=text(tc,"class_ids");if(names.isBlank() || s.get("class_name")==null)throw pending("必修班面向班级资料缺失");if(!Arrays.stream(names.split("[,，]",-1)).map(String::trim).toList().contains(text(s,"class_name")))throw invalid("不在必修班面向班级范围内");}
         if(r.studyType()==3 && !"3".equals(text(tc,"tc_type")))throw invalid("辅修须选择已认定的双学位教学班");
-        if(level==2){var schemes=jdbc.queryForList("SELECT * FROM scheme_assignment WHERE student_id=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)",id,now().toLocalDate(),now().toLocalDate());if(schemes.size()!=1)throw pending("研究生有效培养方案缺失或不唯一");var scheme=schemes.get(0);if(jdbc.queryForObject("SELECT COUNT(*) FROM scheme_course WHERE scheme_id=? AND course_id=? AND (direction_id IS NULL OR direction_id=?)",Integer.class,scheme.get("scheme_id"),tc.get("course_id"),scheme.get("direction_id"))==0)throw invalid("课程不在有效培养方案及研究方向内");}
-        if(jdbc.queryForObject("SELECT COUNT(*) FROM sel_sc sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.term=? AND tc.course_id=? AND sc.tc_id<>? AND sc.select_status IN (0,1)",Integer.class,id,round.get("term"),tc.get("course_id"),tcId)>0)throw invalid("同学期不能重复选修同课的不同教学班");
-        if(retake && jdbc.queryForObject("SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON sc.sc_id=s.sc_id JOIN teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.course_id=? AND s.score_status=3 AND (s.total_score<60 OR s.score_level IN ('不及格','不合格'))",Integer.class,id,tc.get("course_id"))==0)throw invalid("没有该课程已发布的不及格记录，无法认定重修资格");
-        var occupied=jdbc.queryForList("SELECT sc.tc_id,sc.is_exempt_attend,c.credit,c.course_name FROM sel_sc sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id JOIN course c ON c.course_id=tc.course_id WHERE sc.student_id=? AND tc.term=? AND sc.tc_id<>? AND (sc.select_status=1 OR (sc.select_status=0 AND sc.round_id=? AND ?=0))",id,round.get("term"),tcId,r.roundId(),screening?1:0);
+        if(level==2){var schemes=jdbc.queryForList("SELECT * FROM grad_scheme_assignment WHERE student_id=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>=?)",id,now().toLocalDate(),now().toLocalDate());if(schemes.size()!=1)throw pending("研究生有效培养方案缺失或不唯一");var scheme=schemes.get(0);if(jdbc.queryForObject("SELECT COUNT(*) FROM grad_scheme_course WHERE scheme_id=? AND course_id=? AND (direction_id IS NULL OR direction_id=?)",Integer.class,scheme.get("scheme_id"),tc.get("course_id"),scheme.get("direction_id"))==0)throw invalid("课程不在有效培养方案及研究方向内");}
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM sel_sc sc JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.term=? AND tc.course_id=? AND sc.tc_id<>? AND sc.select_status IN (0,1)",Integer.class,id,round.get("term"),tc.get("course_id"),tcId)>0)throw invalid("同学期不能重复选修同课的不同教学班");
+        if(retake && jdbc.queryForObject("SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON sc.sc_id=s.sc_id JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.course_id=? AND s.score_status=3 AND (s.total_score<60 OR s.score_level IN ('不及格','不合格'))",Integer.class,id,tc.get("course_id"))==0)throw invalid("没有该课程已发布的不及格记录，无法认定重修资格");
+        var occupied=jdbc.queryForList("SELECT sc.tc_id,sc.is_exempt_attend,c.credit,c.course_name FROM sel_sc sc JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id JOIN aca_course c ON c.course_id=tc.course_id WHERE sc.student_id=? AND tc.term=? AND sc.tc_id<>? AND (sc.select_status=1 OR (sc.select_status=0 AND sc.round_id=? AND ?=0))",id,round.get("term"),tcId,r.roundId(),screening?1:0);
         BigDecimal used=credit(tc.get("credit"));var targetSchedule=schedule(tcId);if(targetSchedule.isEmpty())throw pending("目标教学班尚无完整排课");targetSchedule.forEach(SelectionRules::validateSchedule);int exempt=0;
         for(var other:occupied){used=used.add(credit(other.get("credit")));if(number(other.get("is_exempt_attend"))==1)continue;var otherSchedule=schedule(text(other,"tc_id"));if(otherSchedule.isEmpty())throw pending("已选课程排课缺失");for(var a:targetSchedule)for(var b:otherSchedule)if(overlaps(a,b)){if(retake && number(round.get("retake_ignore_conflict"))==1)exempt=1;else throw invalid("上课时间冲突：《"+text(other,"course_name")+"》");}}
         if(used.compareTo(credit(round.get("max_credit")))>0)throw invalid("超过本轮学分上限，占用学分 "+used);
         if(!screening && mode==1 && count(tcId)>=number(tc.get("capacity")))throw invalid("教学班容量已满");return exempt;
     }
     private Map<String,Object> student(String id,String term,boolean lock){
-        if(id==null || id.isBlank() || id.length()>20)throw invalid("学号无效");var rows=jdbc.queryForList("SELECT * FROM student WHERE student_id=?"+(lock?" FOR UPDATE":""),id);
+        if(id==null || id.isBlank() || id.length()>20)throw invalid("学号无效");
+        if(lock)jdbc.queryForList("SELECT student_id FROM std_student WHERE student_id=? FOR UPDATE",id);
+        var rows=jdbc.queryForList("""
+          SELECT s.student_id,p.person_name AS student_name,s.grade,s.enrollment_year,
+                 s.student_type,s.student_status,s.major_id,s.org_id,
+                 COALESCE(org.college_id,s.org_id) AS college_id,
+                 cls.class_name,
+                 CASE s.student_type WHEN '01' THEN '本科' WHEN '02' THEN '研究生' WHEN '03' THEN '研究生' WHEN '04' THEN '交流生' ELSE s.student_type END AS degree_level,
+                 CASE WHEN s.student_status IN ('01','1','在籍') THEN '在籍' ELSE s.student_status END AS final_enroll
+          FROM std_student s
+          LEFT JOIN sys_person p ON p.person_id=s.person_id
+          LEFT JOIN aca_class cls ON cls.class_id=s.class_id
+          LEFT JOIN org_organization org ON org.org_id=s.org_id
+          WHERE s.student_id=?
+          """,id);
         if(rows.isEmpty()){
-            var incoming=jdbc.queryForList("SELECT * FROM v_exchange_student WHERE temp_student_no=?"+(lock?" FOR UPDATE":""),id);if(incoming.size()!=1)throw invalid("学生身份不存在");var ex=incoming.get(0);
+            var incoming=jdbc.queryForList("SELECT * FROM v_exchange_student WHERE temp_student_no=?",id);if(incoming.size()!=1)throw invalid("学生身份不存在");var ex=incoming.get(0);
             if(!"ACTIVE".equals(text(ex,"status_code")) || !term.equals(text(ex,"term_ref")) || now().toLocalDate().isBefore(date(ex.get("start_on"))) || now().toLocalDate().isAfter(date(ex.get("end_on"))))throw invalid("交换生未在本学期有效在读范围内");
             Map<String,Object> s=new LinkedHashMap<>();s.put("student_id",id);s.put("level",0);s.put("college_id",ex.get("college_ref"));s.put("major_id",ex.get("major_ref"));return s;
         }
@@ -281,17 +302,27 @@ public class SelectionService {
     private boolean open(Map<String,Object> r){return List.of(2,3).contains(number(r.get("round_status"))) && !now().isBefore(time(r,"start_at")) && now().isBefore(time(r,"end_at"));}
     private void requireWindow(Map<String,Object> r){if(!open(r))throw conflict("轮次尚未开始、已截止或不可办理");}
     private void requireMember(int round,String tc){if(jdbc.queryForObject("SELECT COUNT(*) FROM sel_round_class WHERE round_id=? AND tc_id=?",Integer.class,round,tc)==0)throw invalid("教学班不在本轮开放范围内");}
-    private Map<String,Object> teachingClass(String id,boolean lock){return one("SELECT tc.*,c.course_name,c.course_type,c.credit,c.course_level,c.open_college FROM teaching_class tc JOIN course c ON c.course_id=tc.course_id WHERE tc.tc_id=?"+(lock?" FOR UPDATE":""),id);}
-    private List<Map<String,Object>> schedule(String id){return jdbc.queryForList("SELECT week_range,week_day,start_slot,end_slot,room_id FROM schedule_result WHERE tc_id=? ORDER BY week_day,start_slot,week_range",id);}
+    private Map<String,Object> teachingClass(String id,boolean lock){
+        if(lock)jdbc.queryForList("SELECT tc_id FROM aca_teaching_class WHERE tc_id=? FOR UPDATE",id);
+        return one("""
+          SELECT tc.*,tc.emp_id AS teacher_id,c.course_name,c.course_type,c.credit,
+                 CASE WHEN EXISTS (SELECT 1 FROM grad_scheme_course gsc WHERE gsc.course_id=c.course_id) THEN 2 ELSE 1 END AS course_level,
+                 COALESCE(org.college_id,c.org_id) AS open_college
+          FROM aca_teaching_class tc JOIN aca_course c ON c.course_id=tc.course_id
+          LEFT JOIN org_organization org ON org.org_id=c.org_id
+          WHERE tc.tc_id=?
+          """,id);
+    }
+    private List<Map<String,Object>> schedule(String id){return jdbc.queryForList("SELECT week_range,week_day,start_slot,end_slot,room_id FROM aca_schedule_result WHERE tc_id=? ORDER BY week_day,start_slot,week_range",id);}
     private Map<String,Object> relation(String s,String tc,boolean lock){var rows=jdbc.queryForList("SELECT * FROM sel_sc WHERE student_id=? AND tc_id=?"+(lock?" FOR UPDATE":""),s,tc);return rows.isEmpty()?null:rows.get(0);}
     private int count(String tc){return jdbc.queryForObject("SELECT COUNT(*) FROM sel_sc WHERE tc_id=? AND select_status=1",Integer.class,tc);}
-    private void recount(String tc){jdbc.update("UPDATE teaching_class SET actual_num=? WHERE tc_id=?",count(tc),tc);}
+    private void recount(String tc){int c=count(tc);jdbc.update("UPDATE aca_teaching_class SET actual_num=?,selected_count=? WHERE tc_id=?",c,c,tc);}
     private void protect(Map<String,Object> r){if(jdbc.queryForObject("SELECT COUNT(*) FROM sel_score WHERE sc_id=?",Integer.class,r.get("sc_id"))>0 || jdbc.queryForObject("SELECT COUNT(*) FROM sel_teach_eval WHERE sc_id=?",Integer.class,r.get("sc_id"))>0)throw conflict("该记录已有成绩或评教，需由教务核实后续业务保护");}
     private void log(String s,String tc,int round,int type,String operator,String remark){if(operator==null || operator.isBlank())throw pending("操作人工号缺失");jdbc.update("INSERT INTO sel_select_log(student_id,tc_id,round_id,action_type,operator_id,operated_at,remark) VALUES(?,?,?,?,?,?,?)",s,tc,round,type,operator,now(),remark);}
-    private Map<String,Object> summary(String s,String term){return one("SELECT COUNT(*) AS courses,COALESCE(SUM(c.credit),0) AS credits FROM sel_sc sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id JOIN course c ON c.course_id=tc.course_id WHERE sc.student_id=? AND tc.term=? AND sc.select_status=1",s,term);}
+    private Map<String,Object> summary(String s,String term){return one("SELECT COUNT(*) AS courses,COALESCE(SUM(c.credit),0) AS credits FROM sel_sc sc JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id JOIN aca_course c ON c.course_id=tc.course_id WHERE sc.student_id=? AND tc.term=? AND sc.select_status=1",s,term);}
     private CurrentUser staff(){return UserContext.requireRole(RoleEnum.TEACHER,RoleEnum.ACADEMIC_OFFICE);}
-    private String teacherCode(CurrentUser u){var codes=jdbc.queryForList("SELECT dict_code FROM sys_code_dict WHERE dict_group='teacher_map' AND dict_name=? AND is_enabled=1",String.class,u.empId());if(codes.size()!=1)throw pending("教师工号映射缺失或不唯一");return codes.get(0);}
-    private void authorizeClass(CurrentUser u,Map<String,Object> tc){if(u.role()==RoleEnum.TEACHER && !teacherCode(u).equals(text(tc,"teacher_id")))throw BizException.forbidden("仅能操作本人授课教学班");}
+    private String teacherEmpId(CurrentUser u){if(u.empId()==null || u.empId().isBlank())throw pending("教师工号缺失");return u.empId().trim();}
+    private void authorizeClass(CurrentUser u,Map<String,Object> tc){if(u.role()==RoleEnum.TEACHER && !teacherEmpId(u).equals(text(tc,"emp_id")))throw BizException.forbidden("仅能操作本人授课教学班");}
     private Map<String,Object> one(String sql,Object...args){var rows=jdbc.queryForList(sql,args);if(rows.isEmpty())throw BizException.notFound("记录不存在");return rows.get(0);}
     private Map<String,Object> receipt(Map<String,Object> row,String message){var r=new LinkedHashMap<>(row);r.put("version",version(row));r.put("sc_id",stringId(row.get("sc_id")));r.put("message",message);r.put("actual_num",count(text(row,"tc_id")));return r;}
     private String version(Map<String,Object> r){

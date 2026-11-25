@@ -45,7 +45,7 @@ public class StatsService {
 
     public String getCurrentTerm() {
         List<String> rows = jdbc.queryForList(
-                "SELECT dict_name FROM sys_code_dict WHERE dict_group = 'system_param' AND dict_code = 'current_term' AND is_enabled = 1 LIMIT 1",
+                "SELECT item_name FROM sys_dict_item WHERE dict_type = 'system_param' AND item_code = 'current_term' AND item_status IN ('01', '1') LIMIT 1",
                 String.class);
         if (!rows.isEmpty() && rows.get(0) != null && !rows.get(0).isBlank()) {
             return rows.get(0).trim();
@@ -68,28 +68,25 @@ public class StatsService {
         }
     }
 
-    private String resolveTeacherCode8(CurrentUser user) {
-        if (user.teacherCode8() != null && !user.teacherCode8().isBlank()) {
-            return user.teacherCode8().trim();
-        }
+    private String resolveTeacherEmpId(CurrentUser user) {
         if (user.empId() != null && !user.empId().isBlank()) {
-            List<String> mapped = jdbc.queryForList(
-                    "SELECT dict_code FROM sys_code_dict WHERE dict_group = 'teacher_map' AND dict_name = ? AND is_enabled = 1 LIMIT 1",
-                    String.class, user.empId().trim());
-            if (!mapped.isEmpty()) {
-                return mapped.get(0).trim();
-            }
+            return user.empId().trim();
         }
-        throw BizException.forbidden("当前教师账号尚未绑定授课教学班信息，暂无法查询");
+        throw BizException.forbidden("当前教师账号尚未绑定教职工工号，暂无法查询");
     }
 
     private Map<String, Object> loadStudentProfile(String studentId) {
         List<Map<String, Object>> stuRows = jdbc.queryForList("""
-                SELECT s.student_id, s.student_name, s.grade, s.degree_level, s.class_name,
-                       s.major_id, s.college_id, s.final_enroll,
-                       cm.dict_name AS college_name
-                FROM student s
-                LEFT JOIN sys_code_dict cm ON cm.dict_group = 'college_map' AND cm.dict_code = s.college_id
+                SELECT s.student_id, p.person_name AS student_name, s.grade,
+                       CASE s.student_type WHEN '01' THEN '本科' WHEN '02' THEN '研究生' WHEN '03' THEN '研究生' WHEN '04' THEN '交流生' ELSE s.student_type END AS degree_level,
+                       cls.class_name, s.major_id,
+                       COALESCE(org.college_id, s.org_id) AS college_id,
+                       CASE WHEN s.student_status IN ('01', '1', '在籍') THEN '在籍' ELSE s.student_status END AS final_enroll,
+                       COALESCE(org.org_name, s.org_id) AS college_name
+                FROM std_student s
+                LEFT JOIN sys_person p ON s.person_id = p.person_id
+                LEFT JOIN aca_class cls ON s.class_id = cls.class_id
+                LEFT JOIN org_organization org ON s.org_id = org.org_id
                 WHERE s.student_id = ?
                 """, studentId);
         if (!stuRows.isEmpty()) {
@@ -104,9 +101,9 @@ public class StatsService {
                 SELECT e.temp_student_no AS student_id, e.student_name, e.sender_school_name,
                        e.term_ref, e.college_ref AS college_id, e.major_ref AS major_id,
                        e.start_on, e.end_on, e.status_code,
-                       cm.dict_name AS college_name
+                       org.org_name AS college_name
                 FROM v_exchange_student e
-                LEFT JOIN sys_code_dict cm ON cm.dict_group = 'college_map' AND cm.dict_code = e.college_ref
+                LEFT JOIN org_organization org ON org.college_id = e.college_ref
                 WHERE e.temp_student_no = ?
                 """, studentId);
         if (!exRows.isEmpty()) {
@@ -220,16 +217,15 @@ public class StatsService {
                 SELECT CAST(sc.sc_id AS CHAR) AS sc_id,
                        sc.tc_id, lc.lesson_no, tc.term,
                        c.course_id, c.course_name, c.credit, c.course_type,
-                       sc.study_type, tc.teacher_id,
-                       COALESCE(emp.emp_name, tc.teacher_id) AS teacher_name,
+                       sc.study_type, tc.emp_id AS teacher_id,
+                       COALESCE(emp.emp_name, tc.emp_id) AS teacher_name,
                        CASE WHEN te.sc_id IS NOT NULL THEN 1 ELSE 0 END AS evaluated,
                        te.eval_time
                 FROM sel_sc sc
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
-                LEFT JOIN sys_code_dict tm ON tm.dict_group = 'teacher_map' AND tm.dict_code = tc.teacher_id
-                LEFT JOIN t_employee emp ON emp.emp_id = tm.dict_name
+                LEFT JOIN hr_employee emp ON emp.emp_id = tc.emp_id
                 LEFT JOIN sel_teach_eval te ON sc.sc_id = te.sc_id
                 WHERE sc.student_id = ? AND tc.term = ? AND sc.select_status = 1
                 ORDER BY evaluated ASC, sc.sc_id ASC
@@ -284,7 +280,7 @@ public class StatsService {
         List<Map<String, Object>> scRows = jdbc.queryForList("""
                 SELECT sc.sc_id, sc.student_id, sc.tc_id, sc.select_status, tc.term
                 FROM sel_sc sc
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                 WHERE sc.sc_id = ? FOR UPDATE
                 """, scId);
         if (scRows.isEmpty()) {
@@ -454,8 +450,8 @@ public class StatsService {
                        NULL AS host_school, NULL AS ext_course_name, NULL AS proof_no
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 WHERE sc.student_id = ? AND s.score_status = 3
                 """);
@@ -492,7 +488,7 @@ public class StatsService {
                        e.school_audit_time AS publish_time,
                        e.host_school, e.ext_course_name, e.proof_no
                 FROM sel_exchange_score_convert e
-                JOIN course c ON e.course_id = c.course_id
+                JOIN aca_course c ON e.course_id = c.course_id
                 WHERE e.student_id = ? AND e.audit_status = 2
                 """);
         List<Object> exParams = new ArrayList<>();
@@ -539,7 +535,7 @@ public class StatsService {
                   SELECT tc.term
                   FROM sel_score s
                   JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                  JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                  JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                   WHERE sc.student_id = ? AND s.score_status = 3
                   UNION
                   SELECT e.term
@@ -564,9 +560,11 @@ public class StatsService {
         validateTermFormat(targetTerm);
 
         StringBuilder sql = new StringBuilder("""
-                SELECT st.student_id, st.student_name, st.grade, st.degree_level, st.class_name,
-                       st.major_id, st.college_id,
-                       COALESCE(cm.dict_name, st.college_id) AS college_name,
+                SELECT st.student_id, p.person_name AS student_name, st.grade,
+                       CASE st.student_type WHEN '01' THEN '本科' WHEN '02' THEN '研究生' WHEN '03' THEN '研究生' WHEN '04' THEN '交流生' ELSE st.student_type END AS degree_level,
+                       cls.class_name, st.major_id,
+                       COALESCE(org.college_id, st.org_id) AS college_id,
+                       COALESCE(org.org_name, st.org_id) AS college_name,
                        g.earned_credit, g.failed_credit, g.gpa, g.avg_score,
                        g.major_rank, g.major_rank_total, g.updated_at AS update_time,
                        tg.term AS stat_term, tg.term_credit, tg.term_failed_credit,
@@ -575,17 +573,19 @@ public class StatsService {
                         WHERE sc2.student_id = st.student_id AND sc2.study_type = 3 AND s2.score_status = 3) AS minor_score_count,
                        (SELECT COUNT(*) FROM sel_exchange_score_convert e2
                         WHERE e2.student_id = st.student_id AND e2.audit_status = 2) AS exchange_score_count
-                FROM student st
+                FROM std_student st
+                LEFT JOIN sys_person p ON st.person_id = p.person_id
+                LEFT JOIN aca_class cls ON st.class_id = cls.class_id
+                LEFT JOIN org_organization org ON st.org_id = org.org_id
                 LEFT JOIN sel_stu_gpa g ON st.student_id = g.student_id
                 LEFT JOIN sel_stu_term_gpa tg ON st.student_id = tg.student_id AND tg.term = ?
-                LEFT JOIN sys_code_dict cm ON cm.dict_group = 'college_map' AND cm.dict_code = st.college_id
                 WHERE 1=1
                 """);
         List<Object> params = new ArrayList<>();
         params.add(targetTerm);
 
         if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
-            sql.append(" AND st.college_id = ? ");
+            sql.append(" AND COALESCE(org.college_id, st.org_id) = ? ");
             params.add(user.collegeId());
         }
         if (majorId != null && !majorId.isBlank()) {
@@ -594,10 +594,10 @@ public class StatsService {
         }
         if (grade != null) {
             sql.append(" AND st.grade = ? ");
-            params.add(grade);
+            params.add(String.valueOf(grade));
         }
         if (keyword != null && !keyword.isBlank()) {
-            sql.append(" AND (st.student_id LIKE ? OR st.student_name LIKE ? OR st.class_name LIKE ?) ");
+            sql.append(" AND (st.student_id LIKE ? OR p.person_name LIKE ? OR cls.class_name LIKE ?) ");
             String like = "%" + keyword.trim() + "%";
             params.add(like);
             params.add(like);
@@ -624,14 +624,14 @@ public class StatsService {
         List<String> targetStudents;
         if (studentId != null && !studentId.isBlank()) {
             String sid = studentId.trim();
-            Integer exists = jdbc.queryForObject("SELECT COUNT(*) FROM student WHERE student_id = ?", Integer.class, sid);
+            Integer exists = jdbc.queryForObject("SELECT COUNT(*) FROM std_student WHERE student_id = ?", Integer.class, sid);
             if (exists == null || exists == 0) {
                 throw BizException.notFound("未找到本校学生【" + sid + "】（来校交换生不计入本校专业排名表）");
             }
             targetStudents = List.of(sid);
         } else {
             targetStudents = jdbc.queryForList(
-                    "SELECT student_id FROM student ORDER BY student_id ASC", String.class);
+                    "SELECT student_id FROM std_student ORDER BY student_id ASC", String.class);
         }
 
         Set<String> affectedGroups = new LinkedHashSet<>();
@@ -650,7 +650,7 @@ public class StatsService {
         // 按 (major_id, grade) 整体重算同专业同年级通用排名（同分并列跳号 RANK）
         for (String groupKey : affectedGroups) {
             String[] parts = groupKey.split("\\|");
-            recomputeRankForMajorGrade(parts[0], Integer.parseInt(parts[1]));
+            recomputeRankForMajorGrade(parts[0], parts[1]);
         }
 
         Map<String, Object> resp = new LinkedHashMap<>();
@@ -671,15 +671,18 @@ public class StatsService {
         if (one.get("major_id") != null && one.get("grade") != null) {
             recomputeRankForMajorGrade(
                     String.valueOf(one.get("major_id")),
-                    ((Number) one.get("grade")).intValue());
+                    String.valueOf(one.get("grade")));
         }
         return one;
     }
 
     private Map<String, Object> recomputeSingleStudentWithoutRank(String studentId) {
-        List<Map<String, Object>> stuRows = jdbc.queryForList(
-                "SELECT student_id, degree_level, major_id, grade FROM student WHERE student_id = ? FOR UPDATE",
-                studentId);
+        List<Map<String, Object>> stuRows = jdbc.queryForList("""
+                SELECT student_id,
+                       CASE student_type WHEN '01' THEN '本科' WHEN '02' THEN '研究生' WHEN '03' THEN '研究生' WHEN '04' THEN '交流生' ELSE student_type END AS degree_level,
+                       major_id, grade
+                FROM std_student WHERE student_id = ? FOR UPDATE
+                """, studentId);
         if (stuRows.isEmpty()) {
             throw BizException.notFound("学业统计重算失败：学生【" + studentId + "】不存在");
         }
@@ -694,8 +697,8 @@ public class StatsService {
                        s.exam_type, s.published_at AS publish_time, s.score_id AS sort_id
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
                   AND s.score_status = 3
                 UNION ALL
@@ -704,7 +707,7 @@ public class StatsService {
                        e.grade_point, 1 AS exam_type, e.school_audit_time AS publish_time,
                        (e.convert_id + 1000000000) AS sort_id
                 FROM sel_exchange_score_convert e
-                JOIN course c ON e.course_id = c.course_id
+                JOIN aca_course c ON e.course_id = c.course_id
                 WHERE e.student_id = ? AND e.stat_stage = ?
                   AND e.audit_status = 2
                 """, studentId, statStage, studentId, statStage);
@@ -850,11 +853,11 @@ public class StatsService {
         return idA >= idB ? a : b;
     }
 
-    private void recomputeRankForMajorGrade(String majorId, int grade) {
+    private void recomputeRankForMajorGrade(String majorId, String grade) {
         // 先清空无可计入成绩（avg_score IS NULL）学生的旧排名，不保留过期名次
         jdbc.update("""
                 UPDATE sel_stu_gpa g
-                JOIN student st ON g.student_id = st.student_id
+                JOIN std_student st ON g.student_id = st.student_id
                 SET g.major_rank = NULL, g.major_rank_total = NULL
                 WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NULL
                 """, majorId, grade);
@@ -862,7 +865,7 @@ public class StatsService {
         List<Map<String, Object>> peers = jdbc.queryForList("""
                 SELECT g.student_id, g.avg_score
                 FROM sel_stu_gpa g
-                JOIN student st ON g.student_id = st.student_id
+                JOIN std_student st ON g.student_id = st.student_id
                 WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NOT NULL
                 ORDER BY g.avg_score DESC, g.student_id ASC
                 """, majorId, grade);
@@ -894,9 +897,13 @@ public class StatsService {
 
         List<Map<String, Object>> list = new ArrayList<>();
         list.addAll(jdbc.queryForList("""
-                SELECT student_id, student_name, degree_level, class_name, 0 AS is_incoming_exchange
-                FROM student
-                ORDER BY student_id ASC
+                SELECT st.student_id, p.person_name AS student_name,
+                       CASE st.student_type WHEN '01' THEN '本科' WHEN '02' THEN '研究生' WHEN '03' THEN '研究生' WHEN '04' THEN '交流生' ELSE st.student_type END AS degree_level,
+                       cls.class_name, 0 AS is_incoming_exchange
+                FROM std_student st
+                LEFT JOIN sys_person p ON st.person_id = p.person_id
+                LEFT JOIN aca_class cls ON st.class_id = cls.class_id
+                ORDER BY st.student_id ASC
                 """));
         list.addAll(jdbc.queryForList("""
                 SELECT temp_student_no AS student_id, student_name, '本科交换生' AS degree_level,
@@ -1075,32 +1082,32 @@ public class StatsService {
                 RoleEnum.GRADUATE_SCHOOL, RoleEnum.SYS_ADMIN);
 
         StringBuilder tcSql = new StringBuilder("""
-                SELECT tc.tc_id, tc.term, tc.course_id, c.course_name, c.open_college,
-                       COALESCE(cm.dict_name, c.open_college) AS college_name,
-                       lc.lesson_no, tc.teacher_id,
-                       COALESCE(emp.emp_name, tc.teacher_id) AS teacher_name
-                FROM teaching_class tc
-                JOIN course c ON tc.course_id = c.course_id
+                SELECT tc.tc_id, tc.term, tc.course_id, c.course_name,
+                       COALESCE(org.college_id, c.org_id) AS open_college,
+                       COALESCE(org.org_name, c.org_id) AS college_name,
+                       lc.lesson_no, tc.emp_id AS teacher_id,
+                       COALESCE(emp.emp_name, tc.emp_id) AS teacher_name
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
-                LEFT JOIN sys_code_dict cm ON cm.dict_group = 'college_map' AND cm.dict_code = c.open_college
-                LEFT JOIN sys_code_dict tm ON tm.dict_group = 'teacher_map' AND tm.dict_code = tc.teacher_id
-                LEFT JOIN t_employee emp ON emp.emp_id = tm.dict_name
+                LEFT JOIN hr_employee emp ON emp.emp_id = tc.emp_id
                 WHERE 1=1
                 """);
         List<Object> params = new ArrayList<>();
         if (user.role() == RoleEnum.TEACHER) {
-            tcSql.append(" AND tc.teacher_id = ? ");
-            params.add(resolveTeacherCode8(user));
+            tcSql.append(" AND tc.emp_id = ? ");
+            params.add(resolveTeacherEmpId(user));
         } else if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
-            tcSql.append(" AND c.open_college = ? ");
+            tcSql.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
             params.add(user.collegeId());
         }
         tcSql.append(" ORDER BY tc.term DESC, tc.tc_id ASC");
 
         List<Map<String, Object>> classes = jdbc.queryForList(tcSql.toString(), params.toArray());
-        List<String> terms = jdbc.queryForList("SELECT DISTINCT term FROM teaching_class ORDER BY term DESC", String.class);
+        List<String> terms = jdbc.queryForList("SELECT DISTINCT term FROM aca_teaching_class ORDER BY term DESC", String.class);
         List<Map<String, Object>> majors = jdbc.queryForList(
-                "SELECT DISTINCT major_id, grade FROM student WHERE major_id IS NOT NULL ORDER BY major_id ASC, grade DESC");
+                "SELECT DISTINCT major_id, grade FROM std_student WHERE major_id IS NOT NULL ORDER BY major_id ASC, grade DESC");
 
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("current_term", getCurrentTerm());
@@ -1145,9 +1152,10 @@ public class StatsService {
 
     private void verifyTeachingClassAccess(CurrentUser user, String tcId) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT tc.tc_id, tc.teacher_id, c.open_college
-                FROM teaching_class tc
-                JOIN course c ON tc.course_id = c.course_id
+                SELECT tc.tc_id, tc.emp_id AS teacher_id, COALESCE(org.college_id, c.org_id) AS open_college
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 WHERE tc.tc_id = ?
                 """, tcId);
         if (rows.isEmpty()) {
@@ -1155,8 +1163,8 @@ public class StatsService {
         }
         Map<String, Object> tc = rows.get(0);
         if (user.role() == RoleEnum.TEACHER) {
-            String t8 = resolveTeacherCode8(user);
-            if (!t8.equals(String.valueOf(tc.get("teacher_id")).trim())) {
+            String empId = resolveTeacherEmpId(user);
+            if (!empId.equals(String.valueOf(tc.get("teacher_id")).trim())) {
                 throw BizException.forbidden("教师仅可查询本人授课教学班的统计报表");
             }
         } else if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
@@ -1176,18 +1184,19 @@ public class StatsService {
                        tc.tc_id, tc.term, c.course_id, c.course_name
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 WHERE s.score_status = 3 AND s.exam_type = ?
                 """);
         List<Object> params = new ArrayList<>();
         params.add(examType);
 
         if (user.role() == RoleEnum.TEACHER) {
-            sql.append(" AND tc.teacher_id = ? ");
-            params.add(resolveTeacherCode8(user));
+            sql.append(" AND tc.emp_id = ? ");
+            params.add(resolveTeacherEmpId(user));
         } else if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
-            sql.append(" AND c.open_college = ? ");
+            sql.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
             params.add(user.collegeId());
         }
         if (term != null && !term.isBlank()) {
@@ -1341,23 +1350,26 @@ public class StatsService {
                 SELECT DISTINCT sc.student_id, sc.stat_stage, tc.course_id,
                        tc.tc_id, tc.term, lc.lesson_no,
                        c.course_name, c.credit,
-                       COALESCE(st.student_name, ex.student_name) AS student_name,
-                       COALESCE(st.class_name, '来校交换生') AS class_name
+                       COALESCE(p.person_name, ex.student_name) AS student_name,
+                       COALESCE(cls.class_name, '来校交换生') AS class_name
                 FROM sel_score s
                 JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
-                LEFT JOIN student st ON sc.student_id = st.student_id
+                LEFT JOIN std_student st ON sc.student_id = st.student_id
+                LEFT JOIN sys_person p ON st.person_id = p.person_id
+                LEFT JOIN aca_class cls ON st.class_id = cls.class_id
                 LEFT JOIN v_exchange_student ex ON sc.student_id = ex.temp_student_no
                 WHERE s.score_status = 3
                 """);
         List<Object> params = new ArrayList<>();
         if (user.role() == RoleEnum.TEACHER) {
-            scopeSql.append(" AND tc.teacher_id = ? ");
-            params.add(resolveTeacherCode8(user));
+            scopeSql.append(" AND tc.emp_id = ? ");
+            params.add(resolveTeacherEmpId(user));
         } else if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
-            scopeSql.append(" AND c.open_college = ? ");
+            scopeSql.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
             params.add(user.collegeId());
         }
         if (term != null && !term.isBlank()) {
@@ -1390,7 +1402,7 @@ public class StatsService {
                            s.exam_type, s.exam_flag, sc.study_type, tc.term
                     FROM sel_score s
                     JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                    JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                    JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                     WHERE sc.student_id = ? AND sc.stat_stage = ? AND tc.course_id = ? AND s.score_status = 3
                     UNION ALL
                     SELECT e.score_type, e.converted_score AS total_score, e.converted_level AS score_level,
@@ -1467,22 +1479,26 @@ public class StatsService {
             throw BizException.unprocessable("INVALID_TERM_RANGE", "评价期起始学期不能晚于结束学期");
         }
 
-        // 1. 校验专业教学计划必修课集合（program_course）
+        // 1. 校验专业教学计划必修课集合（aca_program_course）
         List<Map<String, Object>> planCourses = jdbc.queryForList("""
                 SELECT pc.course_id, c.course_name, c.credit, c.course_type
-                FROM program_course pc
-                JOIN course c ON pc.course_id = c.course_id
+                FROM aca_program_course pc
+                JOIN aca_course c ON pc.course_id = c.course_id
                 WHERE pc.major_id = ? AND pc.grade = ?
                 ORDER BY pc.course_id ASC
                 """, mId, String.valueOf(grade));
 
-        // 2. 校验参评学生全集（student）
+        // 2. 校验参评学生全集（std_student）
         List<Map<String, Object>> students = jdbc.queryForList("""
-                SELECT student_id, student_name, degree_level, class_name
-                FROM student
-                WHERE major_id = ? AND grade = ?
-                ORDER BY student_id ASC
-                """, mId, grade);
+                SELECT st.student_id, p.person_name AS student_name,
+                       CASE st.student_type WHEN '01' THEN '本科' WHEN '02' THEN '研究生' WHEN '03' THEN '研究生' WHEN '04' THEN '交流生' ELSE st.student_type END AS degree_level,
+                       cls.class_name
+                FROM std_student st
+                LEFT JOIN sys_person p ON st.person_id = p.person_id
+                LEFT JOIN aca_class cls ON st.class_id = cls.class_id
+                WHERE st.major_id = ? AND st.grade = ?
+                ORDER BY st.student_id ASC
+                """, mId, String.valueOf(grade));
 
         List<String> blockedReasons = new ArrayList<>();
         if (planCourses.isEmpty()) {
@@ -1501,7 +1517,7 @@ public class StatsService {
             String inClause = String.join(",", Collections.nCopies(courseIds.size(), "?"));
             List<Object> checkParams = new ArrayList<>();
             checkParams.add(mId);
-            checkParams.add(grade);
+            checkParams.add(String.valueOf(grade));
             checkParams.add(sTerm);
             checkParams.add(eTerm);
             checkParams.addAll(courseIds);
@@ -1510,9 +1526,9 @@ public class StatsService {
                     SELECT c.course_id, c.course_name, COUNT(*) AS cnt
                     FROM sel_score s
                     JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                    JOIN student st ON sc.student_id = st.student_id
-                    JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                    JOIN course c ON tc.course_id = c.course_id
+                    JOIN std_student st ON sc.student_id = st.student_id
+                    JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                    JOIN aca_course c ON tc.course_id = c.course_id
                     WHERE st.major_id = ? AND st.grade = ?
                       AND tc.term BETWEEN ? AND ?
                       AND tc.course_id IN (""" + inClause + """
@@ -1535,8 +1551,8 @@ public class StatsService {
                     SELECT COUNT(*)
                     FROM sel_score s
                     JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                    JOIN student st ON sc.student_id = st.student_id
-                    JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                    JOIN std_student st ON sc.student_id = st.student_id
+                    JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                     WHERE st.major_id = ? AND st.grade = ?
                       AND tc.term BETWEEN ? AND ?
                       AND tc.course_id IN (""" + inClause + """
@@ -1597,7 +1613,7 @@ public class StatsService {
                         SELECT s.score_type, s.total_score, s.score_level
                         FROM sel_score s
                         JOIN sel_sc sc ON s.sc_id = sc.sc_id
-                        JOIN teaching_class tc ON sc.tc_id = tc.tc_id
+                        JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                         WHERE sc.student_id = ? AND sc.stat_stage = ? AND tc.course_id = ?
                           AND tc.term BETWEEN ? AND ?
                           AND sc.study_type = 1 AND s.exam_type = 1 AND s.score_status = 3
@@ -1676,20 +1692,20 @@ public class StatsService {
 
         StringBuilder sql = new StringBuilder("""
                 SELECT tc.tc_id, tc.term, lc.lesson_no,
-                       c.course_id, c.course_name, c.open_college,
-                       COALESCE(cm.dict_name, c.open_college) AS college_name,
-                       tc.teacher_id, COALESCE(emp.emp_name, tc.teacher_id) AS teacher_name,
+                       c.course_id, c.course_name,
+                       COALESCE(org.college_id, c.org_id) AS open_college,
+                       COALESCE(org.org_name, c.org_id) AS college_name,
+                       tc.emp_id AS teacher_id, COALESCE(emp.emp_name, tc.emp_id) AS teacher_name,
                        (SELECT COUNT(*) FROM sel_sc sc1 WHERE sc1.tc_id = tc.tc_id AND sc1.select_status = 1) AS enrolled_num,
                        r.eval_num, r.avg_eval_score, r.calc_time,
                        (SELECT COUNT(*) FROM sel_teach_eval te
                         JOIN sel_sc sc2 ON te.sc_id = sc2.sc_id
                         WHERE sc2.tc_id = tc.tc_id AND sc2.select_status = 1) AS live_valid_eval_num
-                FROM teaching_class tc
-                JOIN course c ON tc.course_id = c.course_id
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
-                LEFT JOIN sys_code_dict cm ON cm.dict_group = 'college_map' AND cm.dict_code = c.open_college
-                LEFT JOIN sys_code_dict tm ON tm.dict_group = 'teacher_map' AND tm.dict_code = tc.teacher_id
-                LEFT JOIN t_employee emp ON emp.emp_id = tm.dict_name
+                LEFT JOIN hr_employee emp ON emp.emp_id = tc.emp_id
                 LEFT JOIN sel_tc_eval_result r ON tc.tc_id = r.tc_id
                 WHERE tc.term = ?
                 """);
@@ -1697,10 +1713,10 @@ public class StatsService {
         params.add(targetTerm);
 
         if (user.role() == RoleEnum.TEACHER) {
-            sql.append(" AND tc.teacher_id = ? ");
-            params.add(resolveTeacherCode8(user));
+            sql.append(" AND tc.emp_id = ? ");
+            params.add(resolveTeacherEmpId(user));
         } else if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
-            sql.append(" AND c.open_college = ? ");
+            sql.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
             params.add(user.collegeId());
         }
         if (tcId != null && !tcId.isBlank()) {
@@ -1794,7 +1810,7 @@ public class StatsService {
             targetTcIds = requestedTcIds;
         } else {
             targetTcIds = jdbc.queryForList(
-                    "SELECT tc_id FROM teaching_class WHERE term = ? AND tc_status = '4' ORDER BY tc_id ASC",
+                    "SELECT tc_id FROM aca_teaching_class WHERE term = ? AND tc_status = '4' ORDER BY tc_id ASC",
                     String.class, term);
         }
         if (targetTcIds.isEmpty()) {
@@ -1868,15 +1884,14 @@ public class StatsService {
                 SELECT CAST(te.sc_id AS CHAR) AS sc_id,
                        tc.term, tc.tc_id, lc.lesson_no,
                        c.course_id, c.course_name,
-                       COALESCE(emp.emp_name, tc.teacher_id) AS teacher_name,
+                       COALESCE(emp.emp_name, tc.emp_id) AS teacher_name,
                        te.eval_score, te.eval_comment, te.eval_time
                 FROM sel_teach_eval te
                 JOIN sel_sc sc ON te.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                JOIN course c ON tc.course_id = c.course_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
-                LEFT JOIN sys_code_dict tm ON tm.dict_group = 'teacher_map' AND tm.dict_code = tc.teacher_id
-                LEFT JOIN t_employee emp ON emp.emp_id = tm.dict_name
+                LEFT JOIN hr_employee emp ON emp.emp_id = tc.emp_id
                 WHERE sc.select_status = 1
                 """);
         List<Object> params = new ArrayList<>();
