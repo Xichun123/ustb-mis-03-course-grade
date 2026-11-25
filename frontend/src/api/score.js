@@ -7,8 +7,23 @@ export const scoreApi = {
   getRoster(lessonNo) {
     return request.get(`/score/classes/${lessonNo}`)
   },
-  saveGrades(lessonNo, items) {
-    return request.put(`/score/classes/${lessonNo}/grades`, { items })
+  saveGrades(lessonNo, items, usualRatio) {
+    const body = { items }
+    if (usualRatio !== undefined && usualRatio !== null) body.usual_ratio = usualRatio
+    return request.put(`/score/classes/${lessonNo}/grades`, body)
+  },
+  setClassRatio(lessonNo, usualRatio) {
+    return request.put(`/score/classes/${lessonNo}/ratio`, { usual_ratio: usualRatio })
+  },
+  importGrades(lessonNo, file, usualRatio, dryRun = false) {
+    const form = new FormData()
+    form.append('file', file)
+    if (usualRatio !== undefined && usualRatio !== null) form.append('usual_ratio', usualRatio)
+    form.append('dry_run', dryRun ? 'true' : 'false')
+    return request.post(`/score/classes/${lessonNo}/grades/import`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000
+    })
   },
   submit(lessonNo) {
     return request.post(`/score/classes/${lessonNo}/submit`)
@@ -39,5 +54,11 @@ export const scoreApi = {
   },
   schoolApproveExchange(convertId, payload) {
     return request.post(`/score/exchange/${convertId}/school-approve`, payload)
+  },
+  recognizeExchange(convertId, payload) {
+    return request.post(`/score/exchange/${convertId}/recognize`, payload || {})
+  },
+  exchangeCandidates(params) {
+    return request.get('/score/exchange/candidates', { params })
   }
 }
