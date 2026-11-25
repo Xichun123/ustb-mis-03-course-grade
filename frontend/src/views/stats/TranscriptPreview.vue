@@ -162,7 +162,7 @@
         </thead>
         <tbody>
           <tr v-if="!data.items || data.items.length === 0">
-            <td colspan="9" class="empty-cell">所选学期范围内暂无已发布成绩记录（不虚构零分课程）。</td>
+            <td colspan="9" class="empty-cell">所选学期范围内暂无已发布成绩记录。</td>
           </tr>
           <tr v-for="row in data.items" :key="row.score_id">
             <td class="center">{{ row.term }}</td>

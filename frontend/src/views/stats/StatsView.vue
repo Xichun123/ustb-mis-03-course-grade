@@ -8,7 +8,7 @@
           show-icon
           :closable="false"
           style="margin-bottom: 14px"
-          title="每门已选课程仅可评价一次，提交后不可修改；完成本学期全部课程评价后可查询成绩，教师端仅查看匿名汇总。"
+          title="每门已选课程仅可评价一次，提交后不可修改；完成本学期全部课程评价后可查询成绩。"
         />
 
         <div class="kpi-row" v-if="evalData">
@@ -37,7 +37,7 @@
         <div class="toolbar">
           <el-button type="primary" @click="loadPendingEvals">刷新评教清单</el-button>
           <el-button v-if="evalData?.all_completed" type="success" @click="activeTab = 'grades'; loadMyGrades()">
-            前往查询本人成绩
+            前往查询成绩
           </el-button>
         </div>
 
@@ -78,7 +78,7 @@
       </el-tab-pane>
 
       <!-- ==================== 4.2 本人成绩查询（学生端，先评教后查分） ==================== -->
-      <el-tab-pane v-if="isStudent" label="本人成绩查询" name="grades">
+      <el-tab-pane v-if="isStudent" label="成绩查询" name="grades">
         <div class="toolbar">
           <el-select v-model="gradeQuery.term" placeholder="全部学期（含当前学期）" clearable style="width: 210px">
             <el-option v-for="t in gradeTermOptions" :key="t" :label="t" :value="t" />
@@ -105,7 +105,7 @@
             </template>
           </el-result>
           <div v-if="evalData?.pending_items?.length" style="margin-top: 8px">
-            <div class="sub-heading">待评教课程清单（仅显示未评课程，不返回任何成绩或累计摘要）：</div>
+            <div class="sub-heading">待评教课程清单</div>
             <el-table :data="evalData.pending_items" border size="small">
               <el-table-column prop="tc_id" label="教学班号" width="130" />
               <el-table-column prop="course_name" label="课程名称" />
@@ -135,7 +135,7 @@
             show-icon
             :closable="false"
             style="margin-bottom: 14px"
-            title="累计学业统计快照尚未生成（不得推断为零分），请待成绩发布或教务处重算后查看。"
+            title="累计学业统计暂未生成，请待成绩发布或汇总更新后查看。"
           />
 
           <div class="kpi-row" v-if="gradeResult.summary">
@@ -213,8 +213,12 @@
       <!-- ==================== 4.3 学业统计台账与重算（教务/学院/管理员） ==================== -->
       <el-tab-pane v-if="canViewAcademicStats" label="学业统计台账" name="academic">
         <div class="toolbar">
-          <el-input v-model="academicQuery.term" placeholder="统计学期如 2026-2027-1" style="width: 170px" clearable />
-          <el-input v-model="academicQuery.major_id" placeholder="专业号如 120102" style="width: 145px" clearable />
+          <el-select v-model="academicQuery.term" placeholder="选择统计学期" clearable style="width: 170px">
+            <el-option v-for="t in allTermOptions" :key="t" :label="t" :value="t" />
+          </el-select>
+          <el-select v-model="academicQuery.major_id" placeholder="全部专业" clearable style="width: 195px">
+            <el-option v-for="m in MAJOR_OPTIONS" :key="m.value" :label="m.label" :value="m.value" />
+          </el-select>
           <el-input v-model="academicQuery.keyword" placeholder="学号 / 姓名 / 班级" style="width: 190px" clearable />
           <el-button type="primary" @click="loadAcademicStats">查询</el-button>
           <el-button
@@ -223,18 +227,9 @@
             :loading="recomputingAcademic"
             @click="handleRecomputeAcademic()"
           >
-            全量重算学业统计（排除辅修+联合外校认定）
+            全量重算学业统计
           </el-button>
         </div>
-
-        <el-alert
-          v-if="academicData?.rule_note"
-          :title="academicData.rule_note"
-          type="info"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 12px"
-        />
 
         <el-table :data="academicData?.items || []" border stripe v-loading="loadingAcademic">
           <el-table-column prop="student_id" label="学号" width="120" />
@@ -242,7 +237,9 @@
           <el-table-column label="层次/年级/班级" min-width="150">
             <template #default="{ row }">{{ row.degree_level }} · {{ row.grade }} · {{ row.class_name }}</template>
           </el-table-column>
-          <el-table-column prop="major_id" label="专业号" width="85" />
+          <el-table-column label="专业" min-width="155">
+            <template #default="{ row }">{{ getMajorName(row.major_id) }}</template>
+          </el-table-column>
           <el-table-column label="累计已获/不及格" width="130">
             <template #default="{ row }">
               {{ row.earned_credit ?? '—' }} / <span class="text-danger">{{ row.failed_credit ?? '—' }}</span>
@@ -289,7 +286,7 @@
             v-if="!isStudent"
             v-model="transcriptForm.student_id"
             filterable
-            placeholder="选择学生（含来校交换生 EX20260001）"
+            placeholder="选择学生"
             style="width: 280px"
           >
             <el-option
@@ -299,8 +296,24 @@
               :value="s.student_id"
             />
           </el-select>
-          <el-input v-model="transcriptForm.start_term" placeholder="起始学期（可空）" style="width: 155px" clearable />
-          <el-input v-model="transcriptForm.end_term" placeholder="结束学期（可空）" style="width: 155px" clearable />
+          <el-select v-model="transcriptForm.start_term" placeholder="起始学期" clearable style="width: 155px">
+            <el-option
+              v-for="t in allTermOptions"
+              :key="t"
+              :label="t"
+              :value="t"
+              :disabled="!!transcriptForm.end_term && t > transcriptForm.end_term"
+            />
+          </el-select>
+          <el-select v-model="transcriptForm.end_term" placeholder="结束学期" clearable style="width: 155px">
+            <el-option
+              v-for="t in allTermOptions"
+              :key="t"
+              :label="t"
+              :value="t"
+              :disabled="!!transcriptForm.start_term && t < transcriptForm.start_term"
+            />
+          </el-select>
           <el-select v-model="transcriptForm.template" style="width: 205px">
             <el-option label="自动匹配版式" value="AUTO" />
             <el-option label="本校历次成绩明细单" value="STANDARD" />
@@ -339,10 +352,10 @@
       <el-tab-pane v-if="isStaff" label="成绩统计报表" name="reports">
         <div class="toolbar">
           <el-radio-group v-model="reportQuery.report_type" @change="loadGradeReport">
-            <el-radio-button value="DISTRIBUTION">成绩分布（分制独立）</el-radio-button>
-            <el-radio-button value="FINAL_FAILED">当前最终不及格名单</el-radio-button>
+            <el-radio-button value="DISTRIBUTION">成绩分布</el-radio-button>
+            <el-radio-button value="FINAL_FAILED">最终不及格名单</el-radio-button>
             <el-radio-button v-if="reportOptions?.can_honor_rank" value="HONOR_RANK">
-              首次考核评优专业排名（P36）
+              评优专业排名
             </el-radio-button>
           </el-radio-group>
         </div>
@@ -369,22 +382,37 @@
 
         <!-- 评优专业排名筛选栏 -->
         <div v-else class="toolbar">
-          <el-select v-model="honorPair" placeholder="选择专业与年级" style="width: 210px" @change="applyHonorPair">
+          <el-select v-model="honorPair" placeholder="选择专业与年级" style="width: 260px" @change="applyHonorPair">
             <el-option
               v-for="mg in reportOptions?.major_grades || []"
               :key="`${mg.major_id}|${mg.grade}`"
-              :label="`专业 ${mg.major_id} · ${mg.grade}级`"
+              :label="`${getMajorName(mg.major_id)} · ${mg.grade}级`"
               :value="`${mg.major_id}|${mg.grade}`"
             />
           </el-select>
-          <el-input v-model="reportQuery.start_term" placeholder="起始学期" style="width: 145px" />
-          <el-input v-model="reportQuery.end_term" placeholder="结束学期" style="width: 145px" />
-          <el-button type="primary" :loading="loadingReport" @click="loadGradeReport">校验完整性并生成</el-button>
+          <el-select v-model="reportQuery.start_term" placeholder="起始学期" style="width: 155px">
+            <el-option
+              v-for="t in allTermOptions"
+              :key="t"
+              :label="t"
+              :value="t"
+              :disabled="!!reportQuery.end_term && t > reportQuery.end_term"
+            />
+          </el-select>
+          <el-select v-model="reportQuery.end_term" placeholder="结束学期" style="width: 155px">
+            <el-option
+              v-for="t in allTermOptions"
+              :key="t"
+              :label="t"
+              :value="t"
+              :disabled="!!reportQuery.start_term && t < reportQuery.start_term"
+            />
+          </el-select>
+          <el-button type="primary" :loading="loadingReport" @click="loadGradeReport">生成排名</el-button>
         </div>
 
         <!-- 分支 1：成绩分布展示 -->
         <template v-if="reportData && reportData.report_type === 'DISTRIBUTION'">
-          <el-alert :title="reportData.methodology_note" type="info" show-icon :closable="false" style="margin-bottom: 14px" />
           <div class="kpi-row">
             <el-card shadow="never" class="kpi-card">
               <div class="kpi-label">已发布样本总数</div>
@@ -401,7 +429,7 @@
             <el-card shadow="never" class="kpi-card">
               <div class="kpi-label">五级制 / 两级制样本</div>
               <div class="kpi-val">{{ reportData.five_level_group?.valid_count }} / {{ reportData.two_level_group?.valid_count }}</div>
-              <div class="kpi-sub">独立展示，不计算等级算术均分</div>
+              <div class="kpi-sub">按等级分别统计</div>
             </el-card>
             <el-card shadow="never" class="kpi-card">
               <div class="kpi-label">特殊考试 / 缺值记录</div>
@@ -411,12 +439,12 @@
           </div>
 
           <el-row :gutter="16">
-            <el-col :span="12">
-              <el-card shadow="never" header="百分制分段分布（左闭右开）">
+            <el-col :xs="24" :md="12">
+              <el-card shadow="never" header="百分制分段分布">
                 <el-table :data="reportData.percent_group?.buckets || []" border size="small">
                   <el-table-column prop="label" label="分数段" />
                   <el-table-column prop="count" label="人数" width="80" />
-                  <el-table-column label="占比" width="150">
+                  <el-table-column label="占比" width="170">
                     <template #default="{ row }">
                       <el-progress
                         :percentage="Number(row.ratio || 0)"
@@ -428,37 +456,48 @@
                 </el-table>
               </el-card>
             </el-col>
-            <el-col :span="12">
-              <el-card shadow="never" header="五级制分布（优/良/中/及格/不及格）" style="margin-bottom: 12px">
+            <el-col :xs="24" :md="12">
+              <el-card shadow="never" header="五级制分布">
                 <el-table :data="reportData.five_level_group?.buckets || []" border size="small">
-                  <el-table-column prop="label" label="等级" width="90" />
+                  <el-table-column prop="label" label="等级" />
                   <el-table-column prop="count" label="人数" width="80" />
-                  <el-table-column label="占比">
-                    <template #default="{ row }">{{ row.ratio ? `${row.ratio}%` : '—' }}</template>
-                  </el-table-column>
-                </el-table>
-              </el-card>
-              <el-card shadow="never" header="两级制分布（合格/不合格）">
-                <el-table :data="reportData.two_level_group?.buckets || []" border size="small">
-                  <el-table-column prop="label" label="等级" width="90" />
-                  <el-table-column prop="count" label="人数" width="80" />
-                  <el-table-column label="占比">
-                    <template #default="{ row }">{{ row.ratio ? `${row.ratio}%` : '—' }}</template>
+                  <el-table-column label="占比" width="170">
+                    <template #default="{ row }">
+                      <el-progress
+                        :percentage="Number(row.ratio || 0)"
+                        :stroke-width="12"
+                        :format="() => (row.ratio ? `${row.ratio}%` : '—')"
+                      />
+                    </template>
                   </el-table-column>
                 </el-table>
               </el-card>
             </el-col>
           </el-row>
+          <el-card shadow="never" header="两级制分布" style="margin-top: 16px">
+            <el-table :data="reportData.two_level_group?.buckets || []" border size="small">
+              <el-table-column prop="label" label="等级" />
+              <el-table-column prop="count" label="人数" width="120" />
+              <el-table-column label="占比" width="220">
+                <template #default="{ row }">
+                  <el-progress
+                    :percentage="Number(row.ratio || 0)"
+                    :stroke-width="12"
+                    :format="() => (row.ratio ? `${row.ratio}%` : '—')"
+                  />
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
         </template>
 
         <!-- 分支 2：当前最终不及格名单 -->
         <template v-else-if="reportData && reportData.report_type === 'FINAL_FAILED'">
-          <el-alert :title="reportData.methodology_note" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
           <div style="margin-bottom: 10px">
             <el-tag type="danger">当前最终不及格记录：{{ reportData.failed_record_count }} 条</el-tag>
             <el-tag type="warning" style="margin-left: 8px">涉及去重学生：{{ reportData.distinct_student_count }} 人</el-tag>
           </div>
-          <el-table :data="reportData.items || []" border stripe empty-text="当前筛选范围内暂无最终不及格记录（补考/重修已通过者不列入）">
+          <el-table :data="reportData.items || []" border stripe empty-text="暂无不及格记录">
             <el-table-column prop="term" label="学期" width="120" />
             <el-table-column prop="tc_id" label="教学班号" width="120" />
             <el-table-column prop="course_name" label="课程名称" min-width="150" />
@@ -472,21 +511,19 @@
 
         <!-- 分支 3：首次考核评优专业排名（含完整性阻断展示） -->
         <template v-else-if="reportData && reportData.report_type === 'HONOR_RANK'">
-          <el-alert :title="reportData.methodology_note" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
-
           <el-card v-if="reportData.status === 'BLOCKED'" shadow="never" class="gate-block-card">
             <el-result
               icon="error"
-              title="完整性门禁未通过 · 禁止生成正式评优排名（界面 10）"
+              title="数据尚未齐备，暂不可生成正式评优排名"
               sub-title="为防止将尚未发布或缺少计划依据的必修课程误折算为 0 分，系统已阻断正式榜单生成。"
             />
             <div style="padding: 0 20px 16px">
-              <div class="sub-heading">阻断原因明细：</div>
+              <div class="sub-heading">未通过原因</div>
               <ul class="reason-list">
-                <li v-for="(reason, idx) in reportData.blocked_reasons" :key="idx">{{ reason }}</li>
+                <li v-for="(reason, idx) in reportData.blocked_reasons" :key="idx">{{ formatReasonText(reason) }}</li>
               </ul>
               <el-descriptions title="来源完整性核验凭证" :column="3" border size="small" style="margin-top: 12px">
-                <el-descriptions-item label="专业 / 年级">{{ reportData.evidence?.major_id }} / {{ reportData.evidence?.grade }}级</el-descriptions-item>
+                <el-descriptions-item label="专业 / 年级">{{ getMajorName(reportData.evidence?.major_id) }} / {{ reportData.evidence?.grade }}级</el-descriptions-item>
                 <el-descriptions-item label="评价期间">{{ reportData.evidence?.start_term }} ~ {{ reportData.evidence?.end_term }}</el-descriptions-item>
                 <el-descriptions-item label="参评学生数">{{ reportData.evidence?.population_count }} 人</el-descriptions-item>
                 <el-descriptions-item label="计划必修课数">{{ reportData.evidence?.plan_course_count }} 门</el-descriptions-item>
@@ -519,7 +556,9 @@
       <!-- ==================== 4.6 评教结果汇总（教师匿名汇总 / 教务处触发与受控明细） ==================== -->
       <el-tab-pane v-if="isStaff" label="评教结果汇总" name="evalSummary">
         <div class="toolbar">
-          <el-input v-model="evalSummaryQuery.term" placeholder="学期如 2026-2027-1" style="width: 170px" clearable />
+          <el-select v-model="evalSummaryQuery.term" placeholder="选择学期" clearable style="width: 170px">
+            <el-option v-for="t in allTermOptions" :key="t" :label="t" :value="t" />
+          </el-select>
           <el-button type="primary" @click="loadEvalSummaries">刷新汇总</el-button>
           <el-button
             v-if="evalSummaryData?.can_trigger_recompute"
@@ -527,7 +566,7 @@
             :loading="recomputingEvalSummary"
             @click="handleRecomputeEvalSummary"
           >
-            执行本学期评教结果汇总（写 tc_eval_result）
+            汇总本学期评教结果
           </el-button>
           <el-button
             v-if="evalSummaryData?.can_view_details"
@@ -535,18 +574,9 @@
             plain
             @click="openOfficeEvalDetails"
           >
-            教务处受控明细查阅（界面 13）
+            查看评教明细
           </el-button>
         </div>
-
-        <el-alert
-          v-if="evalSummaryData?.anonymity_note"
-          :title="evalSummaryData.anonymity_note"
-          type="info"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 12px"
-        />
 
         <el-table :data="evalSummaryData?.items || []" border stripe v-loading="loadingEvalSummary">
           <el-table-column prop="tc_id" label="教学班号" width="125" />
@@ -580,7 +610,7 @@
         <el-card
           v-if="evalSummaryData?.teacher_weighted_summaries?.length"
           shadow="never"
-          header="教师教学评价加权汇总（按参评人数加权计算，不含零参评教学班）"
+          header="教师评教加权汇总"
           style="margin-top: 16px"
         >
           <el-table :data="evalSummaryData.teacher_weighted_summaries" border size="small">
@@ -595,7 +625,7 @@
     </el-tabs>
 
     <!-- 4.1 评教提交弹窗 -->
-    <el-dialog v-model="evalDialogVisible" title="提交课程教学评价（提交后不可修改）" width="500px">
+    <el-dialog v-model="evalDialogVisible" title="提交课程教学评价" width="500px">
       <el-alert
         type="warning"
         show-icon
@@ -615,7 +645,7 @@
             :step="1"
             :precision="0"
           />
-          <span class="muted" style="margin-left: 10px">0~100 整数（0 与 100 均合法）</span>
+          <span class="muted" style="margin-left: 10px">0~100 整数</span>
         </el-form-item>
         <el-form-item label="意见建议">
           <el-input
@@ -624,7 +654,7 @@
             :rows="3"
             maxlength="200"
             show-word-limit
-            placeholder="选填，最多 200 字；明细仅教务处受控查阅，绝不向教师展示"
+            placeholder="选填，最多 200 字"
           />
         </el-form-item>
       </el-form>
@@ -635,14 +665,7 @@
     </el-dialog>
 
     <!-- 4.6 教务处受控评教明细抽屉（仅教务处/管理员可见） -->
-    <el-drawer v-model="detailDrawerVisible" title="教务处受控评教明细查阅（匿名化视图）" size="60%">
-      <el-alert
-        type="warning"
-        show-icon
-        :closable="false"
-        style="margin-bottom: 12px"
-        title="本视图仅限教务处与系统管理员受控查阅，教师及学院角色在服务端已严格拦截（HTTP 403）。"
-      />
+    <el-drawer v-model="detailDrawerVisible" title="评教明细" size="60%">
       <el-table :data="officeEvalDetails" border stripe v-loading="loadingEvalDetails">
         <el-table-column prop="tc_id" label="教学班号" width="115" />
         <el-table-column prop="course_name" label="课程名称" min-width="140" />
@@ -662,6 +685,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { statsApi } from '../../api/stats'
 import { userState } from '../../stores/user'
+import { mergeTermOptions } from '../../constants/terms'
+import { MAJOR_OPTIONS, getMajorName, formatReasonText } from '../../constants/dicts'
 import TranscriptPreview from './TranscriptPreview.vue'
 
 const STUDY_TYPE_MAP = { 1: '初修', 2: '重修', 3: '辅修' }
@@ -699,6 +724,7 @@ const evalForm = reactive({ eval_score: 95, eval_comment: '' })
 // 4.2 成绩查询
 const gradeQuery = reactive({ term: '', only_final: false })
 const gradeTermOptions = ref(['2026-2027-1'])
+const allTermOptions = computed(() => mergeTermOptions(reportOptions.value?.terms, gradeTermOptions.value))
 const gradeResult = ref(null)
 const loadingGrades = ref(false)
 const gradeGateBlocked = ref(false)
@@ -1037,12 +1063,12 @@ watch(role, (val) => {
   margin-top: 4px;
 }
 .text-primary { color: var(--brand-primary); }
-.text-success { color: #389e0d; }
-.text-danger { color: #cf1322; }
+.text-success { color: var(--el-color-success); }
+.text-danger { color: var(--el-color-danger); }
 .muted { color: var(--app-text-secondary); font-size: 12.5px; }
 .sub-heading { font-weight: 600; margin-bottom: 8px; color: var(--app-text-primary); }
 .gate-block-card { border-color: rgba(250, 173, 20, 0.45) !important; background: rgba(250, 173, 20, 0.08) !important; }
-.reason-list { margin: 0; padding-left: 20px; color: #cf1322; line-height: 1.8; }
+.reason-list { margin: 0; padding-left: 20px; color: var(--el-color-danger); line-height: 1.8; }
 .print-area { margin-top: 12px; }
 
 @media print {
@@ -1056,6 +1082,14 @@ watch(role, (val) => {
   }
   :deep(.el-tabs__content) {
     padding: 0 !important;
+  }
+  .print-area {
+    margin-top: 0 !important;
+  }
+  :deep(.transcript-sheet) {
+    max-width: none !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
   }
 }
 </style>

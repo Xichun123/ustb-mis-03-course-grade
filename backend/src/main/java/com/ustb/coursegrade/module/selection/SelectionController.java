@@ -17,14 +17,14 @@ public class SelectionController {
 
     private final SelectionService service;
     public SelectionController(SelectionService service){this.service=service;}
-    @GetMapping("/module-info") public ApiResponse<?> info(){return ApiResponse.ok(Map.of("module","业务② 学生选课","owner","张文浩","status","核心流程已实现；停开仅预览","leaf_modules",List.of("2.1课程查询","2.2选课与退选","2.3选课校验","2.4录取与筛选","2.5停开预览","2.6结果与课表名单","2.7名单调整")));}
+    @GetMapping("/module-info") public ApiResponse<?> info(){return ApiResponse.ok(Map.of("module","学生选课","status","运行中","features",List.of("课程查询","选课与退选","选课校验","录取与筛选","停开预览","结果与课表名单","名单调整")));}
     @GetMapping("/context") public ApiResponse<?> context(){return ApiResponse.ok(service.context());}
     @GetMapping("/courses") public ApiResponse<?> courses(@RequestParam int roundId,@RequestParam(defaultValue="") String keyword,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="10") int pageSize){
         if(page<1 || page>100000 || pageSize<1 || pageSize>100 || keyword.length()>100)throw BizException.unprocessable("BAD_QUERY","分页或查询条件无效");
         return ApiResponse.ok(service.courses(roundId,keyword.trim(),page,pageSize));
     }
     @GetMapping("/results") public ApiResponse<?> results(@RequestParam String term){return ApiResponse.ok(service.results(term(term)));}
-    @GetMapping("/timetable") public ApiResponse<?> timetable(@RequestParam String term,@RequestParam(defaultValue="1") int week){if(week<1 || week>60)throw BizException.unprocessable("BAD_WEEK","教学周须为1—60");return ApiResponse.ok(service.timetable(term(term),week));}
+    @GetMapping("/timetable") public ApiResponse<?> timetable(@RequestParam String term,@RequestParam(defaultValue="1") int week){if(week<1 || week>16)throw BizException.unprocessable("BAD_WEEK","教学周须为1—16");return ApiResponse.ok(service.timetable(term(term),week));}
     @PostMapping("/check") public ApiResponse<?> check(@RequestBody SelectionService.Application request){return ApiResponse.ok(service.check(request));}
     @PostMapping("/applications") public ApiResponse<?> enroll(@RequestBody SelectionService.Application request){return ApiResponse.ok(service.enroll(request));}
     @PostMapping("/records/{scId}/withdraw") public ApiResponse<?> withdraw(@PathVariable String scId,@RequestBody SelectionService.Withdrawal request){if(!scId.matches("[1-9][0-9]{0,18}"))throw BizException.unprocessable("BAD_ID","选课记录号无效");return ApiResponse.ok(service.withdraw(scId,request));}

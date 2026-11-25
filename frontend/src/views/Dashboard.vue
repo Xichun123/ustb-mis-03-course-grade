@@ -10,16 +10,12 @@
           {{ todayText }} · 2026-2027-1 学期
         </p>
       </div>
-      <div class="status-pill" :class="{ online: serviceOnline }">
-        <span class="status-dot" />
-        <span>{{ serviceOnline ? '教务服务运行正常' : '正在连接服务' }}</span>
-      </div>
     </div>
 
     <!-- 第一排：个人名片 + 学期概览双卡 -->
     <el-row :gutter="20" class="section-row">
-      <el-col :xs="24" :lg="12" class="col-gap">
-        <el-card class="app-card-hover full-height-card">
+      <el-col :xs="24" :lg="11" class="col-gap">
+        <el-card class="app-card-hover full-height-card profile-card">
           <div class="profile-layout">
             <div class="profile-avatar">
               <span>{{ avatarText }}</span>
@@ -34,7 +30,11 @@
                   <span class="meta-label">{{ userState.currentUser?.studentId ? '学号' : '工号' }}</span>
                   <span class="meta-val">{{ userState.currentUser?.studentId || userState.currentUser?.empId || '—' }}</span>
                 </div>
-                <div class="meta-item">
+                <div v-if="userState.currentUser?.studentId" class="meta-item">
+                  <span class="meta-label">班级</span>
+                  <span class="meta-val">{{ studentClass }}</span>
+                </div>
+                <div v-else class="meta-item">
                   <span class="meta-label">所属单位</span>
                   <span class="meta-val">{{ collegeLabel(userState.currentUser?.collegeId, userState.currentUser?.orgId) }}</span>
                 </div>
@@ -42,9 +42,13 @@
                   <span class="meta-label">当前学期</span>
                   <span class="meta-val">2026-2027-1</span>
                 </div>
-                <div class="meta-item">
-                  <span class="meta-label">账户状态</span>
-                  <span class="meta-val val-ok">正常</span>
+                <div v-if="userState.currentUser?.studentId" class="meta-item">
+                  <span class="meta-label">所属单位</span>
+                  <span class="meta-val">{{ collegeLabel(userState.currentUser?.collegeId, userState.currentUser?.orgId) }}</span>
+                </div>
+                <div v-else class="meta-item">
+                  <span class="meta-label">当前周次</span>
+                  <span class="meta-val">{{ currentWeekText }}</span>
                 </div>
               </div>
             </div>
@@ -52,8 +56,8 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="24" :lg="12" class="col-gap">
-        <el-card class="app-card-hover full-height-card">
+      <el-col :xs="24" :lg="13" class="col-gap">
+        <el-card class="app-card-hover full-height-card overview-card">
           <div class="overview-top">
             <span class="block-label">本学期选课与教学概览</span>
             <el-button text circle size="small" :loading="loading" @click="loadOverview" title="刷新">
@@ -92,7 +96,6 @@
     <!-- 第二排：独立悬浮服务入口（去套娃卡片） -->
     <div class="section-head">
       <h2 class="section-title">常用服务</h2>
-      <span class="section-tip">{{ userState.currentUser?.role === 'STUDENT' ? '快速进入选课、课表与成绩查询' : '选择对应模块办理教务业务' }}</span>
     </div>
     <div class="entry-grid">
       <div
@@ -149,19 +152,28 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { systemApi } from '../api/modules'
 import { prepApi } from '../api/prep'
 import { userState } from '../stores/user'
 import { visibleModulesForRole } from '../stores/permissions'
 
 const router = useRouter()
-const serviceOnline = ref(false)
 const rounds = ref([])
 const loading = ref(false)
 
 const shortName = computed(() => {
   const full = userState.currentUser?.displayName || ''
   return full.replace(/（.*）$/, '').trim() || full
+})
+
+const studentClass = computed(() => {
+  if (userState.currentUser?.className) {
+    return userState.currentUser.className
+  }
+  const full = userState.currentUser?.displayName || ''
+  const match = full.match(/（([^）]+)）$/)
+  if (!match) return '—'
+  const inside = match[1]
+  return inside.includes('·') ? inside.split('·').pop().trim() : inside.trim()
 })
 
 const avatarText = computed(() => {
@@ -208,6 +220,13 @@ const roleLabel = (role) => ({
   SYS_ADMIN: '系统管理员'
 }[role] || '教务用户')
 
+const currentWeekText = computed(() => {
+  const start = new Date(2026, 8, 7) // 2026-09-07
+  const diffDays = Math.floor((Date.now() - start.getTime()) / 86400000)
+  const week = Math.min(20, Math.max(1, Math.floor(diffDays / 7) + 1))
+  return `第 ${week} 周`
+})
+
 const collegeLabel = (collegeId, orgId) => {
   const map = { '0001': '经济管理学院', '0002': '计算机与通信工程学院' }
   if (collegeId && map[collegeId]) return map[collegeId]
@@ -224,14 +243,10 @@ function formatTime(t) {
 async function loadOverview() {
   loading.value = true
   try {
-    const [healthRes, roundsRes] = await Promise.allSettled([
-      systemApi.health(),
-      prepApi.listRounds({ term: '2026-2027-1' })
-    ])
-    serviceOnline.value = healthRes.status === 'fulfilled' && !!healthRes.value?.data?.db_connected
-    if (roundsRes.status === 'fulfilled') {
-      rounds.value = roundsRes.value?.data || []
-    }
+    const roundsRes = await prepApi.listRounds({ term: '2026-2027-1' })
+    rounds.value = roundsRes?.data || []
+  } catch {
+    // ignore
   } finally {
     loading.value = false
   }
@@ -263,29 +278,6 @@ onMounted(loadOverview)
   color: var(--app-text-secondary);
 }
 
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: var(--app-card-bg);
-  border: 1px solid var(--app-border);
-  font-size: 12.5px;
-  color: var(--app-text-secondary);
-  box-shadow: var(--app-shadow-sm);
-}
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #d97706;
-}
-.status-pill.online .status-dot {
-  background: #22c55e;
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
-}
-
 .section-row {
   margin-bottom: 8px;
 }
@@ -295,20 +287,36 @@ onMounted(loadOverview)
 .full-height-card {
   height: 100%;
 }
+.profile-card :deep(.el-card__body) {
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 18px 24px !important;
+}
+.overview-card :deep(.el-card__body) {
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 18px 22px !important;
+}
 
 /* 个人名片 */
 .profile-layout {
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 22px;
 }
 .profile-avatar {
-  width: 68px;
-  height: 68px;
+  width: 72px;
+  height: 72px;
   border-radius: 20px;
   background: linear-gradient(135deg, #003366 0%, #0b5cad 100%);
   color: #ffffff;
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -324,42 +332,40 @@ onMounted(loadOverview)
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 .profile-name {
-  font-size: 18px;
+  font-size: 21px;
   font-weight: 700;
+  line-height: 1.2;
   color: var(--app-text-primary);
 }
 .role-badge {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--brand-primary);
   background: var(--app-menu-active-bg);
-  padding: 2px 10px;
+  padding: 3px 11px;
   border-radius: 999px;
 }
 .profile-meta-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 18px;
+  gap: 14px 24px;
 }
 .meta-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .meta-label {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--app-text-tertiary);
 }
 .meta-val {
-  font-size: 13.5px;
-  font-weight: 500;
+  font-size: 15.5px;
+  font-weight: 600;
   color: var(--app-text-primary);
-}
-.val-ok {
-  color: #16a34a;
 }
 
 /* 概览卡 */
@@ -367,7 +373,7 @@ onMounted(loadOverview)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 .block-label {
   font-size: 13px;
@@ -378,14 +384,14 @@ onMounted(loadOverview)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 4px 16px;
+  padding: 4px 4px 12px;
 }
 .metric-cell {
   flex: 1;
   text-align: center;
 }
 .metric-value {
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--app-text-primary);
@@ -408,7 +414,7 @@ onMounted(loadOverview)
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-radius: 10px;
   background: var(--app-card-muted-bg);
   font-size: 12.5px;
@@ -435,10 +441,6 @@ onMounted(loadOverview)
   font-size: 15.5px;
   font-weight: 650;
   color: var(--app-text-primary);
-}
-.section-tip {
-  font-size: 12.5px;
-  color: var(--app-text-tertiary);
 }
 
 /* 快捷业务独立悬浮卡 */

@@ -94,7 +94,7 @@ public class AdminService {
         }
         if (enabled != null) {
             if (enabled != 0 && enabled != 1) {
-                throw BizException.unprocessable("INVALID_ENABLED", "is_enabled 只能为 0 或 1");
+                throw BizException.unprocessable("INVALID_ENABLED", "启用状态参数无效");
             }
             jdbc.update("UPDATE sys_code_dict SET is_enabled = ? WHERE dict_id = ?", enabled, id);
         }
@@ -116,7 +116,7 @@ public class AdminService {
         CurrentUser u = UserContext.requireRole(RoleEnum.SYS_ADMIN);
         int type = body.get("backup_type") == null ? 1 : Integer.parseInt(String.valueOf(body.get("backup_type")));
         if (type != 1 && type != 2) {
-            throw BizException.unprocessable("INVALID_TYPE", "备份类型只能为 1手工备份 / 2恢复前应急快照");
+            throw BizException.unprocessable("INVALID_TYPE", "备份类型仅支持手工备份或恢复前应急快照");
         }
         String fileName = str(body.get("file_name"));
         if (fileName.isEmpty()) {
@@ -151,7 +151,7 @@ public class AdminService {
                 """, "before_restore_" + fileName, u.empId() == null ? u.userId() : u.empId(),
                 "恢复 " + fileName + " 前的应急快照");
         return Map.of("backup_id", backupId, "file_name", fileName,
-                "message", "已生成恢复前应急快照，可执行恢复；恢复后请重新运行 v9 校验脚本");
+                "message", "已自动生成恢复前应急快照，请继续按规范执行数据恢复并核验数据完整性");
     }
 
     private static String str(Object o) {

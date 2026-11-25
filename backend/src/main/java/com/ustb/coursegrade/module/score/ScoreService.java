@@ -128,7 +128,7 @@ public class ScoreService {
                 int st = curStatuses.get(0);
                 if (st == 1 || st == 2 || st == 3) {
                     throw BizException.conflict("SCORE_LOCKED",
-                            "选课记录 " + scId + " 当前已提交/已核对/已发布，不能直接修改（发布后请走业务⑤成绩更正）");
+                            "该成绩记录已提交审核或正式发布，不能直接修改（已发布成绩请通过成绩更正申请流程办理）");
                 }
             }
             int ratio = toInt(item.get("usual_ratio"), min);
@@ -140,11 +140,11 @@ public class ScoreService {
             BigDecimal exam = toScore(item.get("exam_score"), "期末成绩");
             int flag = toInt(item.get("exam_flag"), 0);
             if (flag < 0 || flag > 3) {
-                throw BizException.unprocessable("INVALID_EXAM_FLAG", "考试情况只能为 0正常/1缺考/2缓考/3违纪");
+                throw BizException.unprocessable("INVALID_EXAM_FLAG", "考试情况仅支持正常、缺考、缓考或违纪");
             }
             int scoreType = toInt(item.get("score_type"), 1);
             if (scoreType < 1 || scoreType > 3) {
-                throw BizException.unprocessable("INVALID_SCORE_TYPE", "记分方式只能为 1百分制/2五级制/3两级制");
+                throw BizException.unprocessable("INVALID_SCORE_TYPE", "记分方式仅支持百分制、五级制或两级制");
             }
             String level = str(item.get("score_level"));
             if (scoreType == 1) {
@@ -344,7 +344,7 @@ public class ScoreService {
             throw BizException.forbidden("只能核对本院开设课程");
         }
         if (result != 1 && result != 2) {
-            throw BizException.unprocessable("INVALID_RESULT", "核对结论只能为 1通过 / 2退回");
+            throw BizException.unprocessable("INVALID_RESULT", "请选择核对结论（通过或退回）");
         }
         String op = opinion == null ? "" : opinion.trim();
         if (result == 2 && op.isEmpty()) {
@@ -516,7 +516,7 @@ public class ScoreService {
         }
         int scale = toInt(body.get("ext_scale_type"), 1);
         if (scale < 1 || scale > 4) {
-            throw BizException.unprocessable("INVALID_SCALE", "外校记分制只能为 1百分制/2字母等级/3绩点/4其他");
+            throw BizException.unprocessable("INVALID_SCALE", "外校记分制仅支持百分制、字母等级、绩点或其他");
         }
         int scoreType = toInt(body.get("score_type"), 1);
         BigDecimal converted = dec(body.get("converted_score"));
@@ -537,7 +537,7 @@ public class ScoreService {
             }
             converted = null;
         } else {
-            throw BizException.unprocessable("INVALID_SCORE_TYPE", "换算后记分方式只能为 1/2/3");
+            throw BizException.unprocessable("INVALID_SCORE_TYPE", "换算后记分方式仅支持百分制、五级制或两级制");
         }
         BigDecimal gp = converted != null ? percentToPoint(converted) : levelToPoint(level);
         String applyId = str(body.get("exchange_apply_id"));
@@ -560,7 +560,7 @@ public class ScoreService {
     public Map<String, Object> collegeAuditExchange(long convertId, int decision, String opinion) {
         CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
         if (decision != 1 && decision != 2) {
-            throw BizException.unprocessable("INVALID_DECISION", "决定必须为 1通过 / 2驳回");
+            throw BizException.unprocessable("INVALID_DECISION", "请选择审核决定（通过或驳回）");
         }
         String op = opinion == null ? "" : opinion.trim();
         if (decision == 2 && op.isEmpty()) {
@@ -572,7 +572,7 @@ public class ScoreService {
             throw BizException.notFound("校外成绩认定记录不存在");
         }
         if (((Number) rows.get(0).get("audit_status")).intValue() != 0) {
-            throw BizException.conflict("INVALID_STATUS", "仅待学院审核（0）状态的记录可执行学院审核");
+            throw BizException.conflict("INVALID_STATUS", "仅待学院审核状态的记录可执行学院审核");
         }
         int nextStatus = (decision == 1) ? 1 : 3;
         jdbc.update("""
@@ -589,7 +589,7 @@ public class ScoreService {
     public Map<String, Object> schoolApproveExchange(long convertId, int decision, String opinion) {
         CurrentUser u = UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         if (decision != 1 && decision != 2) {
-            throw BizException.unprocessable("INVALID_DECISION", "决定必须为 1通过 / 2驳回");
+            throw BizException.unprocessable("INVALID_DECISION", "请选择审批决定（通过或驳回）");
         }
         String op = opinion == null ? "" : opinion.trim();
         if (decision == 2 && op.isEmpty()) {
@@ -603,7 +603,7 @@ public class ScoreService {
         }
         Map<String, Object> row = rows.get(0);
         if (((Number) row.get("audit_status")).intValue() != 1) {
-            throw BizException.conflict("INVALID_STATUS", "仅待教务处审批（1）状态的记录可执行审批");
+            throw BizException.conflict("INVALID_STATUS", "仅待教务处审批状态的记录可执行审批");
         }
         int nextStatus = (decision == 1) ? 2 : 3;
         jdbc.update("""

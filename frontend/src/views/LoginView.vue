@@ -18,7 +18,7 @@
         <el-form-item prop="username">
           <el-input
             v-model="form.username"
-            placeholder="请输入学号 / 教职工号"
+            placeholder="请输入用户名"
             clearable
             autocomplete="username"
             @keyup.enter="handleLogin"
@@ -54,32 +54,6 @@
           登 录
         </el-button>
       </el-form>
-
-      <div class="auth-helper">
-        <button type="button" class="helper-toggle" @click="showQuick = !showQuick">
-          <span>{{ showQuick ? '收起快速填充' : '常用学号 / 工号参考' }}</span>
-          <el-icon :class="{ rotated: showQuick }"><ArrowDown /></el-icon>
-        </button>
-
-        <div v-if="showQuick" class="quick-panel">
-          <div class="quick-tip">点击自动填充账号（默认密码 123456）</div>
-          <div v-for="group in quickGroups" :key="group.label" class="quick-group">
-            <div class="quick-group-label">{{ group.label }}</div>
-            <div class="quick-chips">
-              <button
-                v-for="item in group.items"
-                :key="item.code"
-                type="button"
-                class="quick-chip"
-                @click="fillAccount(item.code)"
-              >
-                <span class="chip-name">{{ item.name }}</span>
-                <span class="chip-code">{{ item.code }}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 </template>
@@ -94,7 +68,6 @@ const router = useRouter()
 const route = useRoute()
 const formRef = ref(null)
 const submitting = ref(false)
-const showQuick = ref(false)
 
 const form = reactive({
   username: '',
@@ -102,44 +75,8 @@ const form = reactive({
 })
 
 const rules = {
-  username: [{ required: true, message: '请输入学号或教职工号', trigger: 'blur' }],
+  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入登录密码', trigger: 'blur' }]
-}
-
-const quickGroups = [
-  {
-    label: '学生',
-    items: [
-      { name: '张晨曦（本科）', code: 'U202440001' },
-      { name: '林思远（本科）', code: 'U202440002' },
-      { name: '刘浩然（重修）', code: 'U202340004' },
-      { name: '许嘉豪（研究生）', code: 'M202610001' },
-      { name: 'Alex（交换生）', code: 'EX20260001' }
-    ]
-  },
-  {
-    label: '教师与学院',
-    items: [
-      { name: '王明远（教师）', code: 'T000010001' },
-      { name: '李晓静（教师）', code: 'T000010002' },
-      { name: '周敏（经管秘）', code: 'E000010001' },
-      { name: '赵刚（计通秘）', code: 'E000020001' }
-    ]
-  },
-  {
-    label: '校级管理',
-    items: [
-      { name: '林建华（教务处）', code: 'A000000001' },
-      { name: '吴海峰（处长）', code: 'A000000002' },
-      { name: '孙梅（研究生院）', code: 'G000000001' },
-      { name: '系统管理员', code: 'S000000001' }
-    ]
-  }
-]
-
-function fillAccount(code) {
-  form.username = code
-  form.password = '123456'
 }
 
 async function handleLogin() {
@@ -206,7 +143,7 @@ async function handleLogin() {
   z-index: 1;
   width: 100%;
   max-width: 416px;
-  padding: 36px 34px 28px;
+  padding: 36px 34px 34px;
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(16px);
@@ -220,13 +157,13 @@ async function handleLogin() {
 }
 
 .auth-brand-logo {
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 64px;
   display: block;
-  object-fit: cover;
-  border-radius: 16px;
+  object-fit: contain;
+  border-radius: 50%;
   margin: 0 auto 14px;
-  box-shadow: 0 8px 22px rgba(0, 51, 102, 0.22);
+  filter: drop-shadow(0 4px 10px rgba(0, 91, 148, 0.14));
 }
 
 .auth-title {
@@ -256,96 +193,28 @@ async function handleLogin() {
   margin-top: 6px;
 }
 
-.auth-helper {
-  margin-top: 20px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(15, 23, 42, 0.06);
-  text-align: center;
+:global(html[data-theme='dark']) .auth-page-bg {
+  background: linear-gradient(135deg, #071220 0%, #0d223c 55%, #123359 100%);
 }
 
-.helper-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: none;
-  background: transparent;
-  color: #64748b;
-  font-size: 12.5px;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 6px;
-  transition: color 0.18s ease, background-color 0.18s ease;
+:global(html[data-theme='dark']) .auth-card {
+  background: rgba(22, 31, 41, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.5);
+  color: var(--app-text-primary);
 }
 
-.helper-toggle:hover {
-  color: #0b5cad;
-  background: rgba(11, 92, 173, 0.06);
+:global(html[data-theme='dark']) .auth-brand-logo {
+  background: rgba(255, 255, 255, 0.94);
+  padding: 3px;
+  box-sizing: border-box;
 }
 
-.helper-toggle .el-icon {
-  transition: transform 0.2s ease;
-}
-.helper-toggle .el-icon.rotated {
-  transform: rotate(180deg);
+:global(html[data-theme='dark']) .auth-title {
+  color: var(--app-text-primary);
 }
 
-.quick-panel {
-  margin-top: 12px;
-  text-align: left;
-  padding: 12px;
-  border-radius: 12px;
-  background: #f8fafc;
-  border: 1px solid rgba(15, 23, 42, 0.06);
-}
-
-.quick-tip {
-  font-size: 11.5px;
-  color: #94a3b8;
-  margin-bottom: 10px;
-}
-
-.quick-group {
-  margin-bottom: 10px;
-}
-.quick-group:last-child {
-  margin-bottom: 0;
-}
-
-.quick-group-label {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: #475569;
-  margin-bottom: 6px;
-}
-
-.quick-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.quick-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 7px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: #ffffff;
-  font-size: 11.5px;
-  color: #334155;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.quick-chip:hover {
-  border-color: #0b5cad;
-  color: #0b5cad;
-  background: rgba(11, 92, 173, 0.05);
-}
-
-.chip-code {
-  color: #94a3b8;
-  font-size: 10.5px;
+:global(html[data-theme='dark']) .auth-subtitle {
+  color: var(--app-text-secondary);
 }
 </style>

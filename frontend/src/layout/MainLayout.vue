@@ -52,19 +52,44 @@
         :collapse-transition="false"
         router
         class="app-side-menu sider-scroll"
+        @mouseleave="hideSiderTooltip"
+        @select="hideSiderTooltip"
       >
-        <el-menu-item index="/dashboard">
+        <el-menu-item
+          index="/dashboard"
+          @mouseenter="showSiderTooltip($event, homeTitle)"
+          @mouseleave="hideSiderTooltip"
+        >
           <el-icon><House /></el-icon>
-          <template #title>{{ homeTitle }}</template>
+          <span v-if="!collapsed" class="sider-menu-label">{{ homeTitle }}</span>
         </el-menu-item>
         <template v-for="(grp, gIdx) in menuGroups" :key="gIdx">
           <div class="app-menu-divider" />
-          <el-menu-item v-for="item in grp" :key="item.path" :index="item.path">
+          <el-menu-item
+            v-for="item in grp"
+            :key="item.path"
+            :index="item.path"
+            @mouseenter="showSiderTooltip($event, item.title)"
+            @mouseleave="hideSiderTooltip"
+          >
             <el-icon><component :is="item.icon" /></el-icon>
-            <template #title>{{ item.title }}</template>
+            <span v-if="!collapsed" class="sider-menu-label">{{ item.title }}</span>
           </el-menu-item>
         </template>
       </el-menu>
+
+      <el-tooltip
+        v-if="collapsed"
+        :visible="tooltipVisible"
+        :virtual-ref="tooltipTriggerEl"
+        virtual-triggering
+        :content="tooltipContent"
+        placement="right"
+        :offset="10"
+        :hide-after="0"
+        transition="sider-tooltip-none"
+        popper-class="sider-singleton-tooltip"
+      />
 
       <button
         class="sider-collapse-trigger"
@@ -106,15 +131,17 @@
           </div>
 
           <el-dropdown trigger="click" @command="setThemeMode">
-            <el-tooltip content="主题设置" placement="bottom">
-              <el-button text circle class="header-icon-btn" aria-label="主题设置">
-                <el-icon :size="17">
-                  <Moon v-if="themeState.mode === 'dark'" />
-                  <Sunny v-else-if="themeState.mode === 'light'" />
-                  <Monitor v-else />
-                </el-icon>
-              </el-button>
-            </el-tooltip>
+            <span class="header-dropdown-trigger">
+              <el-tooltip :content="themeTooltip" placement="bottom" :hide-after="0">
+                <el-button text circle class="header-icon-btn" :aria-label="themeTooltip">
+                  <el-icon :size="17">
+                    <Moon v-if="themeState.mode === 'dark'" />
+                    <Sunny v-else-if="themeState.mode === 'light'" />
+                    <Monitor v-else />
+                  </el-icon>
+                </el-button>
+              </el-tooltip>
+            </span>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="light">
@@ -168,10 +195,18 @@ const router = useRouter()
 const collapsed = ref(localStorage.getItem(COLLAPSED_KEY) === 'true')
 const isMobile = ref(typeof window !== 'undefined' ? window.innerWidth < 992 : false)
 const drawerOpen = ref(false)
+const tooltipVisible = ref(false)
+const tooltipContent = ref('')
+const tooltipTriggerEl = ref(null)
 
 const currentRole = computed(() => userState.currentUser?.role)
 const homeTitle = computed(() => getHomeTitle(currentRole.value))
 const pageTitle = computed(() => getPageTitle(route.path, currentRole.value))
+const themeTooltip = computed(() => ({
+  light: '主题设置：浅色',
+  dark: '主题设置：深色',
+  system: '主题设置：跟随系统'
+}[themeState.mode] || '主题设置'))
 
 const menuGroups = computed(() => {
   const list = visibleModulesForRole(currentRole.value)
@@ -214,7 +249,19 @@ function handleResize() {
   if (!isMobile.value) drawerOpen.value = false
 }
 
+function showSiderTooltip(event, title) {
+  if (!collapsed.value) return
+  tooltipTriggerEl.value = event.currentTarget
+  tooltipContent.value = title
+  tooltipVisible.value = true
+}
+
+function hideSiderTooltip() {
+  tooltipVisible.value = false
+}
+
 function toggleCollapse() {
+  hideSiderTooltip()
   collapsed.value = !collapsed.value
   localStorage.setItem(COLLAPSED_KEY, String(collapsed.value))
 }
@@ -354,6 +401,12 @@ async function handleLogout() {
   flex-shrink: 0;
 }
 
+.header-dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  outline: none;
+}
+
 .header-icon-btn {
   color: var(--app-text-secondary);
 }
@@ -397,10 +450,20 @@ async function handleLogout() {
     padding: 16px;
   }
 }
+
+.sider-menu-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 </style>
 
 <style>
 .mobile-drawer-body {
   padding: 0 !important;
+}
+
+.sider-singleton-tooltip {
+  pointer-events: none;
 }
 </style>

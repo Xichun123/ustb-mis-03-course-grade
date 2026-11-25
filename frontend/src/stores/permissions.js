@@ -48,7 +48,7 @@ export const MODULE_CONFIG = [
       },
       TEACHER: {
         title: '上课名单',
-        desc: '查看本人授课班名单、打印与调整学生',
+        desc: '查看授课班名单、打印与调整学生',
         icon: 'User'
       }
     }
@@ -85,23 +85,23 @@ export const MODULE_CONFIG = [
       },
       TEACHER: {
         title: '成绩报表与评教',
-        desc: '查看授课班成绩分布与匿名评教汇总'
+        desc: '查看授课班成绩分布与评教汇总'
       }
     }
   },
   {
     path: '/correction',
     title: '成绩更正审批',
-    desc: '受理成绩更正申请与学院/教务两级审批',
+    desc: '受理成绩更正申请与学院审批',
     icon: 'DocumentChecked',
     group: 2,
     bg: 'rgba(8, 145, 178, 0.10)',
     color: '#0891b2',
-    roles: ALL_ROLES,
+    roles: ['TEACHER', 'COLLEGE_SECRETARY', 'STUDENT', 'SYS_ADMIN'],
     roleOverrides: {
       STUDENT: {
         title: '成绩更正通知',
-        desc: '查看本人已通过审批的成绩更正记录'
+        desc: '查看已通过审批的成绩更正记录'
       },
       TEACHER: {
         title: '成绩更正',
@@ -112,7 +112,7 @@ export const MODULE_CONFIG = [
   {
     path: '/admin',
     title: '系统维护',
-    desc: '编码参数配置、数据备份与应急快照',
+    desc: '数据备份登记、日志查看与应急恢复',
     icon: 'Tools',
     group: 3,
     bg: 'rgba(100, 116, 139, 0.12)',

@@ -1,13 +1,15 @@
 <template>
   <div>
-    <el-alert v-if="role && !isTeacher && !isCollege && !isOffice && !isAdmin" title="请切换至任课教师、学院教学秘书、教务处经办或系统管理员账号使用成绩录入与审核模块。" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
+    <el-alert v-if="role && !isTeacher && !isCollege && !isOffice && !isAdmin" title="当前账号无权访问成绩录入与审核模块。" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
     <el-tabs v-else v-model="activeTab" type="border-card">
       <!-- 3.1 教师：我的课堂（本学期在前、往届在后） -->
-      <el-tab-pane v-if="isTeacher || isAdmin" label="我的课堂与成绩录入" name="entry">
+      <el-tab-pane v-if="isTeacher || isAdmin" label="课堂与成绩录入" name="entry">
         <div class="toolbar">
-          <el-input v-model="classQuery.term" placeholder="学期，如 2026-2027-1" style="width: 190px" clearable />
+          <el-select v-model="classQuery.term" placeholder="全部学期" clearable style="width: 170px">
+            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+          </el-select>
           <el-input v-model="classQuery.keyword" placeholder="课堂号 / 课程名" style="width: 220px" clearable />
-          <el-button type="primary" @click="loadClasses">查询我的课堂</el-button>
+          <el-button type="primary" @click="loadClasses">查询</el-button>
         </div>
         <el-table :data="classList" border stripe v-loading="loadingClasses" @row-click="openClass">
           <el-table-column prop="lesson_no" label="课堂号" width="140" />
@@ -48,7 +50,7 @@
             <el-table-column label="平时成绩" width="120">
               <template #default="{ row }">
                 <el-input-number v-if="row.score_type === 1" v-model="row.usual_score" :min="0" :max="100" :precision="1" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" />
-                <span v-else style="color: #909399">等级制</span>
+                <span v-else class="muted">等级制</span>
               </template>
             </el-table-column>
             <el-table-column label="期末/等级" width="125">
@@ -86,14 +88,18 @@
       <!-- 3.3 学院核对 -->
       <el-tab-pane v-if="isCollege || isAdmin" label="学院核对" name="audit">
         <div class="toolbar">
-          <el-input v-model="auditTerm" placeholder="学期（可空）" style="width: 190px" clearable />
+          <el-select v-model="auditTerm" placeholder="全部学期" clearable style="width: 170px">
+            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+          </el-select>
           <el-button type="primary" @click="loadAudit">刷新待核对</el-button>
         </div>
         <el-table :data="auditList" border stripe v-loading="loadingAudit">
           <el-table-column prop="lesson_no" label="课堂号" width="140" />
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="course_name" label="课程" min-width="150" />
-          <el-table-column prop="open_college" label="开课学院" width="100" />
+          <el-table-column label="开课学院" min-width="145">
+            <template #default="{ row }">{{ getCollegeName(row.open_college) }}</template>
+          </el-table-column>
           <el-table-column prop="wait_count" label="待核对人数" width="105" />
           <el-table-column label="提交时间" min-width="160">
             <template #default="{ row }">{{ String(row.submit_time || '—').replace('T', ' ') }}</template>
@@ -109,7 +115,9 @@
       <!-- 3.4 发布 -->
       <el-tab-pane v-if="isOffice || isAdmin" label="成绩发布" name="publish">
         <div class="toolbar">
-          <el-input v-model="publishTerm" placeholder="学期（可空）" style="width: 190px" clearable />
+          <el-select v-model="publishTerm" placeholder="全部学期" clearable style="width: 170px">
+            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+          </el-select>
           <el-button type="primary" @click="loadPublish">刷新待发布</el-button>
         </div>
         <el-table :data="publishList" border stripe v-loading="loadingPublish">
@@ -161,7 +169,7 @@
                 <el-button type="success" link @click="decideExchange(row, 'school', 1)">教务审批</el-button>
                 <el-button type="danger" link @click="decideExchange(row, 'school', 2)">驳回</el-button>
               </template>
-              <span v-else style="color: #909399; font-size: 12px">—</span>
+              <span v-else class="muted" style="font-size: 12px">—</span>
             </template>
           </el-table-column>
         </el-table>
@@ -169,31 +177,40 @@
     </el-tabs>
 
     <!-- 提交成功：核对码 -->
-    <el-dialog v-model="codeVisible" title="提交成功 · 纸质成绩登记表核对码" width="420px">
+    <el-dialog v-model="codeVisible" title="成绩提交成功" width="420px">
       <el-result icon="success" :title="`核对码：${verifyCode}`" sub-title="请把核对码打印在纸质成绩登记表上交学院" />
       <div class="sheet-line">课堂号：{{ currentClass?.lesson_no }} ｜ 课程：{{ currentClass?.course_name }}</div>
     </el-dialog>
 
     <!-- 学院核对 -->
-    <el-dialog v-model="auditVisible" title="学院核对" width="440px">
+    <el-dialog v-model="auditVisible" title="学院核对" width="460px">
       <el-form label-width="90px">
         <el-form-item label="课堂号"><el-input v-model="auditForm.lesson_no" disabled /></el-form-item>
         <el-form-item label="核对码">
-          <el-input v-model="auditForm.verify_code" maxlength="6" placeholder="输入纸质成绩单上的 6 位码" />
+          <el-input v-model="auditForm.verify_code" maxlength="6" placeholder="输入纸质成绩单上的 6 位核对码" />
+          <div class="muted" style="font-size: 12px; line-height: 1.5; margin-top: 6px">
+            系统自动校验 6 位核对码，核验一致即通过；如纸质单存在问题可退回教师修改
+          </div>
         </el-form-item>
-        <el-form-item label="核对结论">
-          <el-radio-group v-model="auditForm.result">
-            <el-radio :value="1">一致，通过</el-radio>
-            <el-radio :value="2">不一致，退回</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="auditForm.result === 2" label="差异说明">
-          <el-input v-model="auditForm.opinion" type="textarea" :rows="3" placeholder="退回时必填，将发给任课教师二次确认" />
+        <el-form-item v-if="auditRejectMode" label="退回原因">
+          <el-input
+            v-model="auditForm.opinion"
+            type="textarea"
+            :rows="3"
+            placeholder="必填，说明退回原因（如纸质单缺签字、成绩异常等），将退回任课教师修改"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="auditVisible = false">取消</el-button>
-        <el-button type="primary" @click="doAudit">提交核对</el-button>
+        <template v-if="!auditRejectMode">
+          <el-button @click="auditVisible = false">取消</el-button>
+          <el-button type="danger" plain @click="auditRejectMode = true">退回教师修改</el-button>
+          <el-button type="primary" @click="doAudit(1)">核验并通过</el-button>
+        </template>
+        <template v-else>
+          <el-button @click="auditRejectMode = false">返回核验</el-button>
+          <el-button type="danger" @click="doAudit(2)">确认退回</el-button>
+        </template>
       </template>
     </el-dialog>
 
@@ -201,25 +218,43 @@
     <el-dialog v-model="exchangeVisible" title="校外交流成绩换算与认定" width="520px">
       <el-form label-width="110px">
         <el-form-item label="学号"><el-input v-model="exchangeForm.student_id" /></el-form-item>
-        <el-form-item label="学期"><el-input v-model="exchangeForm.term" placeholder="2026-2027-1" /></el-form-item>
+        <el-form-item label="学期">
+          <el-select
+            v-model="exchangeForm.term"
+            placeholder="选择学期"
+            filterable
+            allow-create
+            default-first-option
+            style="width: 100%"
+          >
+            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="外校"><el-input v-model="exchangeForm.host_school" /></el-form-item>
         <el-form-item label="外校课程名"><el-input v-model="exchangeForm.ext_course_name" /></el-form-item>
-        <el-form-item label="外校学分"><el-input-number v-model="exchangeForm.ext_credit" :min="0.5" :precision="1" /></el-form-item>
+        <el-form-item label="外校学分"><el-input-number v-model="exchangeForm.ext_credit" :min="0.5" :precision="1" controls-position="right" style="width: 100%" /></el-form-item>
         <el-form-item label="原始成绩"><el-input v-model="exchangeForm.ext_score_raw" placeholder="如 92 / A-" /></el-form-item>
         <el-form-item label="成绩单编号"><el-input v-model="exchangeForm.proof_no" /></el-form-item>
         <el-form-item label="本校课程号"><el-input v-model="exchangeForm.course_id" /></el-form-item>
         <el-form-item label="记分方式">
-          <el-select v-model="exchangeForm.score_type">
+          <el-select v-model="exchangeForm.score_type" style="width: 100%" @change="exchangeForm.converted_level = ''">
             <el-option :value="1" label="百分制" />
             <el-option :value="2" label="五级制" />
             <el-option :value="3" label="两级制" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="exchangeForm.score_type === 1" label="换算成绩">
-          <el-input-number v-model="exchangeForm.converted_score" :min="0" :max="100" :precision="1" />
+          <el-input-number v-model="exchangeForm.converted_score" :min="0" :max="100" :precision="1" controls-position="right" style="width: 100%" />
         </el-form-item>
         <el-form-item v-else label="换算等级">
-          <el-input v-model="exchangeForm.converted_level" placeholder="优/良/中/及格/不合格 或 合格/不合格" />
+          <el-select v-model="exchangeForm.converted_level" style="width: 100%" placeholder="选择换算等级">
+            <el-option
+              v-for="lv in (exchangeForm.score_type === 2 ? ['优', '良', '中', '及格', '不及格'] : ['合格', '不合格'])"
+              :key="lv"
+              :label="lv"
+              :value="lv"
+            />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -235,6 +270,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { scoreApi } from '../../api/score'
 import { userState } from '../../stores/user'
+import { TERM_OPTIONS } from '../../constants/terms'
+import { getCollegeName } from '../../constants/dicts'
 
 const role = computed(() => userState.currentUser?.role)
 const isTeacher = computed(() => role.value === 'TEACHER')
@@ -314,7 +351,8 @@ const auditTerm = ref('')
 const auditList = ref([])
 const loadingAudit = ref(false)
 const auditVisible = ref(false)
-const auditForm = reactive({ lesson_no: '', verify_code: '', result: 1, opinion: '' })
+const auditRejectMode = ref(false)
+const auditForm = reactive({ lesson_no: '', verify_code: '', opinion: '' })
 
 async function loadAudit() {
   loadingAudit.value = true
@@ -329,18 +367,28 @@ async function loadAudit() {
 function openAudit(row) {
   auditForm.lesson_no = row.lesson_no
   auditForm.verify_code = ''
-  auditForm.result = 1
   auditForm.opinion = ''
+  auditRejectMode.value = false
   auditVisible.value = true
 }
 
-async function doAudit() {
+async function doAudit(result) {
+  const code = auditForm.verify_code.trim()
+  if (!code) {
+    ElMessage.warning('请输入 6 位核对码')
+    return
+  }
+  const opinion = auditForm.opinion.trim()
+  if (result === 2 && !opinion) {
+    ElMessage.warning('退回时请填写退回原因')
+    return
+  }
   await scoreApi.audit(auditForm.lesson_no, {
-    verify_code: auditForm.verify_code,
-    result: auditForm.result,
-    opinion: auditForm.opinion
+    verify_code: code,
+    result,
+    opinion: result === 2 ? opinion : ''
   })
-  ElMessage.success('核对已提交')
+  ElMessage.success(result === 1 ? '核对码校验通过，等待教务处发布' : '已退回任课教师修改')
   auditVisible.value = false
   await loadAudit()
 }
@@ -462,7 +510,11 @@ onMounted(() => {
 }
 .sheet-line {
   text-align: center;
-  color: #606266;
+  color: var(--app-text-secondary);
   font-size: 13px;
+}
+.muted {
+  color: var(--app-text-secondary);
+  font-size: 12.5px;
 }
 </style>

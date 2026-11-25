@@ -46,7 +46,7 @@ public class CorrectionController {
             @PathVariable long applyId, @RequestBody Map<String, Object> body) {
         int decision = Integer.parseInt(String.valueOf(body.get("decision")));
         String opinion = body.get("college_audit_opinion") == null ? null : String.valueOf(body.get("college_audit_opinion"));
-        return ApiResponse.ok(decision == 1 ? "学院审核通过，已送教务处终审" : "学院已驳回申请",
+        return ApiResponse.ok(decision == 1 ? "学院审批通过，成绩已更正生效" : "学院已驳回申请",
                 correctionService.collegeDecision(applyId, decision, opinion));
     }
 

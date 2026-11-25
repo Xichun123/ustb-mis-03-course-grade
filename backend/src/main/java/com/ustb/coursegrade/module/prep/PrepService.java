@@ -165,7 +165,7 @@ public class PrepService {
             for (Map<String, Object> item : rawLimits) {
                 int type = parseInt(item.get("limit_type"), "limit_type");
                 if (type < 1 || type > 4) {
-                    throw BizException.unprocessable("INVALID_LIMIT_TYPE", "限制类型必须为 1限年级/2限专业/3限学院/4限培养层次");
+                    throw BizException.unprocessable("INVALID_LIMIT_TYPE", "限制类型仅支持按年级、专业、学院或培养层次设置");
                 }
                 String val = item.get("limit_value") == null ? "" : String.valueOf(item.get("limit_value")).trim();
                 if (val.isEmpty() || val.length() > 20) {
@@ -335,7 +335,7 @@ public class PrepService {
     public Map<String, Object> decideRound(int roundId, int decision, String opinion) {
         CurrentUser user = UserContext.requireRole(RoleEnum.ACADEMIC_DIRECTOR, RoleEnum.SYS_ADMIN);
         if (decision != 1 && decision != 2) {
-            throw BizException.unprocessable("INVALID_DECISION", "审批决定必须为 1（通过）或 2（退回）");
+            throw BizException.unprocessable("INVALID_DECISION", "请选择审批决定（通过或退回）");
         }
         String trimmedOpinion = opinion == null ? "" : opinion.trim();
         if (decision == 2 && trimmedOpinion.isEmpty()) {
@@ -344,7 +344,7 @@ public class PrepService {
         Map<String, Object> row = lockAndGetRound(roundId);
         int status = ((Number) row.get("round_status")).intValue();
         if (status != 1) {
-            throw BizException.conflict("INVALID_STATUS", "仅待审批（1）状态的选课轮次可执行审批");
+            throw BizException.conflict("INVALID_STATUS", "仅待审批状态的选课轮次可执行审批");
         }
 
         int nextStatus = (decision == 1) ? 5 : 0;
@@ -363,7 +363,7 @@ public class PrepService {
         Map<String, Object> row = lockAndGetRound(roundId);
         int status = ((Number) row.get("round_status")).intValue();
         if (status != 5) {
-            throw BizException.conflict("INVALID_STATUS", "仅已审批待发布（5）状态的选课轮次允许发布");
+            throw BizException.conflict("INVALID_STATUS", "仅已审批待发布状态的选课轮次允许发布");
         }
         String notice = row.get("notice_content") == null ? "" : String.valueOf(row.get("notice_content")).trim();
         if (notice.isEmpty()) {
@@ -432,7 +432,7 @@ public class PrepService {
                 throw BizException.unprocessable("TERM_MISMATCH", "教学班 " + tcId + " 的学期与轮次学期不一致");
             }
             if (!"4".equals(String.valueOf(tcRows.get(0).get("tc_status")))) {
-                throw BizException.unprocessable("CLASS_NOT_PUBLISHED", "仅状态为 4（已发布）的教学班可加入选课轮次: " + tcId);
+                throw BizException.unprocessable("CLASS_NOT_PUBLISHED", "仅已发布的教学班可加入选课轮次: " + tcId);
             }
             jdbc.update("INSERT INTO round_class (round_id, tc_id) VALUES (?, ?)", roundId, tcId);
         }
@@ -449,13 +449,13 @@ public class PrepService {
         int retakeIgnore = parseInt(body.getOrDefault("retake_ignore_conflict", 0), "retake_ignore_conflict");
 
         if (roundType < 1 || roundType > 3) {
-            throw BizException.unprocessable("INVALID_ROUND_TYPE", "轮次类型须为 1预选/2正选/3补退选");
+            throw BizException.unprocessable("INVALID_ROUND_TYPE", "轮次类型仅支持预选、正选或补退选");
         }
         if (targetLevel < 1 || targetLevel > 3) {
-            throw BizException.unprocessable("INVALID_TARGET_LEVEL", "适用学生须为 1本科生/2研究生/3全部");
+            throw BizException.unprocessable("INVALID_TARGET_LEVEL", "适用学生仅支持本科生、研究生或全部");
         }
         if (selectMode != 1 && selectMode != 2) {
-            throw BizException.unprocessable("INVALID_SELECT_MODE", "选课方式须为 1先到先得/2超额筛选");
+            throw BizException.unprocessable("INVALID_SELECT_MODE", "选课方式仅支持先到先得或超额筛选");
         }
         if (retakeIgnore == 1 && allowRetake != 1) {
             throw BizException.unprocessable("INVALID_RETAKE_PAIR", "仅在开放重修生选课时才可开启冲突免听");
@@ -488,29 +488,29 @@ public class PrepService {
     private String requireStr(Map<String, Object> body, String key, int maxLen) {
         Object val = body.get(key);
         if (val == null || String.valueOf(val).trim().isEmpty()) {
-            throw BizException.unprocessable("MISSING_FIELD", "缺少必填字段: " + key);
+            throw BizException.unprocessable("MISSING_FIELD", "请填写" + fieldLabel(key));
         }
         String s = String.valueOf(val).trim();
         if (s.length() > maxLen) {
-            throw BizException.unprocessable("FIELD_TOO_LONG", key + " 长度不能超过 " + maxLen);
+            throw BizException.unprocessable("FIELD_TOO_LONG", fieldLabel(key) + "长度不能超过 " + maxLen + " 个字符");
         }
         return s;
     }
 
     private int parseInt(Object raw, String key) {
         if (raw == null) {
-            throw BizException.unprocessable("MISSING_FIELD", "缺少必填整数参数: " + key);
+            throw BizException.unprocessable("MISSING_FIELD", "请选择或填写" + fieldLabel(key));
         }
         try {
             return Integer.parseInt(String.valueOf(raw).trim());
         } catch (NumberFormatException e) {
-            throw BizException.unprocessable("INVALID_INT", key + " 必须为整数");
+            throw BizException.unprocessable("INVALID_INT", fieldLabel(key) + "格式不正确");
         }
     }
 
     private LocalDateTime parseDateTime(Object raw, String key) {
         if (raw == null) {
-            throw BizException.unprocessable("MISSING_FIELD", "缺少时间字段: " + key);
+            throw BizException.unprocessable("MISSING_FIELD", "请选择" + fieldLabel(key));
         }
         String s = String.valueOf(raw).trim().replace("T", " ");
         if (s.length() == 16) {
@@ -522,8 +522,24 @@ public class PrepService {
         try {
             return LocalDateTime.parse(s.replace(" ", "T"));
         } catch (Exception e) {
-            throw BizException.unprocessable("INVALID_DATETIME", key + " 时间格式应为 yyyy-MM-dd HH:mm:ss");
+            throw BizException.unprocessable("INVALID_DATETIME", fieldLabel(key) + "时间格式应为 yyyy-MM-dd HH:mm:ss");
         }
+    }
+
+    private static String fieldLabel(String key) {
+        return switch (key) {
+            case "term" -> "学年学期";
+            case "round_name" -> "轮次名称";
+            case "round_type" -> "轮次类型";
+            case "target_level" -> "适用学生";
+            case "select_mode" -> "选课方式";
+            case "allow_retake" -> "允许重修";
+            case "retake_ignore_conflict" -> "重修免听";
+            case "start_time" -> "开始时间";
+            case "end_time" -> "结束时间";
+            case "limit_type" -> "限选类型";
+            default -> "相关项";
+        };
     }
 
     private LocalDateTime toLocalDateTime(Object raw) {

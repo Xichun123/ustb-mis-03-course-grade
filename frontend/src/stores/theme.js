@@ -13,21 +13,29 @@ function readSavedMode() {
   } catch {
     // ignore
   }
-  return 'light'
+  return 'system'
 }
 
+function resolveTheme(mode) {
+  const dark = mode === 'dark' || (mode === 'system' && !!mediaQuery?.matches)
+  return dark ? 'dark' : 'light'
+}
+
+const initialMode = readSavedMode()
+
 export const themeState = reactive({
-  mode: readSavedMode(),
-  resolved: 'light'
+  mode: initialMode,
+  resolved: resolveTheme(initialMode)
 })
 
 function applyTheme() {
-  const dark = themeState.mode === 'dark'
-    || (themeState.mode === 'system' && !!mediaQuery?.matches)
-  themeState.resolved = dark ? 'dark' : 'light'
+  const resolved = resolveTheme(themeState.mode)
+  const dark = resolved === 'dark'
+  themeState.resolved = resolved
   const root = document.documentElement
-  root.setAttribute('data-theme', themeState.resolved)
+  root.setAttribute('data-theme', resolved)
   root.classList.toggle('dark', dark)
+  root.style.colorScheme = resolved
 }
 
 export function setThemeMode(mode) {
@@ -40,11 +48,21 @@ export function setThemeMode(mode) {
   applyTheme()
 }
 
+let listenerBound = false
+
+function handleSystemChange() {
+  if (themeState.mode === 'system') applyTheme()
+}
+
 export function initTheme() {
   applyTheme()
-  if (mediaQuery && mediaQuery.addEventListener) {
-    mediaQuery.addEventListener('change', () => {
-      if (themeState.mode === 'system') applyTheme()
-    })
+  if (!listenerBound && mediaQuery) {
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleSystemChange)
+      listenerBound = true
+    } else if (mediaQuery.addListener) {
+      mediaQuery.addListener(handleSystemChange)
+      listenerBound = true
+    }
   }
 }

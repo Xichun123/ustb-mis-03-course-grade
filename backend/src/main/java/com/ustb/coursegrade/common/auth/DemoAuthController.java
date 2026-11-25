@@ -17,7 +17,22 @@ import java.util.Set;
 public class DemoAuthController {
 
     private static final Map<String, CurrentUser> DEMO_ACCOUNTS = new LinkedHashMap<>();
-    private static final Set<String> VALID_PASSWORDS = Set.of("123456", "ustb2026", "admin123");
+    private static final Map<String, String> LOGIN_ALIASES = Map.ofEntries(
+            Map.entry("user1", "college_0001"),
+            Map.entry("user2", "office_admin"),
+            Map.entry("user3", "office_director"),
+            Map.entry("user4", "teacher_wang"),
+            Map.entry("user5", "teacher_li"),
+            Map.entry("user6", "stu_undergrad"),
+            Map.entry("user7", "stu_unrated"),
+            Map.entry("user8", "stu_grad"),
+            Map.entry("user9", "sys_admin"),
+            Map.entry("user10", "stu_retake"),
+            Map.entry("user11", "stu_exchange"),
+            Map.entry("user12", "college_0002"),
+            Map.entry("user13", "grad_school")
+    );
+    private static final Set<String> VALID_PASSWORDS = Set.of("1", "123456", "ustb2026", "admin123");
 
     static {
         DEMO_ACCOUNTS.put("office_admin", new CurrentUser(
@@ -70,6 +85,10 @@ public class DemoAuthController {
         if (direct != null) {
             return direct;
         }
+        String aliasTarget = LOGIN_ALIASES.get(q.toLowerCase());
+        if (aliasTarget != null && DEMO_ACCOUNTS.containsKey(aliasTarget)) {
+            return DEMO_ACCOUNTS.get(aliasTarget);
+        }
         for (CurrentUser u : DEMO_ACCOUNTS.values()) {
             if (q.equalsIgnoreCase(u.studentId())
                     || q.equalsIgnoreCase(u.empId())
@@ -86,11 +105,11 @@ public class DemoAuthController {
         String username = body == null ? null : body.get("username");
         String password = body == null ? null : body.get("password");
         if (username == null || username.isBlank() || password == null || password.isBlank()) {
-            throw BizException.unprocessable("INVALID_CREDENTIALS", "请输入学号/工号与密码");
+            throw BizException.unprocessable("INVALID_CREDENTIALS", "请输入用户名与密码");
         }
         CurrentUser user = findAccount(username);
         if (user == null || !VALID_PASSWORDS.contains(password.trim())) {
-            throw BizException.unauthorized("学号/工号或密码错误");
+            throw BizException.unauthorized("用户名或密码错误");
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("token", user.userId());

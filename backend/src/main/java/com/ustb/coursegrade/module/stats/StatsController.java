@@ -24,16 +24,15 @@ public class StatsController {
     @GetMapping("/module-info")
     public ApiResponse<Map<String, Object>> moduleInfo() {
         return ApiResponse.ok(Map.of(
-                "module", "业务④ 成绩查询与统计",
-                "owner", "黎家俊",
-                "status", "已完成（4.1–4.6 全功能就绪）",
-                "leaf_modules", List.of(
-                        "4.1 学生评教（最简评教，供第4组汇总）",
-                        "4.2 成绩查询（先评教后查分）",
-                        "4.3 学业统计计算（GPA/学分/排名，排除辅修并联合外校认定）",
-                        "4.4 成绩单打印（含来校交换生中英文成绩单）",
-                        "4.5 成绩统计报表（成绩分布/不及格/评优排名）",
-                        "4.6 评教结果汇总（按教学班汇总，零参评均分为NULL）"
+                "module", "成绩查询与统计",
+                "status", "运行中",
+                "features", List.of(
+                        "学生评教",
+                        "成绩查询",
+                        "学业统计计算",
+                        "成绩单预览与打印",
+                        "成绩统计报表",
+                        "评教结果汇总"
                 )
         ));
     }

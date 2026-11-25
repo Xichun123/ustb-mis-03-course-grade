@@ -18,7 +18,7 @@ import java.util.*;
 
 /**
  * 【业务⑤ 成绩更正申请（模块 5.1–5.4）· 负责人：朱鳞太】
- * 完整支持百分制与五级/两级制成绩两级审批更正、原值乐观并发核验（409 SCORE_CHANGED）、
+ * 完整支持百分制与五级/两级制成绩学院单级审批更正、原值乐观并发核验（409 SCORE_CHANGED）、
  * 校发〔2021〕46号附表3绩点重算、is_final 重标与学生更正结果通知。
  */
 @Service
@@ -32,7 +32,7 @@ public class CorrectionService {
 
     /** 5.1 教师检索本人已发布（score_status=3）的可更正成绩 */
     public List<Map<String, Object>> listCandidates(String term, String keyword) {
-        CurrentUser user = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
+        CurrentUser user = UserContext.requireRole(RoleEnum.TEACHER);
 
         StringBuilder sql = new StringBuilder("""
                 SELECT CAST(s.score_id AS CHAR) AS score_id,
@@ -76,7 +76,7 @@ public class CorrectionService {
     /** 5.1 教师提交成绩更正申请（状态 0：待学院审核） */
     @Transactional
     public Map<String, Object> submitCorrection(Map<String, Object> body) {
-        CurrentUser user = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
+        CurrentUser user = UserContext.requireRole(RoleEnum.TEACHER);
         long scoreId = parseLong(body.get("score_id"), "score_id");
         String reason = body.get("apply_reason") == null ? "" : String.valueOf(body.get("apply_reason")).trim();
         if (reason.isEmpty() || reason.length() > 200) {
@@ -180,10 +180,10 @@ public class CorrectionService {
         return Map.of("apply_id", String.valueOf(applyId), "apply_status", 0);
     }
 
-    /** 5.1/5.2/5.3 按角色范围检索更正申请列表 */
+    /** 5.1/5.2 按角色范围检索更正申请列表（仅任课教师、学院教学秘书、系统管理员） */
     public List<Map<String, Object>> listCorrections(Integer applyStatus, String term) {
         CurrentUser user = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.COLLEGE_SECRETARY,
-                RoleEnum.ACADEMIC_OFFICE, RoleEnum.ACADEMIC_DIRECTOR, RoleEnum.GRADUATE_SCHOOL, RoleEnum.SYS_ADMIN);
+                RoleEnum.SYS_ADMIN);
 
         StringBuilder sql = new StringBuilder("""
                 SELECT CAST(cr.apply_id AS CHAR) AS apply_id,
@@ -225,12 +225,12 @@ public class CorrectionService {
         return jdbc.queryForList(sql.toString(), params.toArray());
     }
 
-    /** 5.2 学院审核（0 -> 1 通过 / 0 -> 3 驳回，驳回意见必填） */
+    /** 5.2/5.3 学院审核（仅学院审批：0 -> 2 通过并同事务生效 / 0 -> 3 驳回，驳回意见必填） */
     @Transactional
     public Map<String, Object> collegeDecision(long applyId, int decision, String opinion) {
         CurrentUser user = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
         if (decision != 1 && decision != 2) {
-            throw BizException.unprocessable("INVALID_DECISION", "决定必须为 1（通过）或 2（驳回）");
+            throw BizException.unprocessable("INVALID_DECISION", "请选择审核决定（通过或驳回）");
         }
         String op = opinion == null ? "" : opinion.trim();
         if (decision == 2 && op.isEmpty()) {
@@ -238,7 +238,8 @@ public class CorrectionService {
         }
 
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT cr.apply_id, cr.apply_status, c.open_college
+                SELECT cr.*, s.score_type, s.total_score AS cur_score, s.score_level AS cur_level,
+                       sc.student_id, sc.stat_stage, tc.course_id, tc.term, c.open_college
                 FROM score_correction cr
                 JOIN score s ON cr.score_id = s.score_id
                 JOIN sc ON s.sc_id = sc.sc_id
@@ -255,58 +256,19 @@ public class CorrectionService {
             throw BizException.forbidden("无权审核其他学院的成绩更正申请");
         }
         if (((Number) row.get("apply_status")).intValue() != 0) {
-            throw BizException.conflict("INVALID_STATUS", "当前申请已处理，不可重复学院审核");
-        }
-
-        int nextStatus = (decision == 1) ? 1 : 3;
-        jdbc.update("""
-                UPDATE score_correction
-                SET apply_status = ?, college_auditor_id = ?, college_audit_opinion = ?, college_audit_time = NOW()
-                WHERE apply_id = ? AND apply_status = 0
-                """, nextStatus, user.empId(), op.isEmpty() ? "学院核对通过" : op, applyId);
-        return Map.of("apply_id", String.valueOf(applyId), "apply_status", nextStatus);
-    }
-
-    /** 5.3 教务处审批 + 5.4 同事务改分、重算绩点与 is_final */
-    @Transactional
-    public Map<String, Object> officeDecision(long applyId, int decision, String opinion) {
-        CurrentUser user = UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.ACADEMIC_DIRECTOR,
-                RoleEnum.GRADUATE_SCHOOL, RoleEnum.SYS_ADMIN);
-        if (decision != 1 && decision != 2) {
-            throw BizException.unprocessable("INVALID_DECISION", "决定必须为 1（通过）或 2（驳回）");
-        }
-        String op = opinion == null ? "" : opinion.trim();
-        if (decision == 2 && op.isEmpty()) {
-            throw BizException.unprocessable("OPINION_REQUIRED", "教务处驳回时必须填写审批意见");
-        }
-
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT cr.*, s.score_type, s.total_score AS cur_score, s.score_level AS cur_level,
-                       sc.student_id, sc.stat_stage, tc.course_id, tc.term
-                FROM score_correction cr
-                JOIN score s ON cr.score_id = s.score_id
-                JOIN sc ON s.sc_id = sc.sc_id
-                JOIN teaching_class tc ON sc.tc_id = tc.tc_id
-                WHERE cr.apply_id = ? FOR UPDATE
-                """, applyId);
-        if (rows.isEmpty()) {
-            throw BizException.notFound("更正申请不存在");
-        }
-        Map<String, Object> row = rows.get(0);
-        if (((Number) row.get("apply_status")).intValue() != 1) {
-            throw BizException.conflict("INVALID_STATUS", "仅待教务处审批（1）状态的申请可执行终审");
+            throw BizException.conflict("INVALID_STATUS", "当前申请已处理，不可重复审核");
         }
 
         if (decision == 2) {
             jdbc.update("""
                     UPDATE score_correction
-                    SET apply_status = 3, auditor_id = ?, audit_opinion = ?, audit_time = NOW()
-                    WHERE apply_id = ? AND apply_status = 1
+                    SET apply_status = 3, college_auditor_id = ?, college_audit_opinion = ?, college_audit_time = NOW()
+                    WHERE apply_id = ? AND apply_status = 0
                     """, user.empId(), op, applyId);
             return Map.of("apply_id", String.valueOf(applyId), "apply_status", 3);
         }
 
-        // 5.4 同事务生效：重核原值 -> 更新成绩与绩点 -> 重标 is_final
+        // 5.4 同事务生效：重核原值 -> 更新成绩与绩点 -> 重标 is_final -> 更新学业统计
         long scoreId = ((Number) row.get("score_id")).longValue();
         int scoreType = ((Number) row.get("score_type")).intValue();
         BigDecimal newGp;
@@ -340,13 +302,25 @@ public class CorrectionService {
         recomputeIsFinalForCourse(studentId, statStage, courseId);
         recomputeAcademicStatsSnapshot(studentId, statStage, term);
 
+        String finalOpinion = op.isEmpty() ? "学院审批通过，成绩已生效" : op;
         jdbc.update("""
                 UPDATE score_correction
-                SET apply_status = 2, auditor_id = ?, audit_opinion = ?, audit_time = NOW()
-                WHERE apply_id = ? AND apply_status = 1
-                """, user.empId(), op.isEmpty() ? "同意更正并生效" : op, applyId);
+                SET apply_status = 2,
+                    college_auditor_id = ?,
+                    college_audit_opinion = ?,
+                    college_audit_time = NOW(),
+                    auditor_id = ?,
+                    audit_opinion = ?,
+                    audit_time = NOW()
+                WHERE apply_id = ? AND apply_status = 0
+                """, user.empId(), finalOpinion, user.empId(), finalOpinion, applyId);
 
         return Map.of("apply_id", String.valueOf(applyId), "apply_status", 2, "new_grade_point", newGp.toPlainString());
+    }
+
+    /** 成绩更正仅学院审批生效，不涉及教务处审批 */
+    public Map<String, Object> officeDecision(long applyId, int decision, String opinion) {
+        throw BizException.forbidden("成绩更正由学院直接审批生效，不涉及教务处审批");
     }
 
     /** 5.4 学生查看本人已通过的成绩更正结果（隐藏审批工号与他生记录） */
@@ -560,12 +534,12 @@ public class CorrectionService {
 
     private long parseLong(Object raw, String key) {
         if (raw == null) {
-            throw BizException.unprocessable("MISSING_FIELD", "缺少必填字段: " + key);
+            throw BizException.unprocessable("MISSING_FIELD", "请选择需要更正的成绩记录");
         }
         try {
             return Long.parseLong(String.valueOf(raw).trim());
         } catch (NumberFormatException e) {
-            throw BizException.unprocessable("INVALID_ID", key + " 格式非法");
+            throw BizException.unprocessable("INVALID_ID", "成绩记录编号格式不正确");
         }
     }
 }

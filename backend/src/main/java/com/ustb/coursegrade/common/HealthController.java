@@ -22,8 +22,8 @@ public class HealthController {
     @GetMapping("/health")
     public ApiResponse<Map<String, Object>> health() {
         Map<String, Object> info = new LinkedHashMap<>();
-        info.put("service", "03组-选课及成绩管理系统");
-        info.put("schema_version", "v9 (14 tables, 134 columns, 82 CHECKs)");
+        info.put("service", "选课与成绩管理系统");
+        info.put("status", "UP");
         info.put("server_time", LocalDateTime.now().toString());
         try {
             String dbName = jdbcTemplate.queryForObject("SELECT DATABASE()", String.class);
@@ -36,7 +36,7 @@ public class HealthController {
                     Integer.class);
             info.put("database", dbName);
             info.put("db_connected", true);
-            info.put("own_v9_tables", ownTables);
+            info.put("tables_ready", ownTables);
         } catch (Exception e) {
             info.put("db_connected", false);
             info.put("db_error", e.getMessage());

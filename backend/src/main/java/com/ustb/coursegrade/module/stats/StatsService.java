@@ -80,7 +80,7 @@ public class StatsService {
                 return mapped.get(0).trim();
             }
         }
-        throw BizException.forbidden("当前教师工号尚未建立与教学班 teacher_id 的有效映射，拒绝越权查询");
+        throw BizException.forbidden("当前教师账号尚未绑定授课教学班信息，暂无法查询");
     }
 
     private Map<String, Object> loadStudentProfile(String studentId) {
@@ -610,7 +610,7 @@ public class StatsService {
         resp.put("term", targetTerm);
         resp.put("items", items);
         resp.put("total", items.size());
-        resp.put("rule_note", "v9 规则：累计统计仅计入当前培养层次阶段且 sc.study_type<>3（排除辅修），并联合已通过生效的校外交流认定（exchange_score_convert.audit_status=2）；学期统计按教学班学期独立择优；排名为通用专业排名（非评优排名）。");
+        resp.put("rule_note", "统计说明：累计统计仅计入当前培养层次阶段的主修成绩（排除辅修），并包含已通过审批生效的校外交流认定成绩；学期统计按学期独立择优；排名为通用专业排名（非评优排名）。");
         return resp;
     }
 
@@ -1042,10 +1042,10 @@ public class StatsService {
         resp.put("cumulative_summary", cumulativeSummary);
         resp.put("official_mode", officialMode);
         resp.put("footer_notice", isIncomingExchange
-                ? "本成绩单仅包含已由本校教务处正式发布（score_status=3）的课程成绩，供派出院校核验与学分转换使用；经教务处核对签章后具有正式证明效力。"
+                ? "本成绩单仅包含已由本校教务处正式发布的课程成绩，供派出院校核验与学分转换使用；经教务处核对签章后具有正式证明效力。"
                 : (officialMode
                 ? "本成绩单包含所选范围全部已发布考试记录（含补考、重修与原等级），累计 GPA 仅按本阶段最高最终成绩（不含辅修）计算。"
-                : "原型可打印成绩明细，无正式认证效力；正式证明请通过学校教务处办理。"));
+                : "本成绩明细仅供个人核对参考，无正式认证效力；正式证明请通过学校教务处办理。"));
         return resp;
     }
 
@@ -1122,7 +1122,7 @@ public class StatsService {
                 RoleEnum.GRADUATE_SCHOOL, RoleEnum.SYS_ADMIN);
 
         if (reportType == null || reportType.isBlank()) {
-            throw BizException.unprocessable("MISSING_REPORT_TYPE", "必须指定报表类型（DISTRIBUTION / FINAL_FAILED / HONOR_RANK）");
+            throw BizException.unprocessable("MISSING_REPORT_TYPE", "请选择要生成的统计报表类型");
         }
         String rt = reportType.trim().toUpperCase();
         validateTermFormat(term);
@@ -1168,7 +1168,7 @@ public class StatsService {
     /** 4.5 分支一：成绩分布报表（按 score_type 分百分制 / 五级制 / 两级制独立统计，绝不混分制） */
     private Map<String, Object> buildDistributionReport(CurrentUser user, String term, String tcId, int examType) {
         if (examType != 1 && examType != 2) {
-            throw BizException.unprocessable("INVALID_EXAM_TYPE", "考试类别必须为 1（正常考试）或 2（补考）");
+            throw BizException.unprocessable("INVALID_EXAM_TYPE", "考试类别仅支持正常考试或补考");
         }
         StringBuilder sql = new StringBuilder("""
                 SELECT s.score_id, s.sc_id, s.score_type, s.exam_flag, s.total_score, s.score_level, s.grade_point,
@@ -1316,7 +1316,7 @@ public class StatsService {
         resp.put("five_level_group", fiveGroup);
         resp.put("two_level_group", twoGroup);
         resp.put("generated_at", LocalDateTime.now().format(TS_FMT));
-        resp.put("methodology_note", "百分制按 [90,100]、[80,90)、[70,80)、[60,70)、[0,60) 左闭右开分段；五级制与两级制独立分列、不混入百分制也不计算等级算术均分；仅统计 score_status=3 已发布成绩。");
+        resp.put("methodology_note", "百分制按 [90,100]、[80,90)、[70,80)、[60,70)、[0,60) 分段；五级制与两级制独立分列、不混入百分制也不计算等级算术均分；仅统计已正式发布的成绩。");
         return resp;
     }
 
@@ -1457,7 +1457,7 @@ public class StatsService {
             throw BizException.forbidden("首次考核评优专业排名仅限教务处/研究生院/系统管理员生成");
         }
         if (majorId == null || majorId.isBlank() || grade == null) {
-            throw BizException.unprocessable("MISSING_MAJOR_GRADE", "评优专业排名必须指定专业编号（major_id）与年级（grade）");
+            throw BizException.unprocessable("MISSING_MAJOR_GRADE", "评优专业排名必须指定专业与年级");
         }
         String mId = majorId.trim();
         String sTerm = (startTerm == null || startTerm.isBlank()) ? getCurrentTerm() : startTerm.trim();
@@ -1485,7 +1485,7 @@ public class StatsService {
 
         List<String> blockedReasons = new ArrayList<>();
         if (planCourses.isEmpty()) {
-            blockedReasons.add("缺少专业【" + mId + "】" + grade + " 级完整必修教学计划（program_course 为空），无法确认全部必修课集合。");
+            blockedReasons.add("缺少专业【" + mId + "】" + grade + " 级完整必修教学计划，无法确认全部必修课程范围。");
         }
         if (students.isEmpty()) {
             blockedReasons.add("未找到专业【" + mId + "】" + grade + " 级参评学生群体。");
@@ -1567,7 +1567,7 @@ public class StatsService {
         resp.put("report_type", "HONOR_RANK");
         resp.put("evidence", evidence);
         resp.put("generated_at", LocalDateTime.now().format(TS_FMT));
-        resp.put("methodology_note", "首次评优排名仅按评价期内专业培养计划全部必修课的第一次初修正考成绩（study_type=1 且 exam_type=1，不使用 is_final）加权计算；独立报表输出，绝不覆盖 stu_gpa 通用排名。");
+        resp.put("methodology_note", "首次评优排名仅按评价期内专业培养计划全部必修课的首次初修正考成绩加权计算，作为独立报表输出，不影响通用专业排名。");
 
         if (!blockedReasons.isEmpty()) {
             resp.put("status", "BLOCKED");
@@ -1769,7 +1769,7 @@ public class StatsService {
         resp.put("teacher_weighted_summaries", user.role() == RoleEnum.TEACHER ? List.of() : teacherWeighted);
         resp.put("can_trigger_recompute", isOffice);
         resp.put("can_view_details", user.hasRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.ACADEMIC_DIRECTOR, RoleEnum.SYS_ADMIN));
-        resp.put("anonymity_note", "教师与第4组仅可获取教学班匿名汇总（eval_num、avg_eval_score、calc_time），零参评教学班均分为 NULL；严禁外传学生学号、选课号或逐条评教意见。");
+        resp.put("anonymity_note", "教师与师资管理部门仅可获取教学班匿名汇总结果（参评人数、评教均分及汇总时间），零参评教学班均分显示为空，严禁泄露学生个人身份及逐条评教意见。");
         return resp;
     }
 
@@ -1896,19 +1896,20 @@ public class StatsService {
     // =========================================================================
 
     private long parseStrictLong(Object raw, String field) {
+        String label = "sc_id".equals(field) ? "选课记录编号" : "参数";
         if (raw == null) {
-            throw BizException.unprocessable("MISSING_FIELD", "缺少必填字段: " + field,
+            throw BizException.unprocessable("MISSING_FIELD", "缺少" + label,
                     Map.of(field, "不能为空"));
         }
         String s = String.valueOf(raw).trim();
         if (!s.matches("^\\d+$")) {
-            throw BizException.unprocessable("INVALID_ID", field + " 必须为正整数",
+            throw BizException.unprocessable("INVALID_ID", label + "格式不正确",
                     Map.of(field, "格式非法"));
         }
         try {
             return Long.parseLong(s);
         } catch (NumberFormatException e) {
-            throw BizException.unprocessable("INVALID_ID", field + " 数值溢出",
+            throw BizException.unprocessable("INVALID_ID", label + "超出范围",
                     Map.of(field, "数值非法"));
         }
     }

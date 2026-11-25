@@ -39,7 +39,7 @@ public class GlobalExceptionHandler {
         log.warn("数据库约束拦截: {}", ex.getMostSpecificCause().getMessage());
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                 .body(ApiResponse.error("DB_CONSTRAINT_VIOLATION",
-                        "数据不满足数据库完整性约束（主键/唯一键/外键或 CHECK 校验未通过）"));
+                        "提交的数据不符合系统业务校验规则或存在重复/关联冲突，请检查后重试"));
     }
 
     @ExceptionHandler(Exception.class)

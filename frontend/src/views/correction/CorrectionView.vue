@@ -2,9 +2,11 @@
   <div>
     <el-tabs v-model="activeTab" type="border-card">
       <!-- 5.1 教师发起更正申请 -->
-      <el-tab-pane v-if="isTeacherOrOffice" label="发起成绩更正" name="candidates">
+      <el-tab-pane v-if="isTeacher" label="发起成绩更正" name="candidates">
         <div class="toolbar">
-          <el-input v-model="candQuery.term" placeholder="学期" style="width: 160px" clearable />
+          <el-select v-model="candQuery.term" placeholder="全部学期" clearable style="width: 165px">
+            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+          </el-select>
           <el-input v-model="candQuery.keyword" placeholder="学号 / 姓名 / 课程 / 课堂号" style="width: 240px" clearable />
           <el-button type="primary" @click="loadCandidates">检索</el-button>
         </div>
@@ -32,12 +34,11 @@
         </el-table>
       </el-tab-pane>
 
-      <!-- 5.2 / 5.3 更正申请台账与两级审批 -->
-      <el-tab-pane v-if="isStaff" label="更正申请与两级审批" name="list">
+      <!-- 5.2 学院单级审批 -->
+      <el-tab-pane v-if="isStaff" :label="isTeacher ? '我的申请记录' : '更正审批'" name="list">
         <div class="toolbar">
           <el-select v-model="listQuery.apply_status" placeholder="申请状态" clearable style="width: 160px">
-            <el-option label="待学院审核" :value="0" />
-            <el-option label="待教务处审批" :value="1" />
+            <el-option label="待学院审批" :value="0" />
             <el-option label="已通过生效" :value="2" />
             <el-option label="已驳回" :value="3" />
           </el-select>
@@ -63,23 +64,15 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="审批操作" width="150" fixed="right">
+          <el-table-column v-if="canCollegeAudit" label="审批操作" width="130" fixed="right">
             <template #default="{ row }">
               <el-button
                 v-if="row.apply_status === 0 && canCollegeAudit"
-                type="warning"
+                type="primary"
                 link
-                @click="openAuditDialog(row, 'college')"
+                @click="openAuditDialog(row)"
               >
-                学院审核
-              </el-button>
-              <el-button
-                v-if="row.apply_status === 1 && canOfficeAudit"
-                type="success"
-                link
-                @click="openAuditDialog(row, 'office')"
-              >
-                教务处终审
+                学院审批
               </el-button>
             </template>
           </el-table-column>
@@ -87,7 +80,7 @@
       </el-tab-pane>
 
       <!-- 5.4 学生查看本人已通过更正通知 -->
-      <el-tab-pane v-if="isStudent" label="我的成绩更正通知" name="my">
+      <el-tab-pane v-if="isStudent" label="成绩更正通知" name="my">
         <el-table :data="myResults" border stripe v-loading="loadingMy">
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="course_name" label="课程名称" min-width="150" />
@@ -116,10 +109,10 @@
           <b>{{ applyTarget?.score_type === 1 ? applyTarget?.total_score : applyTarget?.score_level }}</b>
         </el-form-item>
         <el-form-item v-if="applyTarget?.score_type === 1" label="更正后分数">
-          <el-input-number v-model="applyForm.new_score" :min="0" :max="100" :precision="1" :step="0.5" />
+          <el-input-number v-model="applyForm.new_score" :min="0" :max="100" :precision="1" :step="0.5" controls-position="right" style="width: 100%" />
         </el-form-item>
         <el-form-item v-else label="更正后等级">
-          <el-select v-model="applyForm.new_level">
+          <el-select v-model="applyForm.new_level" style="width: 100%">
             <el-option
               v-for="lv in (applyTarget?.score_type === 2 ? ['优','良','中','及格','不及格'] : ['合格','不合格'])"
               :key="lv"
@@ -129,7 +122,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="更正原因">
-          <el-input v-model="applyForm.apply_reason" type="textarea" :rows="3" placeholder="请说明复核依据（必填，≤200字）" />
+          <el-input v-model="applyForm.apply_reason" type="textarea" :rows="3" maxlength="200" show-word-limit placeholder="请说明更正原因（必填）" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -138,8 +131,8 @@
       </template>
     </el-dialog>
 
-    <!-- 5.2 / 5.3 审核弹窗 -->
-    <el-dialog v-model="auditVisible" :title="auditStage === 'college' ? '学院审核' : '教务处终审（通过后立即生效）'" width="480px">
+    <!-- 5.2 学院审批弹窗 -->
+    <el-dialog v-model="auditVisible" title="学院审批" width="480px">
       <el-form label-width="90px">
         <el-form-item label="审批决定">
           <el-radio-group v-model="auditForm.decision">
@@ -164,14 +157,14 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { correctionApi } from '../../api/correction'
 import { userState } from '../../stores/user'
+import { TERM_OPTIONS } from '../../constants/terms'
 
-const STATUS_LABEL = { 0: '待学院审核', 1: '待教务处审批', 2: '已通过生效', 3: '已驳回' }
+const STATUS_LABEL = { 0: '待学院审批', 2: '已通过生效', 3: '已驳回' }
 const role = computed(() => userState.currentUser?.role)
 const isStudent = computed(() => role.value === 'STUDENT')
 const isStaff = computed(() => role.value && role.value !== 'STUDENT')
-const isTeacherOrOffice = computed(() => ['TEACHER', 'ACADEMIC_OFFICE', 'SYS_ADMIN'].includes(role.value))
+const isTeacher = computed(() => role.value === 'TEACHER')
 const canCollegeAudit = computed(() => ['COLLEGE_SECRETARY', 'SYS_ADMIN'].includes(role.value))
-const canOfficeAudit = computed(() => ['ACADEMIC_OFFICE', 'ACADEMIC_DIRECTOR', 'GRADUATE_SCHOOL', 'SYS_ADMIN'].includes(role.value))
 
 const activeTab = ref('list')
 const candQuery = reactive({ term: '2026-2027-1', keyword: '' })
@@ -188,7 +181,6 @@ const applyTarget = ref(null)
 const applyForm = reactive({ new_score: 85, new_level: '优', apply_reason: '' })
 
 const auditVisible = ref(false)
-const auditStage = ref('college')
 const auditApplyId = ref(null)
 const auditForm = reactive({ decision: 1, opinion: '' })
 
@@ -197,7 +189,7 @@ function statusTag(s) {
 }
 
 async function loadCandidates() {
-  if (!isTeacherOrOffice.value) return
+  if (!isTeacher.value) return
   loadingCand.value = true
   try {
     const res = await correctionApi.listCandidates(candQuery)
@@ -253,27 +245,19 @@ async function submitApply() {
   loadList()
 }
 
-function openAuditDialog(row, stage) {
+function openAuditDialog(row) {
   auditApplyId.value = row.apply_id
-  auditStage.value = stage
   auditForm.decision = 1
   auditForm.opinion = ''
   auditVisible.value = true
 }
 
 async function confirmAudit() {
-  if (auditStage.value === 'college') {
-    await correctionApi.collegeDecision(auditApplyId.value, {
-      decision: auditForm.decision,
-      college_audit_opinion: auditForm.opinion
-    })
-  } else {
-    await correctionApi.officeDecision(auditApplyId.value, {
-      decision: auditForm.decision,
-      audit_opinion: auditForm.opinion
-    })
-  }
-  ElMessage.success('审批已提交')
+  await correctionApi.collegeDecision(auditApplyId.value, {
+    decision: auditForm.decision,
+    college_audit_opinion: auditForm.opinion
+  })
+  ElMessage.success(auditForm.decision === 1 ? '学院审批通过，成绩已生效' : '已驳回申请')
   auditVisible.value = false
   loadList()
 }
@@ -286,7 +270,7 @@ watch(role, (val) => {
     activeTab.value = 'my'
     loadMy()
   } else {
-    activeTab.value = isTeacherOrOffice.value ? 'candidates' : 'list'
+    activeTab.value = isTeacher.value ? 'candidates' : 'list'
     loadCandidates()
     loadList()
   }

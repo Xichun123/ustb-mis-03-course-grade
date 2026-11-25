@@ -222,10 +222,10 @@ INSERT INTO score_correction (
   (1, 2, 'T000010001', 80.8, 84.8, NULL, NULL,
    '复核实验报告得分时漏加第4次实验附加分，经核查原始卷面应为84.8分',
    '2026-11-21 14:20:00', 0, NULL, NULL, NULL, NULL, NULL, NULL),
-  -- 学院已通过、待教务处审批（status=1，等级制示例）
+  -- 待学院审批（status=0，等级制示例）
   (2, 8, 'T000010001', NULL, NULL, '良', '优',
    '答辩评分汇总表误录，该生小组综合答辩为92分应评为优',
-   '2026-11-20 11:00:00', 1, 'E000010001', '已核对答辩原始记录，情况属实', '2026-11-21 09:00:00', NULL, NULL, NULL);
+   '2026-11-20 11:00:00', 0, NULL, NULL, NULL, NULL, NULL, NULL);
 
 -- ---------------------------------------------------------------------
 -- 6. 业务④ 评教与学业统计快照（teach_eval、tc_eval_result、stu_gpa、stu_term_gpa）
@@ -268,5 +268,5 @@ INSERT INTO sys_code_dict (dict_group, dict_code, dict_name, remark) VALUES
 ON DUPLICATE KEY UPDATE dict_name = VALUES(dict_name);
 
 INSERT INTO sys_backup_log (backup_id, backup_type, file_name, file_size_kb, operator_id, backup_time, status, remark) VALUES
-  (1, 1, 'course_grade_mgmt_v9_init_20261123.sql', 128, 'S000000001', '2026-11-23 23:00:00', 1, 'v9 初始化部署基线快照')
+  (1, 1, 'course_grade_mgmt_20261123.sql', 128, 'S000000001', '2026-11-23 23:00:00', 1, '系统初始化全量备份')
 ON DUPLICATE KEY UPDATE remark = VALUES(remark);

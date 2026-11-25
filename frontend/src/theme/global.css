@@ -152,13 +152,18 @@ html, body, #app {
 }
 
 .app-sider-brand-logo {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
   display: block;
-  object-fit: cover;
+  object-fit: contain;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0, 51, 102, 0.16);
+}
+
+html[data-theme='dark'] .app-sider-brand-logo {
+  background: rgba(255, 255, 255, 0.94);
+  padding: 2px;
+  box-sizing: border-box;
 }
 
 .app-sider-brand-name {
@@ -198,10 +203,28 @@ html, body, #app {
   transition: background-color 0.18s ease, color 0.18s ease;
 }
 
+.app-side-menu.el-menu--collapse {
+  width: 100% !important;
+}
+
 .app-side-menu.el-menu--collapse .el-menu-item {
-  margin: 3px 10px;
+  width: auto;
+  margin: 3px 12px;
   padding: 0 !important;
   justify-content: center;
+}
+
+.app-side-menu.el-menu--collapse .el-menu-item .el-menu-tooltip__trigger {
+  padding: 0 !important;
+  justify-content: center;
+}
+
+.app-side-menu.el-menu--collapse .el-menu-item .el-icon {
+  margin: 0 !important;
+}
+
+.app-side-menu.el-menu--collapse .app-menu-divider {
+  margin: 10px 16px;
 }
 
 .app-side-menu .el-menu-item:hover {
@@ -462,6 +485,20 @@ html[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
 
 /* ===== 打印态隐藏导航壳，确保成绩单与上课名单完整居中输出 ===== */
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+  body,
+  .app-shell,
+  .app-main-wrap {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
   .app-sider,
   .app-header {
     display: none !important;
