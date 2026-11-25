@@ -98,6 +98,7 @@ public class ScoreService {
         Map<String, Object> data = new LinkedHashMap<>(head);
         data.put("students", rows);
         data.put("ratio_min", ratioMin());
+        data.put("usual_ratio", classRatio(lessonNo));
         boolean canSeeCode = u.role() == RoleEnum.TEACHER || u.role() == RoleEnum.SYS_ADMIN;
         data.put("verify_code", canSeeCode ? latestVerifyCode(lessonNo) : null);
         return data;
@@ -106,12 +107,24 @@ public class ScoreService {
     /** 3.1 保存成绩草稿（最低平时占比仅在录入保存时校验一次） */
     @Transactional
     public Map<String, Object> saveGrades(String lessonNo, List<Map<String, Object>> items) {
+        return saveGrades(lessonNo, items, null);
+    }
+
+    /**
+     * 3.1 保存成绩草稿：classRatio 非空时对整个课堂生效（前端只需在课堂顶部录入一次占比）。
+     */
+    @Transactional
+    public Map<String, Object> saveGrades(String lessonNo, List<Map<String, Object>> items, Integer classRatio) {
         Map<String, Object> head = requireClass(lessonNo);
         CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
         if (u.role() == RoleEnum.TEACHER && !owns(head, u)) {
             throw BizException.forbidden("只能录入本人任教的课堂");
         }
         int min = ratioMin();
+        if (classRatio != null && (classRatio < min || classRatio > 100)) {
+            throw BizException.unprocessable("RATIO_TOO_LOW",
+                    "课堂平时占比 " + classRatio + "% 低于规定的下限 " + min + "%，本次录入无效");
+        }
         List<String> tcIds = tcIds(head);
         Set<Long> allowed = new HashSet<>(jdbc.queryForList(
                 "SELECT sc_id FROM sc WHERE tc_id IN (" + marks(tcIds) + ") AND select_status = 1",
@@ -131,7 +144,7 @@ public class ScoreService {
                             "该成绩记录已提交审核或正式发布，不能直接修改（已发布成绩请通过成绩更正申请流程办理）");
                 }
             }
-            int ratio = toInt(item.get("usual_ratio"), min);
+            int ratio = classRatio != null ? classRatio : toInt(item.get("usual_ratio"), min);
             if (ratio < min || ratio > 100) {
                 throw BizException.unprocessable("RATIO_TOO_LOW",
                         "平时占比 " + ratio + "% 低于规定的下限 " + min + "%，本次录入无效");
@@ -179,6 +192,194 @@ public class ScoreService {
             saved++;
         }
         return Map.of("saved", saved, "ratio_min", min);
+    }
+
+    /** 3.1 课堂级平时占比：一次设置，对整个课堂未提交的成绩生效 */
+    @Transactional
+    public Map<String, Object> setClassRatio(String lessonNo, int ratio) {
+        Map<String, Object> head = requireClass(lessonNo);
+        CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
+        if (u.role() == RoleEnum.TEACHER && !owns(head, u)) {
+            throw BizException.forbidden("只能设置本人任教课堂的平时占比");
+        }
+        int min = ratioMin();
+        if (ratio < min || ratio > 100) {
+            throw BizException.unprocessable("RATIO_TOO_LOW",
+                    "课堂平时占比 " + ratio + "% 低于规定的下限 " + min + "%，不能用于本课堂");
+        }
+        List<String> tcIds = tcIds(head);
+        int updated = jdbc.update("""
+                UPDATE score SET usual_ratio = ?
+                 WHERE exam_type = 1 AND score_status IN (0, 4)
+                   AND sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s))
+                """.formatted(marks(tcIds)), append(new Object[]{ratio}, tcIds));
+        return Map.of("lesson_no", lessonNo, "usual_ratio", ratio, "updated", updated,
+                "message", "课堂平时占比已设为 " + ratio + "%，已应用到全部未提交成绩");
+    }
+
+    /** 课堂当前占比：取已录记录中出现最多的值；还没有记录时返回 null */
+    private Integer classRatio(String lessonNo) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT s.usual_ratio AS ratio, COUNT(*) AS n
+                FROM score s
+                JOIN sc ON s.sc_id = sc.sc_id
+                JOIN lesson_class lc ON sc.tc_id = lc.tc_id
+                WHERE lc.lesson_no = ? AND s.exam_type = 1 AND s.usual_ratio IS NOT NULL
+                GROUP BY s.usual_ratio
+                ORDER BY n DESC, s.usual_ratio DESC
+                LIMIT 1
+                """, lessonNo);
+        return rows.isEmpty() ? null : ((Number) rows.get(0).get("ratio")).intValue();
+    }
+
+    /**
+     * 3.1 Excel / CSV 批量导入：表格列包含 学号、平时成绩、期末成绩（可选 考试情况、平时占比）。
+     * 整个课堂只用一个平时占比：参数优先，其次课堂已设占比，最后取参数下限。
+     */
+    @Transactional
+    public Map<String, Object> importGrades(String lessonNo, java.io.InputStream in, String filename, Integer ratioParam) {
+        return importGrades(lessonNo, in, filename, ratioParam, false);
+    }
+
+    /** dryRun=true 时只解析与校验、不写库，用于导入前预览 */
+    @Transactional
+    public Map<String, Object> importGrades(String lessonNo, java.io.InputStream in, String filename,
+                                            Integer ratioParam, boolean dryRun) {
+        Map<String, Object> head = requireClass(lessonNo);
+        CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
+        if (u.role() == RoleEnum.TEACHER && !owns(head, u)) {
+            throw BizException.forbidden("只能导入本人任教课堂的成绩");
+        }
+        int min = ratioMin();
+        Integer existing = classRatio(lessonNo);
+        int ratio = ratioParam != null ? ratioParam : (existing != null ? existing : min);
+        if (ratio < min || ratio > 100) {
+            throw BizException.unprocessable("RATIO_TOO_LOW",
+                    "课堂平时占比 " + ratio + "% 低于规定的下限 " + min + "%");
+        }
+        List<String> tcIds = tcIds(head);
+        Map<String, Long> roster = new LinkedHashMap<>();
+        jdbc.queryForList("""
+                SELECT sc_id, student_id FROM sc
+                 WHERE tc_id IN (%s) AND select_status = 1
+                """.formatted(marks(tcIds)), tcIds.toArray())
+                .forEach(r -> roster.put(String.valueOf(r.get("student_id")), ((Number) r.get("sc_id")).longValue()));
+
+        List<Map<String, String>> rows;
+        try {
+            rows = ScoreExcelParser.parse(in, filename);
+        } catch (Exception e) {
+            throw BizException.unprocessable("FILE_PARSE_ERROR", "表格解析失败：" + e.getMessage());
+        }
+        if (rows.isEmpty()) {
+            throw BizException.unprocessable("EMPTY_FILE", "表格里没有可导入的数据行");
+        }
+        List<Map<String, Object>> items = new ArrayList<>();
+        List<Map<String, Object>> errors = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (Map<String, String> r : rows) {
+            String sid = r.getOrDefault("student_id", "").trim();
+            int rowNo = toInt(r.get("row_no"), 0);
+            if (sid.isEmpty()) {
+                errors.add(Map.of("row", rowNo, "student_id", "", "message", "学号为空"));
+                continue;
+            }
+            Long scId = roster.get(sid);
+            if (scId == null) {
+                errors.add(Map.of("row", rowNo, "student_id", sid, "message", "该学号不在本课堂名单中"));
+                continue;
+            }
+            if (!seen.add(sid)) {
+                errors.add(Map.of("row", rowNo, "student_id", sid, "message", "同一学号在表格中重复出现"));
+                continue;
+            }
+            List<Integer> statuses = jdbc.queryForList(
+                    "SELECT score_status FROM score WHERE sc_id = ? AND exam_type = 1", Integer.class, scId);
+            if (!statuses.isEmpty() && statuses.get(0) >= 1 && statuses.get(0) <= 3) {
+                if (!dryRun) {
+                    errors.add(Map.of("row", rowNo, "student_id", sid,
+                            "message", "成绩已提交/已发布，不能通过导入修改"));
+                    continue;
+                }
+                errors.add(Map.of("row", rowNo, "student_id", sid,
+                        "message", "预览提示：该成绩已提交/已发布，正式导入时会被跳过"));
+            }
+            try {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("sc_id", scId);
+                item.put("usual_ratio", ratio);
+                item.put("usual_score", parseOptionalScore(r.get("usual_score"), "平时成绩"));
+                item.put("exam_score", parseOptionalScore(r.get("exam_score"), "期末成绩"));
+                item.put("exam_flag", parseExamFlag(r.get("exam_flag")));
+                item.put("score_type", 1);
+                items.add(item);
+            } catch (BizException e) {
+                errors.add(Map.of("row", rowNo, "student_id", sid, "message", e.getMessage()));
+            }
+        }
+        if (items.isEmpty()) {
+            throw BizException.unprocessable("NO_VALID_ROW", "没有可导入的有效行：" + summarizeErrors(errors));
+        }
+        if (dryRun) {
+            Map<String, Object> preview = new LinkedHashMap<>();
+            preview.put("lesson_no", lessonNo);
+            preview.put("usual_ratio", ratio);
+            preview.put("dry_run", true);
+            preview.put("imported", 0);
+            preview.put("preview_count", items.size());
+            preview.put("failed", errors.size());
+            preview.put("errors", errors);
+            preview.put("message", "预览通过 " + items.size() + " 行，确认后可正式导入");
+            return preview;
+        }
+        Map<String, Object> saved = saveGrades(lessonNo, items, ratio);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("lesson_no", lessonNo);
+        result.put("usual_ratio", ratio);
+        result.put("imported", saved.get("saved"));
+        result.put("failed", errors.size());
+        result.put("errors", errors);
+        result.put("message", "已导入 " + saved.get("saved") + " 条成绩" + (errors.isEmpty() ? "" : "，" + errors.size() + " 行未导入"));
+        return result;
+    }
+
+    private static BigDecimal parseOptionalScore(String raw, String label) {
+        String v = raw == null ? "" : raw.trim();
+        if (v.isEmpty() || v.equals("—") || v.equals("-")) {
+            return null;
+        }
+        BigDecimal d;
+        try {
+            d = new BigDecimal(v);
+        } catch (NumberFormatException e) {
+            throw BizException.unprocessable("INVALID_SCORE", label + "不是数字：" + v);
+        }
+        if (d.signum() < 0 || d.compareTo(new BigDecimal("100")) > 0) {
+            throw BizException.unprocessable("SCORE_OUT_OF_RANGE", label + "须在 0~100 之间");
+        }
+        return d;
+    }
+
+    private static int parseExamFlag(String raw) {
+        String v = raw == null ? "" : raw.trim();
+        if (v.isEmpty()) {
+            return 0;
+        }
+        return switch (v) {
+            case "0", "正常" -> 0;
+            case "1", "缺考" -> 1;
+            case "2", "缓考" -> 2;
+            case "3", "违纪" -> 3;
+            default -> throw BizException.unprocessable("INVALID_EXAM_FLAG", "考试情况只能为正常/缺考/缓考/违纪");
+        };
+    }
+
+    private static String summarizeErrors(List<Map<String, Object>> errors) {
+        List<String> parts = new ArrayList<>();
+        for (int i = 0; i < Math.min(errors.size(), 5); i++) {
+            parts.add("第" + errors.get(i).get("row") + "行 " + errors.get(i).get("message"));
+        }
+        return String.join("；", parts) + (errors.size() > 5 ? " 等" : "");
     }
 
     /** 3.2 总评计算与提交：只校验输入数据规范，计算后置 1，写入 score_audit 批次并生成 6 位合法核对随机码 */
@@ -510,6 +711,18 @@ public class ScoreService {
             throw BizException.unprocessable("MISSING_FIELD",
                     "学号、学期、外校、外校课程名、本校课程号、成绩单编号、外校原始成绩不能为空");
         }
+        boolean extRequired = Boolean.parseBoolean(String.valueOf(body.getOrDefault("ext_required", "false")));
+        List<Map<String, Object>> target = jdbc.queryForList(
+                "SELECT course_id, course_name, course_type, credit FROM course WHERE course_id = ?", courseId);
+        if (target.isEmpty()) {
+            throw BizException.notFound("本校课程号不存在：" + courseId);
+        }
+        String targetType = str(target.get(0).get("course_type"));
+        if (extRequired && !isRequiredType(targetType)) {
+            throw BizException.unprocessable("REQUIRED_COURSE_MISMATCH",
+                    "外校课程按必修认定时，本校对应课程也必须是必修课；当前 " + courseId
+                            + " 是「" + courseTypeName(targetType) + "」");
+        }
         BigDecimal credit = dec(body.get("ext_credit"));
         if (credit == null || credit.signum() <= 0) {
             throw BizException.unprocessable("INVALID_CREDIT", "外校学分必须大于 0");
@@ -621,6 +834,86 @@ public class ScoreService {
         }
         return Map.of("convert_id", String.valueOf(convertId), "audit_status", nextStatus,
                 "message", decision == 1 ? "教务处审批通过，已计入本校成绩与 GPA" : "教务处已驳回该认定申请");
+    }
+
+    /** 3.5 教务处认定：成绩单交回教务处后，由教务处直接把外校课程认定为校内课程并生效 */
+    @Transactional
+    public Map<String, Object> recognizeExchange(long convertId, String opinion) {
+        CurrentUser u = UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT convert_id, student_id, term, stat_stage, course_id, audit_status, college_auditor_id
+                FROM exchange_score_convert WHERE convert_id = ? FOR UPDATE
+                """, convertId);
+        if (rows.isEmpty()) {
+            throw BizException.notFound("校外成绩认定记录不存在");
+        }
+        Map<String, Object> row = rows.get(0);
+        int status = ((Number) row.get("audit_status")).intValue();
+        if (status == 2) {
+            throw BizException.conflict("ALREADY_EFFECTIVE", "该认定已经生效，无需重复认定");
+        }
+        if (status == 3) {
+            throw BizException.conflict("REJECTED", "该认定已被驳回，请重新登记后再认定");
+        }
+        String schoolOpinion = (opinion == null || opinion.isBlank()) ? "教务处认定：外校课程与本校课程对应，成绩与学分直接计入" : opinion.trim();
+        String collegeOpinion = row.get("college_auditor_id") == null ? "教务处直接认定" : "学院已审核";
+        jdbc.update("""
+                UPDATE exchange_score_convert
+                SET audit_status = 2,
+                    college_auditor_id = COALESCE(college_auditor_id, ?),
+                    college_audit_opinion = COALESCE(college_audit_opinion, ?),
+                    college_audit_time = COALESCE(college_audit_time, NOW()),
+                    school_auditor_id = ?, school_audit_opinion = ?, school_audit_time = NOW()
+                WHERE convert_id = ?
+                """, u.empId(), collegeOpinion, u.empId(), schoolOpinion, convertId);
+        String sid = String.valueOf(row.get("student_id"));
+        int stage = ((Number) row.get("stat_stage")).intValue();
+        String courseId = String.valueOf(row.get("course_id"));
+        String term = String.valueOf(row.get("term"));
+        recomputeIsFinalJoint(sid, stage, courseId);
+        recomputeAcademicStats(sid, stage, term);
+        return Map.of("convert_id", String.valueOf(convertId), "audit_status", 2,
+                "message", "教务处已认定，外校成绩与学分已计入本校成绩");
+    }
+
+    /** 3.5 认定候选课程：按课程名检索校内课程，标明是否必修，供教务处做学分对应 */
+    public List<Map<String, Object>> listCourseCandidates(String keyword) {
+        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
+        StringBuilder sql = new StringBuilder("""
+                SELECT course_id, course_name, course_type, credit, open_college
+                FROM course WHERE 1=1
+                """);
+        List<Object> args = new ArrayList<>();
+        if (keyword != null && !keyword.isBlank()) {
+            sql.append(" AND (course_name LIKE ? OR course_id LIKE ?) ");
+            String like = "%" + keyword.trim() + "%";
+            args.add(like);
+            args.add(like);
+        }
+        sql.append(" ORDER BY course_type, course_id LIMIT 50");
+        List<Map<String, Object>> list = jdbc.queryForList(sql.toString(), args.toArray());
+        for (Map<String, Object> c : list) {
+            String type = str(c.get("course_type"));
+            c.put("course_type_name", courseTypeName(type));
+            c.put("required", isRequiredType(type));
+        }
+        return list;
+    }
+
+    private static String courseTypeName(String type) {
+        return switch (type) {
+            case "11" -> "校级必修";
+            case "12" -> "院级必修";
+            case "13" -> "专业必修";
+            case "14" -> "专业选修";
+            case "15" -> "通识选修";
+            case "16" -> "实践环节";
+            default -> "其他";
+        };
+    }
+
+    private static boolean isRequiredType(String type) {
+        return Set.of("11", "12", "13").contains(type);
     }
 
     // ---------- 内部工具与统计同步 ----------

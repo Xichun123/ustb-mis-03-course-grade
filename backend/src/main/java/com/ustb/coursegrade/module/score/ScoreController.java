@@ -34,13 +34,39 @@ public class ScoreController {
         return ApiResponse.ok(scoreService.roster(lessonNo));
     }
 
-    /** 3.1 保存成绩草稿 */
+    /** 3.1 保存成绩草稿；body 里带 usual_ratio 时对整个课堂生效 */
     @PutMapping("/classes/{lessonNo}/grades")
     @SuppressWarnings("unchecked")
     public ApiResponse<Map<String, Object>> saveGrades(
             @PathVariable String lessonNo, @RequestBody Map<String, Object> body) {
         List<Map<String, Object>> items = (List<Map<String, Object>>) body.getOrDefault("items", List.of());
-        return ApiResponse.ok("成绩已保存", scoreService.saveGrades(lessonNo, items));
+        Integer ratio = body.get("usual_ratio") == null ? null
+                : Integer.parseInt(String.valueOf(body.get("usual_ratio")));
+        return ApiResponse.ok("成绩已保存", scoreService.saveGrades(lessonNo, items, ratio));
+    }
+
+    /** 3.1 课堂级平时占比：一次设置，对全课堂生效 */
+    @PutMapping("/classes/{lessonNo}/ratio")
+    public ApiResponse<Map<String, Object>> setClassRatio(
+            @PathVariable String lessonNo, @RequestBody Map<String, Object> body) {
+        int ratio = Integer.parseInt(String.valueOf(body.getOrDefault("usual_ratio", 30)));
+        Map<String, Object> data = scoreService.setClassRatio(lessonNo, ratio);
+        return ApiResponse.ok(String.valueOf(data.get("message")), data);
+    }
+
+    /** 3.1 Excel/CSV 批量导入成绩：上传表格直接识别并录入 */
+    @PostMapping("/classes/{lessonNo}/grades/import")
+    public ApiResponse<Map<String, Object>> importGrades(
+            @PathVariable String lessonNo,
+            @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+            @RequestParam(value = "usual_ratio", required = false) Integer usualRatio,
+            @RequestParam(value = "dry_run", defaultValue = "false") boolean dryRun) throws java.io.IOException {
+        if (file == null || file.isEmpty()) {
+            return ApiResponse.error("EMPTY_FILE", "请选择要上传的 Excel 文件");
+        }
+        Map<String, Object> data = scoreService.importGrades(
+                lessonNo, file.getInputStream(), file.getOriginalFilename(), usualRatio, dryRun);
+        return ApiResponse.ok(String.valueOf(data.get("message")), data);
     }
 
     /** 3.2 总评计算与提交，返回 6 位核对码 */
@@ -118,5 +144,21 @@ public class ScoreController {
         String opinion = body.get("opinion") == null ? null : String.valueOf(body.get("opinion"));
         Map<String, Object> data = scoreService.schoolApproveExchange(convertId, decision, opinion);
         return ApiResponse.ok(String.valueOf(data.get("message")), data);
+    }
+
+    /** 3.5 教务处直接认定外校成绩（成绩单交回教务处后一步生效） */
+    @PostMapping("/exchange/{convertId}/recognize")
+    public ApiResponse<Map<String, Object>> recognizeExchange(
+            @PathVariable long convertId, @RequestBody(required = false) Map<String, Object> body) {
+        String opinion = body == null || body.get("opinion") == null ? null : String.valueOf(body.get("opinion"));
+        Map<String, Object> data = scoreService.recognizeExchange(convertId, opinion);
+        return ApiResponse.ok(String.valueOf(data.get("message")), data);
+    }
+
+    /** 3.5 认定候选课程：按课程名检索校内课程，标明是否必修 */
+    @GetMapping("/exchange/candidates")
+    public ApiResponse<List<Map<String, Object>>> exchangeCandidates(
+            @RequestParam(required = false) String keyword) {
+        return ApiResponse.ok(scoreService.listCourseCandidates(keyword));
     }
 }
