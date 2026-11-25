@@ -224,13 +224,13 @@ public class StatsService {
                        COALESCE(emp.emp_name, tc.teacher_id) AS teacher_name,
                        CASE WHEN te.sc_id IS NOT NULL THEN 1 ELSE 0 END AS evaluated,
                        te.eval_time
-                FROM sc
+                FROM sel_sc sc
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
-                LEFT JOIN lesson_class lc ON tc.tc_id = lc.tc_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 LEFT JOIN sys_code_dict tm ON tm.dict_group = 'teacher_map' AND tm.dict_code = tc.teacher_id
                 LEFT JOIN t_employee emp ON emp.emp_id = tm.dict_name
-                LEFT JOIN teach_eval te ON sc.sc_id = te.sc_id
+                LEFT JOIN sel_teach_eval te ON sc.sc_id = te.sc_id
                 WHERE sc.student_id = ? AND tc.term = ? AND sc.select_status = 1
                 ORDER BY evaluated ASC, sc.sc_id ASC
                 """, studentId, currentTerm);
@@ -283,7 +283,7 @@ public class StatsService {
         // 锁定目标 sc 行并重读归属、状态与学期
         List<Map<String, Object>> scRows = jdbc.queryForList("""
                 SELECT sc.sc_id, sc.student_id, sc.tc_id, sc.select_status, tc.term
-                FROM sc
+                FROM sel_sc sc
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 WHERE sc.sc_id = ? FOR UPDATE
                 """, scId);
@@ -303,7 +303,7 @@ public class StatsService {
 
         // 已提交则幂等返回（不覆盖、不泄露原分数和原意见）
         Integer existed = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM teach_eval WHERE sc_id = ?", Integer.class, scId);
+                "SELECT COUNT(*) FROM sel_teach_eval WHERE sc_id = ?", Integer.class, scId);
         if (existed != null && existed > 0) {
             Map<String, Object> gate = buildEvaluationGateInfo(studentId, currentTerm);
             Map<String, Object> resp = new LinkedHashMap<>();
@@ -317,7 +317,7 @@ public class StatsService {
 
         try {
             jdbc.update("""
-                    INSERT INTO teach_eval (sc_id, eval_score, eval_comment, eval_time)
+                    INSERT INTO sel_teach_eval (sc_id, eval_score, eval_comment, eval_time)
                     VALUES (?, ?, ?, NOW())
                     """, scId, evalScore, comment);
         } catch (DuplicateKeyException dup) {
@@ -395,8 +395,8 @@ public class StatsService {
         } else {
             List<Map<String, Object>> gpaRows = jdbc.queryForList("""
                     SELECT student_id, earned_credit, failed_credit, gpa, avg_score,
-                           major_rank, major_rank_total, update_time
-                    FROM stu_gpa
+                           major_rank, major_rank_total, updated_at AS update_time
+                    FROM sel_stu_gpa
                     WHERE student_id = ?
                     """, studentId);
             if (gpaRows.isEmpty()) {
@@ -409,8 +409,8 @@ public class StatsService {
         }
 
         List<Map<String, Object>> termSummaries = jdbc.queryForList("""
-                SELECT student_id, term, term_credit, term_failed_credit, update_time
-                FROM stu_term_gpa
+                SELECT student_id, term, term_credit, term_failed_credit, updated_at AS update_time
+                FROM sel_stu_term_gpa
                 WHERE student_id = ?
                 ORDER BY term DESC
                 """, studentId);
@@ -450,13 +450,13 @@ public class StatsService {
                        s.exam_type, s.exam_flag, s.score_type,
                        s.usual_ratio, s.usual_score, s.exam_score,
                        s.total_score, s.score_level, s.grade_point,
-                       s.is_final, s.score_status, s.publish_time,
+                       s.is_final, s.score_status, s.published_at AS publish_time,
                        NULL AS host_school, NULL AS ext_course_name, NULL AS proof_no
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
-                LEFT JOIN lesson_class lc ON tc.tc_id = lc.tc_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 WHERE sc.student_id = ? AND s.score_status = 3
                 """);
         List<Object> schoolParams = new ArrayList<>();
@@ -491,7 +491,7 @@ public class StatsService {
                        e.grade_point, e.is_final, 3 AS score_status,
                        e.school_audit_time AS publish_time,
                        e.host_school, e.ext_course_name, e.proof_no
-                FROM exchange_score_convert e
+                FROM sel_exchange_score_convert e
                 JOIN course c ON e.course_id = c.course_id
                 WHERE e.student_id = ? AND e.audit_status = 2
                 """);
@@ -518,6 +518,7 @@ public class StatsService {
             BigDecimal totalScore = toBigDecimal(r.get("total_score"));
             String scoreLevel = r.get("score_level") == null ? null : String.valueOf(r.get("score_level"));
             BigDecimal gp = toBigDecimal(r.get("grade_point"));
+            r.put("usual_ratio", normalizeWholeNumber(r.get("usual_ratio")));
             r.put("course_type_label", courseTypeLabel(r.get("course_type") == null ? null : String.valueOf(r.get("course_type"))));
             r.put("display_score", scoreType == 1
                     ? (totalScore == null ? "—" : totalScore.toPlainString())
@@ -536,13 +537,13 @@ public class StatsService {
         return jdbc.queryForList("""
                 SELECT DISTINCT term FROM (
                   SELECT tc.term
-                  FROM score s
-                  JOIN sc ON s.sc_id = sc.sc_id
+                  FROM sel_score s
+                  JOIN sel_sc sc ON s.sc_id = sc.sc_id
                   JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                   WHERE sc.student_id = ? AND s.score_status = 3
                   UNION
                   SELECT e.term
-                  FROM exchange_score_convert e
+                  FROM sel_exchange_score_convert e
                   WHERE e.student_id = ? AND e.audit_status = 2
                 ) t
                 ORDER BY term DESC
@@ -567,16 +568,16 @@ public class StatsService {
                        st.major_id, st.college_id,
                        COALESCE(cm.dict_name, st.college_id) AS college_name,
                        g.earned_credit, g.failed_credit, g.gpa, g.avg_score,
-                       g.major_rank, g.major_rank_total, g.update_time,
+                       g.major_rank, g.major_rank_total, g.updated_at AS update_time,
                        tg.term AS stat_term, tg.term_credit, tg.term_failed_credit,
-                       (SELECT COUNT(*) FROM score s2
-                        JOIN sc sc2 ON s2.sc_id = sc2.sc_id
+                       (SELECT COUNT(*) FROM sel_score s2
+                        JOIN sel_sc sc2 ON s2.sc_id = sc2.sc_id
                         WHERE sc2.student_id = st.student_id AND sc2.study_type = 3 AND s2.score_status = 3) AS minor_score_count,
-                       (SELECT COUNT(*) FROM exchange_score_convert e2
+                       (SELECT COUNT(*) FROM sel_exchange_score_convert e2
                         WHERE e2.student_id = st.student_id AND e2.audit_status = 2) AS exchange_score_count
                 FROM student st
-                LEFT JOIN stu_gpa g ON st.student_id = g.student_id
-                LEFT JOIN stu_term_gpa tg ON st.student_id = tg.student_id AND tg.term = ?
+                LEFT JOIN sel_stu_gpa g ON st.student_id = g.student_id
+                LEFT JOIN sel_stu_term_gpa tg ON st.student_id = tg.student_id AND tg.term = ?
                 LEFT JOIN sys_code_dict cm ON cm.dict_group = 'college_map' AND cm.dict_code = st.college_id
                 WHERE 1=1
                 """);
@@ -690,9 +691,9 @@ public class StatsService {
         List<Map<String, Object>> allCandidates = jdbc.queryForList("""
                 SELECT tc.term, tc.course_id, c.credit,
                        s.score_type, s.total_score, s.score_level, s.grade_point,
-                       s.exam_type, s.publish_time, s.score_id AS sort_id
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                       s.exam_type, s.published_at AS publish_time, s.score_id AS sort_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
@@ -702,7 +703,7 @@ public class StatsService {
                        e.score_type, e.converted_score AS total_score, e.converted_level AS score_level,
                        e.grade_point, 1 AS exam_type, e.school_audit_time AS publish_time,
                        (e.convert_id + 1000000000) AS sort_id
-                FROM exchange_score_convert e
+                FROM sel_exchange_score_convert e
                 JOIN course c ON e.course_id = c.course_id
                 WHERE e.student_id = ? AND e.stat_stage = ?
                   AND e.audit_status = 2
@@ -775,7 +776,7 @@ public class StatsService {
                 ? scoreWeighted.divide(totalCredit, 2, RoundingMode.HALF_UP) : null;
 
         jdbc.update("""
-                INSERT INTO stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, major_rank, major_rank_total, update_time)
+                INSERT INTO sel_stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, major_rank, major_rank_total, updated_at)
                 VALUES (?, ?, ?, ?, ?, NULL, NULL, NOW())
                 ON DUPLICATE KEY UPDATE
                   earned_credit = VALUES(earned_credit),
@@ -784,7 +785,7 @@ public class StatsService {
                   avg_score = VALUES(avg_score),
                   major_rank = IF(VALUES(avg_score) IS NULL, NULL, major_rank),
                   major_rank_total = IF(VALUES(avg_score) IS NULL, NULL, major_rank_total),
-                  update_time = NOW()
+                  updated_at = NOW()
                 """, studentId, earned, failed, gpa, avgScore);
 
         int updatedTerms = 0;
@@ -801,12 +802,12 @@ public class StatsService {
                 }
             }
             jdbc.update("""
-                    INSERT INTO stu_term_gpa (student_id, term, term_credit, term_failed_credit, update_time)
+                    INSERT INTO sel_stu_term_gpa (student_id, term, term_credit, term_failed_credit, updated_at)
                     VALUES (?, ?, ?, ?, NOW())
                     ON DUPLICATE KEY UPDATE
                       term_credit = VALUES(term_credit),
                       term_failed_credit = VALUES(term_failed_credit),
-                      update_time = NOW()
+                      updated_at = NOW()
                     """, studentId, term, tEarned, tFailed);
             updatedTerms++;
         }
@@ -852,7 +853,7 @@ public class StatsService {
     private void recomputeRankForMajorGrade(String majorId, int grade) {
         // 先清空无可计入成绩（avg_score IS NULL）学生的旧排名，不保留过期名次
         jdbc.update("""
-                UPDATE stu_gpa g
+                UPDATE sel_stu_gpa g
                 JOIN student st ON g.student_id = st.student_id
                 SET g.major_rank = NULL, g.major_rank_total = NULL
                 WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NULL
@@ -860,7 +861,7 @@ public class StatsService {
 
         List<Map<String, Object>> peers = jdbc.queryForList("""
                 SELECT g.student_id, g.avg_score
-                FROM stu_gpa g
+                FROM sel_stu_gpa g
                 JOIN student st ON g.student_id = st.student_id
                 WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NOT NULL
                 ORDER BY g.avg_score DESC, g.student_id ASC
@@ -875,8 +876,8 @@ public class StatsService {
                 prevScore = cur;
             }
             jdbc.update("""
-                    UPDATE stu_gpa
-                    SET major_rank = ?, major_rank_total = ?, update_time = NOW()
+                    UPDATE sel_stu_gpa
+                    SET major_rank = ?, major_rank_total = ?, updated_at = NOW()
                     WHERE student_id = ?
                     """, currentRank, totalPeers, peers.get(i).get("student_id"));
         }
@@ -1008,7 +1009,7 @@ public class StatsService {
         Map<String, Object> cumulativeSummary = null;
         if (!isIncomingExchange && (officialMode || currentTermCompleted)) {
             List<Map<String, Object>> gpaRows = jdbc.queryForList(
-                    "SELECT earned_credit, failed_credit, gpa, avg_score, major_rank, major_rank_total, update_time FROM stu_gpa WHERE student_id = ?",
+                    "SELECT earned_credit, failed_credit, gpa, avg_score, major_rank, major_rank_total, updated_at AS update_time FROM sel_stu_gpa WHERE student_id = ?",
                     targetStudentId);
             if (!gpaRows.isEmpty()) {
                 cumulativeSummary = gpaRows.get(0);
@@ -1080,7 +1081,7 @@ public class StatsService {
                        COALESCE(emp.emp_name, tc.teacher_id) AS teacher_name
                 FROM teaching_class tc
                 JOIN course c ON tc.course_id = c.course_id
-                LEFT JOIN lesson_class lc ON tc.tc_id = lc.tc_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 LEFT JOIN sys_code_dict cm ON cm.dict_group = 'college_map' AND cm.dict_code = c.open_college
                 LEFT JOIN sys_code_dict tm ON tm.dict_group = 'teacher_map' AND tm.dict_code = tc.teacher_id
                 LEFT JOIN t_employee emp ON emp.emp_id = tm.dict_name
@@ -1173,8 +1174,8 @@ public class StatsService {
         StringBuilder sql = new StringBuilder("""
                 SELECT s.score_id, s.sc_id, s.score_type, s.exam_flag, s.total_score, s.score_level, s.grade_point,
                        tc.tc_id, tc.term, c.course_id, c.course_name
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE s.score_status = 3 AND s.exam_type = ?
@@ -1342,11 +1343,11 @@ public class StatsService {
                        c.course_name, c.credit,
                        COALESCE(st.student_name, ex.student_name) AS student_name,
                        COALESCE(st.class_name, '来校交换生') AS class_name
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
-                LEFT JOIN lesson_class lc ON tc.tc_id = lc.tc_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 LEFT JOIN student st ON sc.student_id = st.student_id
                 LEFT JOIN v_exchange_student ex ON sc.student_id = ex.temp_student_no
                 WHERE s.score_status = 3
@@ -1387,14 +1388,14 @@ public class StatsService {
             List<Map<String, Object>> attempts = jdbc.queryForList("""
                     SELECT s.score_type, s.total_score, s.score_level, s.grade_point,
                            s.exam_type, s.exam_flag, sc.study_type, tc.term
-                    FROM score s
-                    JOIN sc ON s.sc_id = sc.sc_id
+                    FROM sel_score s
+                    JOIN sel_sc sc ON s.sc_id = sc.sc_id
                     JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                     WHERE sc.student_id = ? AND sc.stat_stage = ? AND tc.course_id = ? AND s.score_status = 3
                     UNION ALL
                     SELECT e.score_type, e.converted_score AS total_score, e.converted_level AS score_level,
                            e.grade_point, 1 AS exam_type, 0 AS exam_flag, 1 AS study_type, e.term
-                    FROM exchange_score_convert e
+                    FROM sel_exchange_score_convert e
                     WHERE e.student_id = ? AND e.stat_stage = ? AND e.course_id = ? AND e.audit_status = 2
                     """, sid, stage, cid, sid, stage, cid);
 
@@ -1507,8 +1508,8 @@ public class StatsService {
 
             List<Map<String, Object>> unpubRows = jdbc.queryForList("""
                     SELECT c.course_id, c.course_name, COUNT(*) AS cnt
-                    FROM score s
-                    JOIN sc ON s.sc_id = sc.sc_id
+                    FROM sel_score s
+                    JOIN sel_sc sc ON s.sc_id = sc.sc_id
                     JOIN student st ON sc.student_id = st.student_id
                     JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                     JOIN course c ON tc.course_id = c.course_id
@@ -1532,8 +1533,8 @@ public class StatsService {
 
             Integer defCnt = jdbc.queryForObject("""
                     SELECT COUNT(*)
-                    FROM score s
-                    JOIN sc ON s.sc_id = sc.sc_id
+                    FROM sel_score s
+                    JOIN sel_sc sc ON s.sc_id = sc.sc_id
                     JOIN student st ON sc.student_id = st.student_id
                     JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                     WHERE st.major_id = ? AND st.grade = ?
@@ -1594,8 +1595,8 @@ public class StatsService {
                 BigDecimal credit = toBigDecimal(pc.get("credit"));
                 List<Map<String, Object>> firstRows = jdbc.queryForList("""
                         SELECT s.score_type, s.total_score, s.score_level
-                        FROM score s
-                        JOIN sc ON s.sc_id = sc.sc_id
+                        FROM sel_score s
+                        JOIN sel_sc sc ON s.sc_id = sc.sc_id
                         JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                         WHERE sc.student_id = ? AND sc.stat_stage = ? AND tc.course_id = ?
                           AND tc.term BETWEEN ? AND ?
@@ -1678,18 +1679,18 @@ public class StatsService {
                        c.course_id, c.course_name, c.open_college,
                        COALESCE(cm.dict_name, c.open_college) AS college_name,
                        tc.teacher_id, COALESCE(emp.emp_name, tc.teacher_id) AS teacher_name,
-                       (SELECT COUNT(*) FROM sc sc1 WHERE sc1.tc_id = tc.tc_id AND sc1.select_status = 1) AS enrolled_num,
+                       (SELECT COUNT(*) FROM sel_sc sc1 WHERE sc1.tc_id = tc.tc_id AND sc1.select_status = 1) AS enrolled_num,
                        r.eval_num, r.avg_eval_score, r.calc_time,
-                       (SELECT COUNT(*) FROM teach_eval te
-                        JOIN sc sc2 ON te.sc_id = sc2.sc_id
+                       (SELECT COUNT(*) FROM sel_teach_eval te
+                        JOIN sel_sc sc2 ON te.sc_id = sc2.sc_id
                         WHERE sc2.tc_id = tc.tc_id AND sc2.select_status = 1) AS live_valid_eval_num
                 FROM teaching_class tc
                 JOIN course c ON tc.course_id = c.course_id
-                LEFT JOIN lesson_class lc ON tc.tc_id = lc.tc_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 LEFT JOIN sys_code_dict cm ON cm.dict_group = 'college_map' AND cm.dict_code = c.open_college
                 LEFT JOIN sys_code_dict tm ON tm.dict_group = 'teacher_map' AND tm.dict_code = tc.teacher_id
                 LEFT JOIN t_employee emp ON emp.emp_id = tm.dict_name
-                LEFT JOIN tc_eval_result r ON tc.tc_id = r.tc_id
+                LEFT JOIN sel_tc_eval_result r ON tc.tc_id = r.tc_id
                 WHERE tc.term = ?
                 """);
         List<Object> params = new ArrayList<>();
@@ -1806,19 +1807,19 @@ public class StatsService {
         for (String tcId : targetTcIds) {
             // 与 4.1 评教提交共用 sc 行锁秩序（按 sc_id 升序）
             jdbc.queryForList(
-                    "SELECT sc_id FROM sc WHERE tc_id = ? AND select_status = 1 ORDER BY sc_id ASC FOR UPDATE",
+                    "SELECT sc_id FROM sel_sc WHERE tc_id = ? AND select_status = 1 ORDER BY sc_id ASC FOR UPDATE",
                     tcId);
 
             Map<String, Object> agg = jdbc.queryForMap("""
                     SELECT COUNT(*) AS cnt, SUM(te.eval_score) AS total_score
-                    FROM teach_eval te
-                    JOIN sc ON te.sc_id = sc.sc_id
+                    FROM sel_teach_eval te
+                    JOIN sel_sc sc ON te.sc_id = sc.sc_id
                     WHERE sc.tc_id = ? AND sc.select_status = 1
                     """, tcId);
 
             int cnt = ((Number) agg.get("cnt")).intValue();
             List<Map<String, Object>> oldRows = jdbc.queryForList(
-                    "SELECT eval_num FROM tc_eval_result WHERE tc_id = ?", tcId);
+                    "SELECT eval_num FROM sel_tc_eval_result WHERE tc_id = ?", tcId);
 
             BigDecimal avg = null;
             if (cnt == 0) {
@@ -1832,9 +1833,9 @@ public class StatsService {
                 avg = sum.divide(BigDecimal.valueOf(cnt), 2, RoundingMode.HALF_UP);
             }
 
-            // 严格遵守 v7/v9 CHECK：eval_num=0 时 avg_eval_score 必为 NULL；eval_num>0 时 0..100
+            // 严格遵守 v1.3 约束：eval_num=0 时 avg_eval_score 必为 NULL；eval_num>0 时 0..100
             jdbc.update("""
-                    INSERT INTO tc_eval_result (tc_id, eval_num, avg_eval_score, calc_time)
+                    INSERT INTO sel_tc_eval_result (tc_id, eval_num, avg_eval_score, calc_time)
                     VALUES (?, ?, ?, NOW())
                     ON DUPLICATE KEY UPDATE
                       eval_num = VALUES(eval_num),
@@ -1869,11 +1870,11 @@ public class StatsService {
                        c.course_id, c.course_name,
                        COALESCE(emp.emp_name, tc.teacher_id) AS teacher_name,
                        te.eval_score, te.eval_comment, te.eval_time
-                FROM teach_eval te
-                JOIN sc ON te.sc_id = sc.sc_id
+                FROM sel_teach_eval te
+                JOIN sel_sc sc ON te.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
-                LEFT JOIN lesson_class lc ON tc.tc_id = lc.tc_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 LEFT JOIN sys_code_dict tm ON tm.dict_group = 'teacher_map' AND tm.dict_code = tc.teacher_id
                 LEFT JOIN t_employee emp ON emp.emp_id = tm.dict_name
                 WHERE sc.select_status = 1
@@ -1888,7 +1889,11 @@ public class StatsService {
             params.add(tcId.trim());
         }
         sql.append(" ORDER BY te.eval_time DESC, te.sc_id DESC LIMIT 200");
-        return jdbc.queryForList(sql.toString(), params.toArray());
+        List<Map<String, Object>> rows = jdbc.queryForList(sql.toString(), params.toArray());
+        for (Map<String, Object> r : rows) {
+            r.put("eval_score", normalizeWholeNumber(r.get("eval_score")));
+        }
+        return rows;
     }
 
     // =========================================================================
@@ -1936,5 +1941,16 @@ public class StatsService {
                     Map.of("eval_score", "必须在 0~100 之间"));
         }
         return val;
+    }
+
+    private Object normalizeWholeNumber(Object raw) {
+        if (raw instanceof BigDecimal bd) {
+            BigDecimal stripped = bd.stripTrailingZeros();
+            if (stripped.scale() <= 0) {
+                return stripped.intValueExact();
+            }
+            return stripped;
+        }
+        return raw;
     }
 }

@@ -44,13 +44,13 @@ class ScoreServiceTest {
                 "CREATE TABLE v_exchange_student(temp_student_no VARCHAR(20),student_name VARCHAR(50),sender_school_name VARCHAR(100))",
                 "CREATE TABLE course(course_id VARCHAR(10) PRIMARY KEY,course_name VARCHAR(100),course_type VARCHAR(2),credit DECIMAL(5,1),assess_type VARCHAR(2),open_college VARCHAR(10))",
                 "CREATE TABLE teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),teacher_id VARCHAR(10),class_ids VARCHAR(100))",
-                "CREATE TABLE lesson_class(tc_id VARCHAR(20) PRIMARY KEY,lesson_no VARCHAR(20))",
-                "CREATE TABLE sc(sc_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),study_type INT DEFAULT 1,stu_level VARCHAR(20) DEFAULT '本科',stat_stage INT DEFAULT 1,select_status INT DEFAULT 1)",
-                "CREATE TABLE score(score_id BIGINT AUTO_INCREMENT PRIMARY KEY,sc_id BIGINT,exam_type INT DEFAULT 1,exam_flag INT DEFAULT 0,score_type INT DEFAULT 1,usual_ratio DECIMAL(5,2),usual_score DECIMAL(5,2),exam_score DECIMAL(5,2),score_level VARCHAR(10),total_score DECIMAL(5,2),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,score_status INT DEFAULT 0,input_teacher_id VARCHAR(10),submit_time TIMESTAMP,publish_time TIMESTAMP)",
-                "CREATE TABLE score_audit(audit_id BIGINT AUTO_INCREMENT PRIMARY KEY,lesson_no VARCHAR(20),submit_time TIMESTAMP,verify_code VARCHAR(6),auditor_id VARCHAR(10),audit_result INT DEFAULT 0,audit_opinion VARCHAR(200),audit_time TIMESTAMP)",
-                "CREATE TABLE exchange_score_convert(convert_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),exchange_apply_id VARCHAR(40),term VARCHAR(11),stat_stage INT DEFAULT 1,host_school VARCHAR(150),ext_course_code VARCHAR(30),ext_course_name VARCHAR(100),ext_credit DECIMAL(5,1),ext_score_raw VARCHAR(20),ext_scale_type INT DEFAULT 1,course_id VARCHAR(10),score_type INT DEFAULT 1,converted_score DECIMAL(5,2),converted_level VARCHAR(10),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,proof_no VARCHAR(50),version_no INT DEFAULT 1,audit_status INT DEFAULT 0,apply_time TIMESTAMP,college_auditor_id VARCHAR(10),college_audit_opinion VARCHAR(200),college_audit_time TIMESTAMP,school_auditor_id VARCHAR(10),school_audit_opinion VARCHAR(200),school_audit_time TIMESTAMP)",
-                "CREATE TABLE stu_gpa(student_id VARCHAR(20) PRIMARY KEY,earned_credit DECIMAL(6,1),failed_credit DECIMAL(6,1),gpa DECIMAL(4,2),avg_score DECIMAL(5,2),major_rank INT,major_rank_total INT,update_time TIMESTAMP)",
-                "CREATE TABLE stu_term_gpa(student_id VARCHAR(20),term VARCHAR(11),term_credit DECIMAL(6,1),term_failed_credit DECIMAL(6,1),update_time TIMESTAMP,PRIMARY KEY(student_id,term))",
+                "CREATE TABLE sel_lesson_class(tc_id VARCHAR(20) PRIMARY KEY,lesson_no VARCHAR(20))",
+                "CREATE TABLE sel_sc(sc_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),study_type INT DEFAULT 1,stu_level VARCHAR(20) DEFAULT '本科',stat_stage INT DEFAULT 1,select_status INT DEFAULT 1)",
+                "CREATE TABLE sel_score(score_id BIGINT AUTO_INCREMENT PRIMARY KEY,sc_id BIGINT,exam_type INT DEFAULT 1,exam_flag INT DEFAULT 0,score_type INT DEFAULT 1,usual_ratio DECIMAL(5,2),usual_score DECIMAL(5,2),exam_score DECIMAL(5,2),score_level VARCHAR(10),total_score DECIMAL(5,2),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,score_status INT DEFAULT 0,input_teacher_id VARCHAR(10),submitted_at TIMESTAMP,published_at TIMESTAMP)",
+                "CREATE TABLE sel_score_audit(audit_id BIGINT AUTO_INCREMENT PRIMARY KEY,lesson_no VARCHAR(20),submitted_at TIMESTAMP,verify_code VARCHAR(6),auditor_id VARCHAR(10),audit_result INT DEFAULT 0,audit_opinion VARCHAR(500),reviewed_at TIMESTAMP)",
+                "CREATE TABLE sel_exchange_score_convert(convert_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),exchange_apply_id VARCHAR(50),term VARCHAR(11),stat_stage INT DEFAULT 1,host_school VARCHAR(200),ext_course_code VARCHAR(30),ext_course_name VARCHAR(100),ext_credit DECIMAL(5,1),ext_score_raw VARCHAR(20),ext_scale_type INT DEFAULT 1,course_id VARCHAR(10),score_type INT DEFAULT 1,converted_score DECIMAL(5,2),converted_level VARCHAR(20),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,proof_no VARCHAR(50),version_no INT DEFAULT 1,audit_status INT DEFAULT 0,submitted_at TIMESTAMP,college_auditor_id VARCHAR(10),college_audit_opinion VARCHAR(200),college_audit_time TIMESTAMP,school_auditor_id VARCHAR(10),school_audit_opinion VARCHAR(200),school_audit_time TIMESTAMP)",
+                "CREATE TABLE sel_stu_gpa(student_id VARCHAR(20) PRIMARY KEY,earned_credit DECIMAL(5,1),failed_credit DECIMAL(5,1),gpa DECIMAL(5,2),avg_score DECIMAL(5,2),major_rank INT,major_rank_total INT,updated_at TIMESTAMP)",
+                "CREATE TABLE sel_stu_term_gpa(student_id VARCHAR(20),term VARCHAR(11),term_credit DECIMAL(5,1),term_failed_credit DECIMAL(5,1),updated_at TIMESTAMP,PRIMARY KEY(student_id,term))",
                 "CREATE TABLE sys_code_dict(dict_id INT AUTO_INCREMENT PRIMARY KEY,dict_group VARCHAR(40),dict_code VARCHAR(40),dict_name VARCHAR(100),is_enabled INT DEFAULT 1)"
         )) {
             jdbc.execute(ddl);
@@ -69,15 +69,15 @@ class ScoreServiceTest {
 
         // 百分制课堂 KT1001（未录入）
         jdbc.update("INSERT INTO teaching_class VALUES('TC1',?,'C12','T001','信管241')", TERM);
-        jdbc.update("INSERT INTO lesson_class VALUES('TC1','KT1001')");
-        jdbc.update("INSERT INTO sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S001','TC1',1,'本科',1,1)");
-        jdbc.update("INSERT INTO sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S002','TC1',1,'本科',1,1)");
+        jdbc.update("INSERT INTO sel_lesson_class VALUES('TC1','KT1001')");
+        jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S001','TC1',1,'本科',1,1)");
+        jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S002','TC1',1,'本科',1,1)");
 
         // 五级制考查课课堂 KT1002
         jdbc.update("INSERT INTO teaching_class VALUES('TC2',?,'C16','T001','信管241')", TERM);
-        jdbc.update("INSERT INTO lesson_class VALUES('TC2','KT1002')");
-        jdbc.update("INSERT INTO sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S001','TC2',1,'本科',1,1)");
-        jdbc.update("INSERT INTO sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S002','TC2',1,'本科',1,1)");
+        jdbc.update("INSERT INTO sel_lesson_class VALUES('TC2','KT1002')");
+        jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S001','TC2',1,'本科',1,1)");
+        jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S002','TC2',1,'本科',1,1)");
 
         ScoreService target = new ScoreService(jdbc);
         ProxyFactory proxy = new ProxyFactory(target);
@@ -126,28 +126,28 @@ class ScoreServiceTest {
         assertEquals(0, emptyRes.get("updated"));
         assertEquals(2, emptyRes.get("pending_new"));
         assertEquals(false, emptyRes.get("persisted"));
-        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM score", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM sel_score", Integer.class));
 
         // 录一条草稿后再设置占比：更新该草稿并提示其余 1 名未录入
-        Long sc1 = jdbc.queryForObject("SELECT sc_id FROM sc WHERE student_id='S001' AND tc_id='TC1'", Long.class);
+        Long sc1 = jdbc.queryForObject("SELECT sc_id FROM sel_sc WHERE student_id='S001' AND tc_id='TC1'", Long.class);
         service.saveGrades("KT1001", List.of(Map.of("sc_id", sc1, "usual_score", 85, "exam_score", 90)), 30);
         Map<String, Object> draftRes = service.setClassRatio("KT1001", 35);
         assertEquals(1, draftRes.get("updated"));
         assertEquals(1, draftRes.get("pending_new"));
         assertEquals(true, draftRes.get("persisted"));
-        assertEquals(35, jdbc.queryForObject("SELECT usual_ratio FROM score WHERE sc_id=?", Integer.class, sc1));
+        assertEquals(35, jdbc.queryForObject("SELECT usual_ratio FROM sel_score WHERE sc_id=?", Integer.class, sc1));
 
         // 全部已发布时拦截
-        Long sc2 = jdbc.queryForObject("SELECT sc_id FROM sc WHERE student_id='S002' AND tc_id='TC1'", Long.class);
-        jdbc.update("UPDATE score SET score_status = 3 WHERE sc_id = ?", sc1);
-        jdbc.update("INSERT INTO score(sc_id,exam_type,score_type,usual_ratio,usual_score,exam_score,total_score,grade_point,score_status) VALUES(?,1,1,35,80,80,80,3.4,3)", sc2);
+        Long sc2 = jdbc.queryForObject("SELECT sc_id FROM sel_sc WHERE student_id='S002' AND tc_id='TC1'", Long.class);
+        jdbc.update("UPDATE sel_score SET score_status = 3 WHERE sc_id = ?", sc1);
+        jdbc.update("INSERT INTO sel_score(sc_id,exam_type,score_type,usual_ratio,usual_score,exam_score,total_score,grade_point,score_status) VALUES(?,1,1,35,80,80,80,3.4,3)", sc2);
         assertEquals("SCORE_LOCKED", assertThrows(BizException.class, () -> service.setClassRatio("KT1001", 40)).getCode());
     }
 
     @Test
     void importGradesDryRunDoesNotOvercountLockedRows() {
-        Long sc1 = jdbc.queryForObject("SELECT sc_id FROM sc WHERE student_id='S001' AND tc_id='TC1'", Long.class);
-        jdbc.update("INSERT INTO score(sc_id,exam_type,score_type,usual_ratio,usual_score,exam_score,total_score,grade_point,score_status) VALUES(?,1,1,30,90,90,90,4.0,3)", sc1);
+        Long sc1 = jdbc.queryForObject("SELECT sc_id FROM sel_sc WHERE student_id='S001' AND tc_id='TC1'", Long.class);
+        jdbc.update("INSERT INTO sel_score(sc_id,exam_type,score_type,usual_ratio,usual_score,exam_score,total_score,grade_point,score_status) VALUES(?,1,1,30,90,90,90,4.0,3)", sc1);
 
         // 1 行已发布 + 1 行未录入：dry_run 应返回 preview_count=1, skipped=1, failed=1
         String csvMixed = "学号,平时成绩,期末成绩,考试情况\nS001,88,89,正常\nS002,82,86,正常\n";
@@ -177,7 +177,7 @@ class ScoreServiceTest {
         Map<String, Object> imported = service.importGrades("KT1001", new ByteArrayInputStream(xlsx), "grades.xlsx", 40, false);
         assertEquals(2, imported.get("imported"));
         assertEquals(0, imported.get("failed"));
-        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM score WHERE usual_ratio = 40 AND score_type = 1", Integer.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM sel_score WHERE usual_ratio = 40 AND score_type = 1", Integer.class));
 
         // 拒绝旧版 .xls
         byte[] legacyXlsHeader = new byte[]{(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, 0x00, 0x01};
@@ -205,9 +205,9 @@ class ScoreServiceTest {
                 "KT1002", new ByteArrayInputStream(levelCsv.getBytes(StandardCharsets.UTF_8)), "lvl.csv", 30, false);
         assertEquals(2, ok.get("imported"));
         assertEquals("优", jdbc.queryForObject(
-                "SELECT s.score_level FROM score s JOIN sc ON s.sc_id = sc.sc_id WHERE sc.student_id='S001' AND sc.tc_id='TC2'", String.class));
+                "SELECT s.score_level FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id WHERE sc.student_id='S001' AND sc.tc_id='TC2'", String.class));
         assertEquals(2, jdbc.queryForObject(
-                "SELECT s.score_type FROM score s JOIN sc ON s.sc_id = sc.sc_id WHERE sc.student_id='S001' AND sc.tc_id='TC2'", Integer.class));
+                "SELECT s.score_type FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id WHERE sc.student_id='S001' AND sc.tc_id='TC2'", Integer.class));
     }
 
     @Test
@@ -250,16 +250,16 @@ class ScoreServiceTest {
                 Map.entry("converted_score", 92),
                 Map.entry("ext_required", true));
         service.createExchange(requiredBody);
-        Long convertId = jdbc.queryForObject("SELECT MAX(convert_id) FROM exchange_score_convert", Long.class);
+        Long convertId = jdbc.queryForObject("SELECT MAX(convert_id) FROM sel_exchange_score_convert", Long.class);
 
-        // 教务处直接认定生效，补齐学院审核字段并更新 is_final 和 stu_gpa
+        // 教务处直接认定生效，补齐学院审核字段并更新 is_final 和 sel_stu_gpa
         asOffice();
         Map<String, Object> rec = service.recognizeExchange(convertId, "教务处直接核验生效");
         assertEquals(2, rec.get("audit_status"));
-        assertEquals(1, jdbc.queryForObject("SELECT is_final FROM exchange_score_convert WHERE convert_id=?", Integer.class, convertId));
-        assertNotNull(jdbc.queryForObject("SELECT college_auditor_id FROM exchange_score_convert WHERE convert_id=?", String.class, convertId));
+        assertEquals(1, jdbc.queryForObject("SELECT is_final FROM sel_exchange_score_convert WHERE convert_id=?", Integer.class, convertId));
+        assertNotNull(jdbc.queryForObject("SELECT college_auditor_id FROM sel_exchange_score_convert WHERE convert_id=?", String.class, convertId));
         assertEquals(0, new java.math.BigDecimal("4.00").compareTo(
-                jdbc.queryForObject("SELECT gpa FROM stu_gpa WHERE student_id='S001'", java.math.BigDecimal.class)));
+                jdbc.queryForObject("SELECT gpa FROM sel_stu_gpa WHERE student_id='S001'", java.math.BigDecimal.class)));
     }
 
     private static byte[] buildSimpleXlsx(List<List<String>> rows) throws Exception {

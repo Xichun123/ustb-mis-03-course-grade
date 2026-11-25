@@ -38,7 +38,7 @@ public class SelectionService {
 
     public Map<String,Object> context(){
         CurrentUser user=UserContext.requireUser();
-        List<Map<String,Object>> rounds=jdbc.queryForList("SELECT * FROM select_round WHERE round_status IN (2,3,4) ORDER BY start_time DESC,round_id DESC");
+        List<Map<String,Object>> rounds=jdbc.queryForList("SELECT r.*,r.start_at AS start_time,r.end_at AS end_time,r.approved_at AS approve_time,r.published_at AS publish_time FROM sel_select_round r WHERE r.round_status IN (2,3,4) ORDER BY r.start_at DESC,r.round_id DESC");
         for(var r:rounds)r.put("window_open",open(r));
         return Map.of("user",user,"rounds",rounds,"terms",jdbc.queryForList("SELECT DISTINCT term FROM teaching_class WHERE term IS NOT NULL ORDER BY term DESC",String.class),"server_time",now(),"stop_write_enabled",false,"course_types",CourseType.options());
     }
@@ -47,8 +47,8 @@ public class SelectionService {
         List<Map<String,Object>> classes=jdbc.queryForList("""
           SELECT tc.*,c.course_name,c.course_type,c.credit,c.course_level,c.open_college,
                  sc.sc_id,sc.select_status,sc.study_type,sc.priority,sc.select_time,sc.round_id AS original_round_id
-          FROM round_class rc JOIN teaching_class tc ON tc.tc_id=rc.tc_id JOIN course c ON c.course_id=tc.course_id
-          LEFT JOIN sc ON sc.tc_id=tc.tc_id AND sc.student_id=?
+          FROM sel_round_class rc JOIN teaching_class tc ON tc.tc_id=rc.tc_id JOIN course c ON c.course_id=tc.course_id
+          LEFT JOIN sel_sc sc ON sc.tc_id=tc.tc_id AND sc.student_id=?
           WHERE rc.round_id=? AND tc.term=? AND tc.tc_status='4' AND (c.course_id LIKE ? OR c.course_name LIKE ?)
           ORDER BY c.course_id,tc.tc_id
           """,u.studentId(),roundId,round.get("term"),"%"+keyword+"%","%"+keyword+"%");
@@ -74,7 +74,7 @@ public class SelectionService {
                 tc.put("schedule", schedule(id));
                 tc.put("version", version(tc));
                 tc.put("sc_id", stringId(tc.get("sc_id")));
-                tc.put("preferences", jdbc.queryForList("SELECT priority,COUNT(*) AS applicants FROM sc WHERE round_id=? AND tc_id=? AND select_status IN (0,1) GROUP BY priority ORDER BY priority", roundId, id));
+                tc.put("preferences", jdbc.queryForList("SELECT priority,COUNT(*) AS applicants FROM sel_sc WHERE round_id=? AND tc_id=? AND select_status IN (0,1) GROUP BY priority ORDER BY priority", roundId, id));
                 tc.put("audience", audience(tc, limitsByClass.getOrDefault(id, Map.of())));
             }
             var first = group.get(0);
@@ -96,7 +96,7 @@ public class SelectionService {
         if (classIds.isEmpty()) return byClass;
 
         String placeholders = String.join(",", Collections.nCopies(classIds.size(), "?"));
-        String sql = "SELECT tc_id,limit_type,limit_value FROM select_limit WHERE tc_id IN (" + placeholders
+        String sql = "SELECT tc_id,limit_type,limit_value FROM sel_select_limit WHERE tc_id IN (" + placeholders
                 + ") ORDER BY tc_id,limit_type,limit_value";
         for (var row : jdbc.queryForList(sql, classIds.toArray())) {
             byClass.computeIfAbsent(text(row, "tc_id"), id -> new HashMap<>())
@@ -125,11 +125,11 @@ public class SelectionService {
         CurrentUser u=UserContext.requireRole(RoleEnum.STUDENT);
         var rows=jdbc.queryForList("""
           SELECT sc.*,tc.term,tc.teacher_id,tc.capacity,tc.tc_status,c.course_id,c.course_name,c.course_type,c.credit
-          FROM sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id JOIN course c ON c.course_id=tc.course_id
+          FROM sel_sc sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id JOIN course c ON c.course_id=tc.course_id
           WHERE sc.student_id=? AND tc.term=? ORDER BY sc.select_time DESC,sc.sc_id DESC
           """,u.studentId(),term);
         for(var row:rows){row.put("version",version(row));row.put("schedule",schedule(text(row,"tc_id")));
-            List<Integer> dropRounds=number(row.get("select_status"))==1 ? jdbc.queryForList("SELECT sr.round_id FROM select_round sr JOIN round_class rc ON rc.round_id=sr.round_id WHERE rc.tc_id=? AND sr.term=? AND sr.round_type=3 AND sr.round_status IN (2,3) AND sr.start_time<=? AND sr.end_time>? AND NOT EXISTS(SELECT 1 FROM score WHERE sc_id=?) AND NOT EXISTS(SELECT 1 FROM teach_eval WHERE sc_id=?) ORDER BY sr.start_time DESC,sr.round_id DESC",Integer.class,row.get("tc_id"),term,now(),now(),row.get("sc_id"),row.get("sc_id")) : List.of();
+            List<Integer> dropRounds=number(row.get("select_status"))==1 ? jdbc.queryForList("SELECT sr.round_id FROM sel_select_round sr JOIN sel_round_class rc ON rc.round_id=sr.round_id WHERE rc.tc_id=? AND sr.term=? AND sr.round_type=3 AND sr.round_status IN (2,3) AND sr.start_at<=? AND sr.end_at>? AND NOT EXISTS(SELECT 1 FROM sel_score WHERE sc_id=?) AND NOT EXISTS(SELECT 1 FROM sel_teach_eval WHERE sc_id=?) ORDER BY sr.start_at DESC,sr.round_id DESC",Integer.class,row.get("tc_id"),term,now(),now(),row.get("sc_id"),row.get("sc_id")) : List.of();
             row.put("withdraw_round_id",dropRounds.isEmpty()?null:dropRounds.get(0));row.put("sc_id",stringId(row.get("sc_id")));}
         return Map.of("items",rows,"summary",summary(u.studentId(),term));
     }
@@ -159,8 +159,8 @@ public class SelectionService {
         if(old!=null){expect(old,r.expectedVersion());protect(old);}else if(r.expectedVersion()!=null && !r.expectedVersion().isBlank())throw conflict("原申请已变化，请刷新");
         int exempt=validate(r,round,s,tc,false),status=number(round.get("select_mode"))==1?1:0;
         int stage=number(s.get("level"))==2 || number(tc.get("course_level"))==2?2:1;
-        if(old==null)jdbc.update("INSERT INTO sc(student_id,tc_id,round_id,study_type,is_exempt_attend,stu_level,stat_stage,priority,select_status,select_time,drop_time) VALUES(?,?,?,?,?,?,?,?,?,?,NULL)",u.studentId(),r.tcId(),r.roundId(),r.studyType(),exempt,s.get("degree_level"),stage,r.priority(),status,now());
-        else jdbc.update("UPDATE sc SET round_id=?,study_type=?,is_exempt_attend=?,stu_level=?,stat_stage=?,priority=?,select_status=?,select_time=?,drop_time=NULL WHERE sc_id=?",r.roundId(),r.studyType(),exempt,s.get("degree_level"),stage,r.priority(),status,now(),old.get("sc_id"));
+        if(old==null)jdbc.update("INSERT INTO sel_sc(student_id,tc_id,round_id,study_type,is_exempt_attend,stu_level,stat_stage,priority,select_status,select_time,drop_time) VALUES(?,?,?,?,?,?,?,?,?,?,NULL)",u.studentId(),r.tcId(),r.roundId(),r.studyType(),exempt,s.get("degree_level"),stage,r.priority(),status,now());
+        else jdbc.update("UPDATE sel_sc SET round_id=?,study_type=?,is_exempt_attend=?,stu_level=?,stat_stage=?,priority=?,select_status=?,select_time=?,drop_time=NULL WHERE sc_id=?",r.roundId(),r.studyType(),exempt,s.get("degree_level"),stage,r.priority(),status,now(),old.get("sc_id"));
         log(u.studentId(),r.tcId(),r.roundId(),1,u.studentId(),exempt==1?"重修冲突免听":null);recount(r.tcId());
         return receipt(relation(u.studentId(),r.tcId(),false),status==1?"选课成功":"志愿已登记，等待截止筛选");
     }
@@ -168,13 +168,13 @@ public class SelectionService {
     public Map<String,Object> withdraw(String scId,Withdrawal r){
         var u=UserContext.requireRole(RoleEnum.STUDENT);
         if(r==null || r.roundId()==null || !Boolean.TRUE.equals(r.confirmed()))throw invalid("请确认退选并选择补退选轮次");
-        var initial=one("SELECT * FROM sc WHERE sc_id=? AND student_id=?",scId,u.studentId());var round=lockedRound(r.roundId());
+        var initial=one("SELECT * FROM sel_sc WHERE sc_id=? AND student_id=?",scId,u.studentId());var round=lockedRound(r.roundId());
         student(u.studentId(),text(round,"term"),true);var tc=teachingClass(text(initial,"tc_id"),true);var row=relation(u.studentId(),text(tc,"tc_id"),true);
         if(number(row.get("select_status"))==3)return receipt(row,"已退选，未重复写入");
         expect(row,r.expectedVersion());if(number(row.get("select_status"))!=1)throw conflict("仅已选中记录可退选");requireWindow(round);
         if(number(round.get("round_type"))!=3 || !Objects.equals(round.get("term"),tc.get("term")))throw invalid("请选择本学期开放的补退选轮次");
         requireMember(r.roundId(),text(tc,"tc_id"));protect(row);
-        jdbc.update("UPDATE sc SET select_status=3,drop_time=? WHERE sc_id=? AND select_status=1",now(),row.get("sc_id"));
+        jdbc.update("UPDATE sel_sc SET select_status=3,drop_time=? WHERE sc_id=? AND select_status=1",now(),row.get("sc_id"));
         log(u.studentId(),text(tc,"tc_id"),number(row.get("round_id")),2,u.studentId(),"学生本人确认退选");recount(text(tc,"tc_id"));
         return receipt(relation(u.studentId(),text(tc,"tc_id"),false),"退选成功");
     }
@@ -187,7 +187,7 @@ public class SelectionService {
         var rows=jdbc.queryForList("""
           SELECT sc.sc_id,sc.student_id,COALESCE(s.student_name,ex.student_name) AS student_name,s.class_name,
                  sc.study_type,sc.is_exempt_attend,sc.select_status
-          FROM sc LEFT JOIN student s ON s.student_id=sc.student_id LEFT JOIN v_exchange_student ex ON ex.temp_student_no=sc.student_id
+          FROM sel_sc sc LEFT JOIN student s ON s.student_id=sc.student_id LEFT JOIN v_exchange_student ex ON ex.temp_student_no=sc.student_id
           WHERE sc.tc_id=? AND sc.select_status=1 AND (sc.student_id LIKE ? OR COALESCE(s.student_name,ex.student_name) LIKE ?) ORDER BY sc.student_id
           """,tcId,"%"+keyword+"%","%"+keyword+"%");
         for(var row:rows)row.put("sc_id",stringId(row.get("sc_id")));tc.put("schedule",schedule(tcId));tc.put("actual_num",count(tcId));
@@ -199,7 +199,7 @@ public class SelectionService {
         String reason=r.reason()==null?"":r.reason().trim();if(reason.isBlank() || reason.length()>200)throw invalid("调整原因须为1—200字");
         if(!Set.of("add","remove").contains(String.valueOf(r.operation())))throw invalid("未知调整操作");
         var first=teachingClass(tcId,false);authorizeClass(u,first);
-        var rounds=jdbc.queryForList("SELECT sr.round_id FROM select_round sr JOIN round_class rc ON rc.round_id=sr.round_id WHERE rc.tc_id=? AND sr.round_status IN (2,3,4) ORDER BY sr.start_time DESC,sr.round_id DESC",Integer.class,tcId);
+        var rounds=jdbc.queryForList("SELECT sr.round_id FROM sel_select_round sr JOIN sel_round_class rc ON rc.round_id=sr.round_id WHERE rc.tc_id=? AND sr.round_status IN (2,3,4) ORDER BY sr.start_at DESC,sr.round_id DESC",Integer.class,tcId);
         if(rounds.isEmpty())throw pending("教学班没有已发布的关联轮次");lockedRound(rounds.get(0));
         var s=student(r.studentId(),text(first,"term"),true);var tc=teachingClass(tcId,true);authorizeClass(u,tc);var old=relation(r.studentId(),tcId,true);
         if("add".equals(r.operation()) && number(s.get("level"))==0)throw pending("交换生培养层次与归属阶段尚无权威映射");
@@ -208,31 +208,31 @@ public class SelectionService {
             if(!"4".equals(text(tc,"tc_status")))throw conflict("教学班未发布或已停开，不能补加");
             if(old!=null && number(old.get("select_status"))==1)return receipt(old,"学生已在名单中");if(old!=null)protect(old);
             int stage=number(s.get("level"))==2 || number(tc.get("course_level"))==2?2:1;
-            if(old==null)jdbc.update("INSERT INTO sc(student_id,tc_id,round_id,study_type,is_exempt_attend,stu_level,stat_stage,priority,select_status,select_time,drop_time) VALUES(?,?,?,?,0,?,?,NULL,1,?,NULL)",r.studentId(),tcId,rounds.get(0),r.studyType(),s.get("degree_level"),stage,now());
-            else jdbc.update("UPDATE sc SET round_id=?,study_type=?,is_exempt_attend=0,stu_level=?,stat_stage=?,priority=NULL,select_status=1,select_time=?,drop_time=NULL WHERE sc_id=?",rounds.get(0),r.studyType(),s.get("degree_level"),stage,now(),old.get("sc_id"));
+            if(old==null)jdbc.update("INSERT INTO sel_sc(student_id,tc_id,round_id,study_type,is_exempt_attend,stu_level,stat_stage,priority,select_status,select_time,drop_time) VALUES(?,?,?,?,0,?,?,NULL,1,?,NULL)",r.studentId(),tcId,rounds.get(0),r.studyType(),s.get("degree_level"),stage,now());
+            else jdbc.update("UPDATE sel_sc SET round_id=?,study_type=?,is_exempt_attend=0,stu_level=?,stat_stage=?,priority=NULL,select_status=1,select_time=?,drop_time=NULL WHERE sc_id=?",rounds.get(0),r.studyType(),s.get("degree_level"),stage,now(),old.get("sc_id"));
         }else{
             if(old==null || number(old.get("select_status"))!=1)throw conflict("该生当前不在有效名单中");protect(old);
-            jdbc.update("UPDATE sc SET select_status=3,drop_time=? WHERE sc_id=? AND select_status=1",now(),old.get("sc_id"));
+            jdbc.update("UPDATE sel_sc SET select_status=3,drop_time=? WHERE sc_id=? AND select_status=1",now(),old.get("sc_id"));
         }
         var changed=relation(r.studentId(),tcId,false);log(r.studentId(),tcId,number(changed.get("round_id")),4,u.empId(),r.operation()+"："+reason);recount(tcId);return receipt(changed,"名单已调整");
     }
     @Transactional(isolation=Isolation.READ_COMMITTED)
     public Map<String,Object> screen(int roundId){
         var u=UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE);var round=lockedRound(roundId);
-        if(number(round.get("select_mode"))!=2 || now().isBefore(time(round,"end_time")) || !List.of(2,3,4).contains(number(round.get("round_status"))))throw conflict("仅已发布且截止的超额筛选轮次可执行筛选");
+        if(number(round.get("select_mode"))!=2 || now().isBefore(time(round,"end_at")) || !List.of(2,3,4).contains(number(round.get("round_status"))))throw conflict("仅已发布且截止的超额筛选轮次可执行筛选");
         // 整轮按轮次、学生、教学班、原申请顺序锁定；未知资料使整轮回滚。
-        var ids=jdbc.queryForList("SELECT DISTINCT student_id FROM sc WHERE round_id=? AND select_status=0 ORDER BY student_id",String.class,roundId);
+        var ids=jdbc.queryForList("SELECT DISTINCT student_id FROM sel_sc WHERE round_id=? AND select_status=0 ORDER BY student_id",String.class,roundId);
         Map<String,Map<String,Object>> students=new HashMap<>();for(String id:ids)students.put(id,student(id,text(round,"term"),true));
-        var classes=jdbc.queryForList("SELECT tc_id FROM round_class WHERE round_id=? ORDER BY tc_id",String.class,roundId);
+        var classes=jdbc.queryForList("SELECT tc_id FROM sel_round_class WHERE round_id=? ORDER BY tc_id",String.class,roundId);
         Map<String,Map<String,Object>> tcs=new LinkedHashMap<>();for(String id:classes)tcs.put(id,teachingClass(id,true));
-        var candidates=jdbc.queryForList("SELECT * FROM sc WHERE round_id=? AND select_status=0 ORDER BY tc_id,sc_id FOR UPDATE",roundId);
+        var candidates=jdbc.queryForList("SELECT * FROM sel_sc WHERE round_id=? AND select_status=0 ORDER BY tc_id,sc_id FOR UPDATE",roundId);
         if(candidates.stream().anyMatch(r->!tcs.containsKey(text(r,"tc_id"))))throw pending("候选申请不在开放范围内");
         int accepted=0,rejected=0;
         for(String tcId:classes){var tc=tcs.get(tcId);int remaining=number(tc.get("capacity"))-count(tcId);if(remaining<0)throw conflict("教学班已超容量，请先核实名单："+tcId);
             var batch=new ArrayList<>(candidates.stream().filter(r->tcId.equals(r.get("tc_id"))).toList());Collections.shuffle(batch);batch.sort(Comparator.comparingInt(r->number(r.get("priority"))));
             for(var row:batch){var r=new Application(roundId,tcId,number(row.get("study_type")),number(row.get("priority")),null);boolean allowed=true;int exempt=0;String reason="容量不足";
                 try{exempt=validate(r,round,students.get(text(row,"student_id")),tc,true);}catch(BizException e){if("DATA_PENDING".equals(e.getCode()))throw e;allowed=false;reason=e.getMessage();}
-                int state=allowed && remaining>0?1:2;jdbc.update("UPDATE sc SET select_status=?,is_exempt_attend=?,drop_time=NULL WHERE sc_id=? AND select_status=0",state,exempt,row.get("sc_id"));
+                int state=allowed && remaining>0?1:2;jdbc.update("UPDATE sel_sc SET select_status=?,is_exempt_attend=?,drop_time=NULL WHERE sc_id=? AND select_status=0",state,exempt,row.get("sc_id"));
                 if(state==1){accepted++;remaining--;}else{rejected++;log(text(row,"student_id"),tcId,roundId,3,u.empId(),reason.length()>200?reason.substring(0,200):reason);}
             }recount(tcId);
         }
@@ -240,7 +240,7 @@ public class SelectionService {
     }
     public Map<String,Object> stopPreview(String term){
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE);
-        return Map.of("write_enabled",false,"reason","停开状态与日志编码尚未由全组确认，仅预览，不执行失效写入","items",jdbc.queryForList("SELECT tc.tc_id,c.course_name,tc.tc_status,COUNT(sc.sc_id) AS affected_count FROM teaching_class tc JOIN course c ON c.course_id=tc.course_id LEFT JOIN sc ON sc.tc_id=tc.tc_id AND sc.select_status IN (0,1) WHERE tc.term=? AND tc.tc_status IN ('2','5') GROUP BY tc.tc_id,c.course_name,tc.tc_status ORDER BY tc.tc_id",term));
+        return Map.of("write_enabled",false,"reason","停开状态与日志编码尚未由全组确认，仅预览，不执行失效写入","items",jdbc.queryForList("SELECT tc.tc_id,c.course_name,tc.tc_status,COUNT(sc.sc_id) AS affected_count FROM teaching_class tc JOIN course c ON c.course_id=tc.course_id LEFT JOIN sel_sc sc ON sc.tc_id=tc.tc_id AND sc.select_status IN (0,1) WHERE tc.term=? AND tc.tc_status IN ('2','5') GROUP BY tc.tc_id,c.course_name,tc.tc_status ORDER BY tc.tc_id",term));
     }
 
     private int validate(Application r,Map<String,Object> round,Map<String,Object> s,Map<String,Object> tc,boolean screening){
@@ -249,7 +249,7 @@ public class SelectionService {
         int level=number(s.get("level")),target=number(round.get("target_level"));if(level==0)throw pending("来校交换生培养层次与成绩归属阶段尚无权威映射");if(target!=3 && target!=level)throw invalid("轮次不适用于当前培养层次");
         boolean retake=r.studyType()==2;if(retake && number(round.get("allow_retake"))!=1)throw invalid("本轮未开放重修");
         int mode=number(round.get("select_mode"));if(mode==2 && (r.priority()==null || r.priority()<1 || r.priority()>3))throw invalid("超额筛选须选择1—3志愿");if(mode==1 && r.priority()!=null)throw invalid("先到先得不填写志愿");
-        Map<Integer,Set<String>> limits=new HashMap<>();for(var row:jdbc.queryForList("SELECT limit_type,limit_value FROM select_limit WHERE tc_id=?",tcId))limits.computeIfAbsent(number(row.get("limit_type")),k->new HashSet<>()).add(text(row,"limit_value"));
+        Map<Integer,Set<String>> limits=new HashMap<>();for(var row:jdbc.queryForList("SELECT limit_type,limit_value FROM sel_select_limit WHERE tc_id=?",tcId))limits.computeIfAbsent(number(row.get("limit_type")),k->new HashSet<>()).add(text(row,"limit_value"));
         for(var entry:limits.entrySet()){
             if(entry.getKey()==1 && retake)continue;
             Object value=switch(entry.getKey()){case 1->s.get("grade");case 2->s.get("major_id");case 3->s.get("college_id");case 4->s.get("degree_level");default->throw pending("未知限选类型");};
@@ -258,9 +258,9 @@ public class SelectionService {
         if("1".equals(text(tc,"tc_type")) && !retake){String names=text(tc,"class_ids");if(names.isBlank() || s.get("class_name")==null)throw pending("必修班面向班级资料缺失");if(!Arrays.stream(names.split("[,，]",-1)).map(String::trim).toList().contains(text(s,"class_name")))throw invalid("不在必修班面向班级范围内");}
         if(r.studyType()==3 && !"3".equals(text(tc,"tc_type")))throw invalid("辅修须选择已认定的双学位教学班");
         if(level==2){var schemes=jdbc.queryForList("SELECT * FROM scheme_assignment WHERE student_id=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)",id,now().toLocalDate(),now().toLocalDate());if(schemes.size()!=1)throw pending("研究生有效培养方案缺失或不唯一");var scheme=schemes.get(0);if(jdbc.queryForObject("SELECT COUNT(*) FROM scheme_course WHERE scheme_id=? AND course_id=? AND (direction_id IS NULL OR direction_id=?)",Integer.class,scheme.get("scheme_id"),tc.get("course_id"),scheme.get("direction_id"))==0)throw invalid("课程不在有效培养方案及研究方向内");}
-        if(jdbc.queryForObject("SELECT COUNT(*) FROM sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.term=? AND tc.course_id=? AND sc.tc_id<>? AND sc.select_status IN (0,1)",Integer.class,id,round.get("term"),tc.get("course_id"),tcId)>0)throw invalid("同学期不能重复选修同课的不同教学班");
-        if(retake && jdbc.queryForObject("SELECT COUNT(*) FROM score s JOIN sc ON sc.sc_id=s.sc_id JOIN teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.course_id=? AND s.score_status=3 AND (s.total_score<60 OR s.score_level IN ('不及格','不合格'))",Integer.class,id,tc.get("course_id"))==0)throw invalid("没有该课程已发布的不及格记录，无法认定重修资格");
-        var occupied=jdbc.queryForList("SELECT sc.tc_id,sc.is_exempt_attend,c.credit,c.course_name FROM sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id JOIN course c ON c.course_id=tc.course_id WHERE sc.student_id=? AND tc.term=? AND sc.tc_id<>? AND (sc.select_status=1 OR (sc.select_status=0 AND sc.round_id=? AND ?=0))",id,round.get("term"),tcId,r.roundId(),screening?1:0);
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM sel_sc sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.term=? AND tc.course_id=? AND sc.tc_id<>? AND sc.select_status IN (0,1)",Integer.class,id,round.get("term"),tc.get("course_id"),tcId)>0)throw invalid("同学期不能重复选修同课的不同教学班");
+        if(retake && jdbc.queryForObject("SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON sc.sc_id=s.sc_id JOIN teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.course_id=? AND s.score_status=3 AND (s.total_score<60 OR s.score_level IN ('不及格','不合格'))",Integer.class,id,tc.get("course_id"))==0)throw invalid("没有该课程已发布的不及格记录，无法认定重修资格");
+        var occupied=jdbc.queryForList("SELECT sc.tc_id,sc.is_exempt_attend,c.credit,c.course_name FROM sel_sc sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id JOIN course c ON c.course_id=tc.course_id WHERE sc.student_id=? AND tc.term=? AND sc.tc_id<>? AND (sc.select_status=1 OR (sc.select_status=0 AND sc.round_id=? AND ?=0))",id,round.get("term"),tcId,r.roundId(),screening?1:0);
         BigDecimal used=credit(tc.get("credit"));var targetSchedule=schedule(tcId);if(targetSchedule.isEmpty())throw pending("目标教学班尚无完整排课");targetSchedule.forEach(SelectionRules::validateSchedule);int exempt=0;
         for(var other:occupied){used=used.add(credit(other.get("credit")));if(number(other.get("is_exempt_attend"))==1)continue;var otherSchedule=schedule(text(other,"tc_id"));if(otherSchedule.isEmpty())throw pending("已选课程排课缺失");for(var a:targetSchedule)for(var b:otherSchedule)if(overlaps(a,b)){if(retake && number(round.get("retake_ignore_conflict"))==1)exempt=1;else throw invalid("上课时间冲突：《"+text(other,"course_name")+"》");}}
         if(used.compareTo(credit(round.get("max_credit")))>0)throw invalid("超过本轮学分上限，占用学分 "+used);
@@ -276,19 +276,19 @@ public class SelectionService {
         var s=rows.get(0);if(!"在籍".equals(text(s,"final_enroll")))throw invalid("学生当前不是在籍状态");String degree=text(s,"degree_level");if(!List.of("本科","研究生").contains(degree))throw pending("培养层次编码未识别");s.put("level","研究生".equals(degree)?2:1);return s;
     }
     private void validateApplication(Application r){if(r==null || r.roundId()==null || r.roundId()<1 || r.tcId()==null || r.tcId().isBlank() || r.tcId().length()>20 || r.studyType()==null || !List.of(1,2,3).contains(r.studyType()))throw invalid("轮次、教学班或选课类别无效");}
-    private Map<String,Object> visibleRound(int id){var r=one("SELECT * FROM select_round WHERE round_id=?",id);if(!List.of(2,3,4).contains(number(r.get("round_status"))))throw BizException.forbidden("轮次尚未发布");return r;}
-    private Map<String,Object> lockedRound(int id){return one("SELECT * FROM select_round WHERE round_id=? FOR UPDATE",id);}
-    private boolean open(Map<String,Object> r){return List.of(2,3).contains(number(r.get("round_status"))) && !now().isBefore(time(r,"start_time")) && now().isBefore(time(r,"end_time"));}
+    private Map<String,Object> visibleRound(int id){var r=one("SELECT r.*,r.start_at AS start_time,r.end_at AS end_time,r.approved_at AS approve_time,r.published_at AS publish_time FROM sel_select_round r WHERE r.round_id=?",id);if(!List.of(2,3,4).contains(number(r.get("round_status"))))throw BizException.forbidden("轮次尚未发布");return r;}
+    private Map<String,Object> lockedRound(int id){return one("SELECT r.*,r.start_at AS start_time,r.end_at AS end_time,r.approved_at AS approve_time,r.published_at AS publish_time FROM sel_select_round r WHERE r.round_id=? FOR UPDATE",id);}
+    private boolean open(Map<String,Object> r){return List.of(2,3).contains(number(r.get("round_status"))) && !now().isBefore(time(r,"start_at")) && now().isBefore(time(r,"end_at"));}
     private void requireWindow(Map<String,Object> r){if(!open(r))throw conflict("轮次尚未开始、已截止或不可办理");}
-    private void requireMember(int round,String tc){if(jdbc.queryForObject("SELECT COUNT(*) FROM round_class WHERE round_id=? AND tc_id=?",Integer.class,round,tc)==0)throw invalid("教学班不在本轮开放范围内");}
+    private void requireMember(int round,String tc){if(jdbc.queryForObject("SELECT COUNT(*) FROM sel_round_class WHERE round_id=? AND tc_id=?",Integer.class,round,tc)==0)throw invalid("教学班不在本轮开放范围内");}
     private Map<String,Object> teachingClass(String id,boolean lock){return one("SELECT tc.*,c.course_name,c.course_type,c.credit,c.course_level,c.open_college FROM teaching_class tc JOIN course c ON c.course_id=tc.course_id WHERE tc.tc_id=?"+(lock?" FOR UPDATE":""),id);}
     private List<Map<String,Object>> schedule(String id){return jdbc.queryForList("SELECT week_range,week_day,start_slot,end_slot,room_id FROM schedule_result WHERE tc_id=? ORDER BY week_day,start_slot,week_range",id);}
-    private Map<String,Object> relation(String s,String tc,boolean lock){var rows=jdbc.queryForList("SELECT * FROM sc WHERE student_id=? AND tc_id=?"+(lock?" FOR UPDATE":""),s,tc);return rows.isEmpty()?null:rows.get(0);}
-    private int count(String tc){return jdbc.queryForObject("SELECT COUNT(*) FROM sc WHERE tc_id=? AND select_status=1",Integer.class,tc);}
+    private Map<String,Object> relation(String s,String tc,boolean lock){var rows=jdbc.queryForList("SELECT * FROM sel_sc WHERE student_id=? AND tc_id=?"+(lock?" FOR UPDATE":""),s,tc);return rows.isEmpty()?null:rows.get(0);}
+    private int count(String tc){return jdbc.queryForObject("SELECT COUNT(*) FROM sel_sc WHERE tc_id=? AND select_status=1",Integer.class,tc);}
     private void recount(String tc){jdbc.update("UPDATE teaching_class SET actual_num=? WHERE tc_id=?",count(tc),tc);}
-    private void protect(Map<String,Object> r){if(jdbc.queryForObject("SELECT COUNT(*) FROM score WHERE sc_id=?",Integer.class,r.get("sc_id"))>0 || jdbc.queryForObject("SELECT COUNT(*) FROM teach_eval WHERE sc_id=?",Integer.class,r.get("sc_id"))>0)throw conflict("该记录已有成绩或评教，需由教务核实后续业务保护");}
-    private void log(String s,String tc,int round,int type,String operator,String remark){if(operator==null || operator.isBlank())throw pending("操作人工号缺失");jdbc.update("INSERT INTO select_log(student_id,tc_id,round_id,action_type,operator_id,action_time,remark) VALUES(?,?,?,?,?,?,?)",s,tc,round,type,operator,now(),remark);}
-    private Map<String,Object> summary(String s,String term){return one("SELECT COUNT(*) AS courses,COALESCE(SUM(c.credit),0) AS credits FROM sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id JOIN course c ON c.course_id=tc.course_id WHERE sc.student_id=? AND tc.term=? AND sc.select_status=1",s,term);}
+    private void protect(Map<String,Object> r){if(jdbc.queryForObject("SELECT COUNT(*) FROM sel_score WHERE sc_id=?",Integer.class,r.get("sc_id"))>0 || jdbc.queryForObject("SELECT COUNT(*) FROM sel_teach_eval WHERE sc_id=?",Integer.class,r.get("sc_id"))>0)throw conflict("该记录已有成绩或评教，需由教务核实后续业务保护");}
+    private void log(String s,String tc,int round,int type,String operator,String remark){if(operator==null || operator.isBlank())throw pending("操作人工号缺失");jdbc.update("INSERT INTO sel_select_log(student_id,tc_id,round_id,action_type,operator_id,operated_at,remark) VALUES(?,?,?,?,?,?,?)",s,tc,round,type,operator,now(),remark);}
+    private Map<String,Object> summary(String s,String term){return one("SELECT COUNT(*) AS courses,COALESCE(SUM(c.credit),0) AS credits FROM sel_sc sc JOIN teaching_class tc ON tc.tc_id=sc.tc_id JOIN course c ON c.course_id=tc.course_id WHERE sc.student_id=? AND tc.term=? AND sc.select_status=1",s,term);}
     private CurrentUser staff(){return UserContext.requireRole(RoleEnum.TEACHER,RoleEnum.ACADEMIC_OFFICE);}
     private String teacherCode(CurrentUser u){var codes=jdbc.queryForList("SELECT dict_code FROM sys_code_dict WHERE dict_group='teacher_map' AND dict_name=? AND is_enabled=1",String.class,u.empId());if(codes.size()!=1)throw pending("教师工号映射缺失或不唯一");return codes.get(0);}
     private void authorizeClass(CurrentUser u,Map<String,Object> tc){if(u.role()==RoleEnum.TEACHER && !teacherCode(u).equals(text(tc,"teacher_id")))throw BizException.forbidden("仅能操作本人授课教学班");}
@@ -296,7 +296,7 @@ public class SelectionService {
     private Map<String,Object> receipt(Map<String,Object> row,String message){var r=new LinkedHashMap<>(row);r.put("version",version(row));r.put("sc_id",stringId(row.get("sc_id")));r.put("message",message);r.put("actual_num",count(text(row,"tc_id")));return r;}
     private String version(Map<String,Object> r){
         if(r.get("sc_id")==null)return "";
-        Long logId=jdbc.queryForObject("SELECT COALESCE(MAX(l.log_id),0) FROM select_log l JOIN sc s ON s.student_id=l.student_id AND s.tc_id=l.tc_id WHERE s.sc_id=?",Long.class,r.get("sc_id"));
+        Long logId=jdbc.queryForObject("SELECT COALESCE(MAX(l.log_id),0) FROM sel_select_log l JOIN sel_sc s ON s.student_id=l.student_id AND s.tc_id=l.tc_id WHERE s.sc_id=?",Long.class,r.get("sc_id"));
         return r.get("sc_id")+"|"+(r.containsKey("original_round_id")?r.get("original_round_id"):r.get("round_id"))+"|"+r.get("select_status")+"|"+r.get("select_time")+"|"+logId;
     }
     private void expect(Map<String,Object> r,String expected){if(expected==null || !version(r).equals(expected))throw conflict("申请已变化，请刷新后重新办理");}

@@ -80,8 +80,8 @@ public class PrepService {
                 SELECT tc.tc_id, tc.term, tc.course_id, c.course_name, c.course_type, c.credit,
                        c.open_college, tc.teacher_id, tc.class_ids, tc.capacity, tc.actual_num,
                        tc.tc_type, tc.tc_status,
-                       (SELECT COUNT(*) FROM select_limit sl WHERE sl.tc_id = tc.tc_id) AS limit_count,
-                       (SELECT lc.lesson_no FROM lesson_class lc WHERE lc.tc_id = tc.tc_id LIMIT 1) AS lesson_no
+                       (SELECT COUNT(*) FROM sel_select_limit sl WHERE sl.tc_id = tc.tc_id) AS limit_count,
+                       (SELECT lc.lesson_no FROM sel_lesson_class lc WHERE lc.tc_id = tc.tc_id LIMIT 1) AS lesson_no
                 FROM teaching_class tc
                 JOIN course c ON tc.course_id = c.course_id
                 """ + where + " ORDER BY tc.term DESC, tc.tc_id ASC LIMIT ? OFFSET ?";
@@ -108,12 +108,12 @@ public class PrepService {
         Map<String, Object> tc = tcRows.get(0);
 
         List<Map<String, Object>> limits = jdbc.queryForList(
-                "SELECT limit_id, tc_id, limit_type, limit_value FROM select_limit WHERE tc_id = ? ORDER BY limit_type, limit_value",
+                "SELECT limit_id, tc_id, limit_type, limit_value FROM sel_select_limit WHERE tc_id = ? ORDER BY limit_type, limit_value",
                 tcId);
 
         Integer lockedRounds = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM round_class rc
-                JOIN select_round sr ON rc.round_id = sr.round_id
+                SELECT COUNT(*) FROM sel_round_class rc
+                JOIN sel_select_round sr ON rc.round_id = sr.round_id
                 WHERE rc.tc_id = ? AND sr.round_status IN (1, 2, 3, 5)
                 """, Integer.class, tcId);
 
@@ -150,8 +150,8 @@ public class PrepService {
         }
 
         Integer locked = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM round_class rc
-                JOIN select_round sr ON rc.round_id = sr.round_id
+                SELECT COUNT(*) FROM sel_round_class rc
+                JOIN sel_select_round sr ON rc.round_id = sr.round_id
                 WHERE rc.tc_id = ? AND sr.round_status IN (1, 2, 3, 5)
                 """, Integer.class, tcId);
         if (locked != null && locked > 0) {
@@ -178,12 +178,12 @@ public class PrepService {
             }
         }
 
-        jdbc.update("DELETE FROM select_limit WHERE tc_id = ?", tcId);
+        jdbc.update("DELETE FROM sel_select_limit WHERE tc_id = ?", tcId);
         if (!batchArgs.isEmpty()) {
-            jdbc.batchUpdate("INSERT INTO select_limit (tc_id, limit_type, limit_value) VALUES (?, ?, ?)", batchArgs);
+            jdbc.batchUpdate("INSERT INTO sel_select_limit (tc_id, limit_type, limit_value) VALUES (?, ?, ?)", batchArgs);
         }
         return jdbc.queryForList(
-                "SELECT limit_id, tc_id, limit_type, limit_value FROM select_limit WHERE tc_id = ? ORDER BY limit_type, limit_value",
+                "SELECT limit_id, tc_id, limit_type, limit_value FROM sel_select_limit WHERE tc_id = ? ORDER BY limit_type, limit_value",
                 tcId);
     }
 
@@ -205,7 +205,7 @@ public class PrepService {
             params.add(roundStatus);
         }
 
-        Long total = jdbc.queryForObject("SELECT COUNT(*) FROM select_round sr " + where, Long.class, params.toArray());
+        Long total = jdbc.queryForObject("SELECT COUNT(*) FROM sel_select_round sr " + where, Long.class, params.toArray());
         if (total == null) {
             total = 0L;
         }
@@ -217,8 +217,10 @@ public class PrepService {
 
         String sql = """
                 SELECT sr.*,
-                       (SELECT COUNT(*) FROM round_class rc WHERE rc.round_id = sr.round_id) AS class_count
-                FROM select_round sr
+                       sr.start_at AS start_time, sr.end_at AS end_time,
+                       sr.approved_at AS approve_time, sr.published_at AS publish_time,
+                       (SELECT COUNT(*) FROM sel_round_class rc WHERE rc.round_id = sr.round_id) AS class_count
+                FROM sel_select_round sr
                 """ + where + " ORDER BY sr.round_id DESC LIMIT ? OFFSET ?";
         return new PageResult<>(jdbc.queryForList(sql, dataParams.toArray()), total, page, pageSize);
     }
@@ -226,7 +228,12 @@ public class PrepService {
     /** 1.3/1.5 轮次详情（含绑定教学班列表） */
     public Map<String, Object> getRoundDetail(int roundId) {
         CurrentUser user = UserContext.requireUser();
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM select_round WHERE round_id = ?", roundId);
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT sr.*,
+                       sr.start_at AS start_time, sr.end_at AS end_time,
+                       sr.approved_at AS approve_time, sr.published_at AS publish_time
+                FROM sel_select_round sr WHERE sr.round_id = ?
+                """, roundId);
         if (rows.isEmpty()) {
             throw BizException.notFound("选课轮次不存在: " + roundId);
         }
@@ -238,7 +245,7 @@ public class PrepService {
         List<Map<String, Object>> classes = jdbc.queryForList("""
                 SELECT rc.tc_id, tc.term, tc.course_id, c.course_name, c.credit,
                        tc.teacher_id, tc.capacity, tc.actual_num, tc.tc_type, tc.tc_status
-                FROM round_class rc
+                FROM sel_round_class rc
                 JOIN teaching_class tc ON rc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE rc.round_id = ? ORDER BY rc.tc_id
@@ -256,8 +263,8 @@ public class PrepService {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("""
-                    INSERT INTO select_round
-                      (term, round_name, round_type, target_level, start_time, end_time,
+                    INSERT INTO sel_select_round
+                      (term, round_name, round_type, target_level, start_at, end_at,
                        max_credit, select_mode, allow_retake, retake_ignore_conflict,
                        round_status, notice_content)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
@@ -291,8 +298,8 @@ public class PrepService {
         }
         RoundPayload p = validateAndParsePayload(body);
         jdbc.update("""
-                UPDATE select_round
-                SET term=?, round_name=?, round_type=?, target_level=?, start_time=?, end_time=?,
+                UPDATE sel_select_round
+                SET term=?, round_name=?, round_type=?, target_level=?, start_at=?, end_at=?,
                     max_credit=?, select_mode=?, allow_retake=?, retake_ignore_conflict=?, notice_content=?
                 WHERE round_id=? AND round_status=0
                 """, p.term, p.roundName, p.roundType, p.targetLevel,
@@ -303,7 +310,7 @@ public class PrepService {
         return getRoundDetail(roundId);
     }
 
-    /** 1.3 提交审批（0 -> 1，按 v7 规则清空上一次退回审批信息） */
+    /** 1.3 提交审批（0 -> 1，按规则清空上一次退回审批信息） */
     @Transactional
     public Map<String, Object> submitRound(int roundId) {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
@@ -316,15 +323,15 @@ public class PrepService {
         if (notice.isEmpty()) {
             throw BizException.unprocessable("NOTICE_REQUIRED", "提交审批前必须填写选课通知内容");
         }
-        Integer classCount = jdbc.queryForObject("SELECT COUNT(*) FROM round_class WHERE round_id = ?", Integer.class, roundId);
+        Integer classCount = jdbc.queryForObject("SELECT COUNT(*) FROM sel_round_class WHERE round_id = ?", Integer.class, roundId);
         if (classCount == null || classCount == 0) {
             throw BizException.unprocessable("CLASSES_REQUIRED", "提交审批前至少须关联 1 个已发布教学班");
         }
         verifyBoundClassesPublished(roundId);
 
         jdbc.update("""
-                UPDATE select_round
-                SET round_status = 1, approver_id = NULL, approve_time = NULL, approve_opinion = NULL
+                UPDATE sel_select_round
+                SET round_status = 1, approver_id = NULL, approved_at = NULL, approve_opinion = NULL
                 WHERE round_id = ? AND round_status = 0
                 """, roundId);
         return getRoundDetail(roundId);
@@ -349,8 +356,8 @@ public class PrepService {
 
         int nextStatus = (decision == 1) ? 5 : 0;
         jdbc.update("""
-                UPDATE select_round
-                SET round_status = ?, approver_id = ?, approve_time = NOW(), approve_opinion = ?
+                UPDATE sel_select_round
+                SET round_status = ?, approver_id = ?, approved_at = NOW(), approve_opinion = ?
                 WHERE round_id = ? AND round_status = 1
                 """, nextStatus, user.empId(), trimmedOpinion.isEmpty() ? "同意" : trimmedOpinion, roundId);
         return getRoundDetail(roundId);
@@ -372,13 +379,13 @@ public class PrepService {
         verifyBoundClassesPublished(roundId);
 
         LocalDateTime now = LocalDateTime.now();
-        LocalDateTime start = toLocalDateTime(row.get("start_time"));
-        LocalDateTime end = toLocalDateTime(row.get("end_time"));
+        LocalDateTime start = toLocalDateTime(row.get("start_at"));
+        LocalDateTime end = toLocalDateTime(row.get("end_at"));
         int nextStatus = (!now.isBefore(start) && now.isBefore(end)) ? 3 : 2;
 
         jdbc.update("""
-                UPDATE select_round
-                SET round_status = ?, publish_time = NOW()
+                UPDATE sel_select_round
+                SET round_status = ?, published_at = NOW()
                 WHERE round_id = ? AND round_status = 5
                 """, nextStatus, roundId);
         return getRoundDetail(roundId);
@@ -388,7 +395,7 @@ public class PrepService {
 
     private Map<String, Object> lockAndGetRound(int roundId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT * FROM select_round WHERE round_id = ? FOR UPDATE", roundId);
+                "SELECT * FROM sel_select_round WHERE round_id = ? FOR UPDATE", roundId);
         if (rows.isEmpty()) {
             throw BizException.notFound("选课轮次不存在: " + roundId);
         }
@@ -401,7 +408,7 @@ public class PrepService {
 
     private void verifyBoundClassesPublished(int roundId) {
         List<String> invalid = jdbc.queryForList("""
-                SELECT rc.tc_id FROM round_class rc
+                SELECT rc.tc_id FROM sel_round_class rc
                 JOIN teaching_class tc ON rc.tc_id = tc.tc_id
                 WHERE rc.round_id = ? AND tc.tc_status <> '4'
                 """, String.class, roundId);
@@ -412,7 +419,7 @@ public class PrepService {
     }
 
     private void replaceRoundClasses(int roundId, String term, List<String> tcIds) {
-        jdbc.update("DELETE FROM round_class WHERE round_id = ?", roundId);
+        jdbc.update("DELETE FROM sel_round_class WHERE round_id = ?", roundId);
         if (tcIds == null || tcIds.isEmpty()) {
             return;
         }
@@ -434,7 +441,7 @@ public class PrepService {
             if (!"4".equals(String.valueOf(tcRows.get(0).get("tc_status")))) {
                 throw BizException.unprocessable("CLASS_NOT_PUBLISHED", "仅已发布的教学班可加入选课轮次: " + tcId);
             }
-            jdbc.update("INSERT INTO round_class (round_id, tc_id) VALUES (?, ?)", roundId, tcId);
+            jdbc.update("INSERT INTO sel_round_class (round_id, tc_id) VALUES (?, ?)", roundId, tcId);
         }
     }
 
@@ -461,8 +468,8 @@ public class PrepService {
             throw BizException.unprocessable("INVALID_RETAKE_PAIR", "仅在开放重修生选课时才可开启冲突免听");
         }
 
-        LocalDateTime start = parseDateTime(body.get("start_time"), "start_time");
-        LocalDateTime end = parseDateTime(body.get("end_time"), "end_time");
+        LocalDateTime start = parseDateTime(body.getOrDefault("start_time", body.get("start_at")), "start_time");
+        LocalDateTime end = parseDateTime(body.getOrDefault("end_time", body.get("end_at")), "end_time");
         if (!end.isAfter(start)) {
             throw BizException.unprocessable("INVALID_TIME_RANGE", "结束时间必须晚于开始时间");
         }

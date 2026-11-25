@@ -30,9 +30,9 @@ public class HealthController {
             Integer ownTables = jdbcTemplate.queryForObject(
                     "SELECT COUNT(DISTINCT TABLE_NAME) FROM information_schema.TABLES " +
                     "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (" +
-                    "'select_round','round_class','select_limit','sc','select_log','lesson_class'," +
-                    "'score','score_audit','score_correction','stu_gpa','stu_term_gpa'," +
-                    "'teach_eval','tc_eval_result','exchange_score_convert')",
+                    "'sel_select_round','sel_round_class','sel_select_limit','sel_sc','sel_select_log','sel_lesson_class'," +
+                    "'sel_score','sel_score_audit','sel_score_correction','sel_stu_gpa','sel_stu_term_gpa'," +
+                    "'sel_teach_eval','sel_tc_eval_result','sel_exchange_score_convert')",
                     Integer.class);
             info.put("database", dbName);
             info.put("db_connected", true);

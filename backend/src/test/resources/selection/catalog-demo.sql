@@ -1,6 +1,6 @@
 -- 业务②课程展示案例，由 SelectionServiceTest 在独立 H2 内存库载入。
-INSERT INTO select_round (
-    round_id, term, round_name, round_type, target_level, start_time, end_time,
+INSERT INTO sel_select_round (
+    round_id, term, round_name, round_type, target_level, start_at, end_at,
     max_credit, select_mode, round_status, allow_retake, retake_ignore_conflict, notice_content
 ) VALUES (910, '2026-2027-1', '课程展示示例轮次', 3, 3, '2026-11-20 09:00:00', '2026-12-10 17:00:00',
           30, 1, 3, 1, 1, '用于验证课程分类和教学班面向对象。');
@@ -26,15 +26,15 @@ INSERT INTO teaching_class (tc_id, term, course_id, teacher_id, class_ids, capac
     ('DEMO-BIZ', '2026-2027-1', 'DEMO0007', 'T1', NULL, 30, '2', '4', 0),
     ('DEMO-PRACTICE', '2026-2027-1', 'DEMO0008', 'T1', NULL, 30, '2', '4', 0);
 
-INSERT INTO round_class (round_id, tc_id) VALUES
+INSERT INTO sel_round_class (round_id, tc_id) VALUES
     (910, 'DEMO-REQUIRED'), (910, 'DEMO-PROF'), (910, 'DEMO-SCI'),
     (910, 'DEMO-LANG-01'), (910, 'DEMO-LANG-02'), (910, 'DEMO-ART'),
     (910, 'DEMO-HUM'), (910, 'DEMO-BIZ'), (910, 'DEMO-PRACTICE');
 
 INSERT INTO schedule_result (tc_id, week_range, week_day, start_slot, end_slot, room_id)
-    SELECT tc_id, '1-16', 1, 1, 2, '示例教室101' FROM round_class WHERE round_id = 910;
+    SELECT tc_id, '1-16', 1, 1, 2, '示例教室101' FROM sel_round_class WHERE round_id = 910;
 
-INSERT INTO select_limit (tc_id, limit_type, limit_value) VALUES
+INSERT INTO sel_select_limit (tc_id, limit_type, limit_value) VALUES
     ('DEMO-REQUIRED', 1, '2024'), ('DEMO-REQUIRED', 2, '120102'),
     ('DEMO-PROF', 2, '080901'),
     ('DEMO-LANG-01', 1, '2024'), ('DEMO-LANG-01', 1, '2025'),

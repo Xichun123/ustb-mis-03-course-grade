@@ -1,8 +1,9 @@
 -- =====================================================================
--- 03 组 · 选课及成绩管理 —— 演示与联调初始化测试数据（v9 全兼容）
+-- 03 组 · 选课及成绩管理 —— 演示与联调初始化测试数据（DBA 统一字典 v1.3 全兼容）
 -- 文件：02_演示与测试初始化数据.sql
 -- 说明：
---   - 所有数据严格满足 v9 全部 82 条 CHECK 约束与外键约束；
+--   - 本组 14 张表均使用 DBA 统一字典 v1.3 表名（sel_*）与统一时间字段名；
+--   - 所有数据严格满足 v1.3 全部 82 条 CHECK 约束与外键约束；
 --   - 覆盖场景：本科生/研究生/来校交换生、合班大课堂（lesson_class）、
 --     初修/重修免听/辅修、选课轮次各状态（草稿/待审/已审/进行中/已结束）、
 --     成绩各状态（录入中/待核对含6位随机码/已审核/已发布/退回）、
@@ -99,12 +100,12 @@ INSERT INTO stub_ex_incoming_student (temp_student_no, student_name, sender_scho
 ON DUPLICATE KEY UPDATE status_code = VALUES(status_code);
 
 -- ---------------------------------------------------------------------
--- 2. 业务① 选课准备与发布（select_round、round_class、select_limit）
+-- 2. 业务① 选课准备与发布（sel_select_round、sel_round_class、sel_select_limit）
 -- ---------------------------------------------------------------------
-INSERT INTO select_round (
-  round_id, term, round_name, round_type, target_level, start_time, end_time,
+INSERT INTO sel_select_round (
+  round_id, term, round_name, round_type, target_level, start_at, end_at,
   max_credit, select_mode, allow_retake, retake_ignore_conflict, round_status,
-  notice_content, publish_time, approver_id, approve_time, approve_opinion
+  notice_content, published_at, approver_id, approved_at, approve_opinion
 ) VALUES
   (1, '2026-2027-1', '2026秋第一轮正选（本科）', 2, 1, '2026-09-01 09:00:00', '2026-09-05 17:00:00',
    30.0, 2, 1, 1, 4,
@@ -123,22 +124,22 @@ INSERT INTO select_round (
    '2026-2027学年第二学期预选草案，待学院补齐限选条件后提交审批。',
    NULL, NULL, NULL, NULL);
 
-INSERT INTO round_class (round_id, tc_id) VALUES
+INSERT INTO sel_round_class (round_id, tc_id) VALUES
   (1, 'TC20261001'), (1, 'TC20261002'), (1, 'TC20261003'), (1, 'TC20261004'), (1, 'TC20261005'),
   (2, 'TC20261001'), (2, 'TC20261002'), (2, 'TC20261003'), (2, 'TC20261004'), (2, 'TC20261006'), (2, 'TC20261007'),
   (3, 'TC20261006'), (3, 'TC20261007'),
   (4, 'TC20261001');
 
-INSERT INTO select_limit (limit_id, tc_id, limit_type, limit_value) VALUES
+INSERT INTO sel_select_limit (limit_id, tc_id, limit_type, limit_value) VALUES
   (1, 'TC20261004', 1, '2024'),
   (2, 'TC20261004', 4, '本科'),
   (3, 'TC20261007', 4, '研究生'),
   (4, 'TC20261007', 3, '0001');
 
 -- ---------------------------------------------------------------------
--- 3. 业务② 学生选课（sc、select_log）+ v9 合班课堂（lesson_class）
+-- 3. 业务② 学生选课（sel_sc、sel_select_log）+ 合班课堂（sel_lesson_class）
 -- ---------------------------------------------------------------------
-INSERT INTO lesson_class (tc_id, lesson_no) VALUES
+INSERT INTO sel_lesson_class (tc_id, lesson_no) VALUES
   ('TC20261001', 'KT202610001'),
   ('TC20261002', 'KT202610001'), -- 两班合并为同一大课堂 KT202610001
   ('TC20261003', 'KT202610002'),
@@ -147,12 +148,12 @@ INSERT INTO lesson_class (tc_id, lesson_no) VALUES
   ('TC20261006', 'KT202610005'),
   ('TC20261007', 'KT202610006');
 
-INSERT INTO sc (sc_id, student_id, tc_id, round_id, study_type, is_exempt_attend, stu_level, stat_stage, priority, select_status, select_time, drop_time) VALUES
+INSERT INTO sel_sc (sc_id, student_id, tc_id, round_id, study_type, is_exempt_attend, stu_level, stat_stage, priority, select_status, select_time, drop_time) VALUES
   (1,  'U202440001', 'TC20261001', 1, 1, 0, '本科',   1, 1, 1, '2026-09-01 09:05:00', NULL), -- 初修
   (2,  'U202440002', 'TC20261001', 1, 1, 0, '本科',   1, 1, 1, '2026-09-01 09:08:00', NULL), -- 初修
   (3,  'U202440003', 'TC20261002', 1, 1, 0, '本科',   1, 1, 1, '2026-09-01 09:12:00', NULL), -- 同合班课堂另一行政班
   (4,  'U202340004', 'TC20261002', 1, 2, 1, '本科',   1, 1, 1, '2026-09-01 10:00:00', NULL), -- 重修 + 冲突免听
-  (5,  'U202440005', 'TC20261001', 2, 3, 0, '本科',   1, NULL, 1, '2026-11-20 09:30:00', NULL), -- 辅修（v9新值3）
+  (5,  'U202440005', 'TC20261001', 2, 3, 0, '本科',   1, NULL, 1, '2026-11-20 09:30:00', NULL), -- 辅修（3）
   (6,  'U202440001', 'TC20261003', 1, 1, 0, '本科',   1, 1, 1, '2026-09-01 09:06:00', NULL),
   (7,  'U202440002', 'TC20261003', 1, 1, 0, '本科',   1, 1, 1, '2026-09-01 09:09:00', NULL),
   (8,  'U202440001', 'TC20261005', 1, 1, 0, '本科',   1, 1, 1, '2026-09-01 09:15:00', NULL),
@@ -160,66 +161,65 @@ INSERT INTO sc (sc_id, student_id, tc_id, round_id, study_type, is_exempt_attend
   (10, 'M202610001', 'TC20261006', 2, 1, 0, '研究生', 2, NULL, 1, '2026-11-20 10:20:00', NULL), -- 研究生
   (11, 'M202610002', 'TC20261006', 2, 1, 0, '研究生', 2, NULL, 1, '2026-11-20 10:25:00', NULL);
 
-INSERT INTO select_log (log_id, student_id, tc_id, round_id, action_type, operator_id, action_time, remark) VALUES
+INSERT INTO sel_select_log (log_id, student_id, tc_id, round_id, action_type, operator_id, operated_at, remark) VALUES
   (1, 'U202440001', 'TC20261001', 1, 1, 'U202440001', '2026-09-01 09:05:00', NULL),
   (2, 'U202340004', 'TC20261002', 1, 1, 'U202340004', '2026-09-01 10:00:00', '重修冲突免听选课'),
   (3, 'U202440005', 'TC20261001', 2, 4, 'A000000001', '2026-11-20 09:30:00', '辅修双学位补加进入合班课堂');
 
 -- ---------------------------------------------------------------------
--- 4. 业务③ 成绩录入与审核（score、score_audit、exchange_score_convert）
+-- 4. 业务③ 成绩录入与审核（sel_score、sel_score_audit、sel_exchange_score_convert）
 -- ---------------------------------------------------------------------
--- 课堂 KT202610001（含 sc_id 1..5）：已发布（score_status=3）用于演示查分、评教、成绩更正
-INSERT INTO score (
+INSERT INTO sel_score (
   score_id, sc_id, exam_type, exam_flag, score_type, usual_ratio,
   usual_score, exam_score, total_score, score_level, grade_point,
-  is_final, score_status, input_teacher_id, submit_time, publish_time
+  is_final, score_status, input_teacher_id, submitted_at, published_at
 ) VALUES
-  (1, 1, 1, 0, 1, 30, 92.0, 88.0, 89.2, NULL,   3.70, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
-  (2, 2, 1, 0, 1, 30, 85.0, 79.0, 80.8, NULL,   3.00, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
-  (3, 3, 1, 0, 1, 30, 95.0, 93.0, 93.6, NULL,   4.00, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
-  (4, 4, 1, 0, 1, 30, 72.0, 68.0, 69.2, NULL,   2.00, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
-  (5, 5, 1, 0, 1, 30, 90.0, 86.0, 87.2, NULL,   3.70, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
+  (1, 1, 1, 0, 1, 30.00, 92.00, 88.00, 89.20, NULL,   3.70, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
+  (2, 2, 1, 0, 1, 30.00, 85.00, 79.00, 80.80, NULL,   3.00, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
+  (3, 3, 1, 0, 1, 30.00, 95.00, 93.00, 93.60, NULL,   4.00, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
+  (4, 4, 1, 0, 1, 30.00, 72.00, 68.00, 69.20, NULL,   2.00, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
+  (5, 5, 1, 0, 1, 30.00, 90.00, 86.00, 87.20, NULL,   3.70, 1, 3, 'T000010001', '2026-11-18 10:00:00', '2026-11-19 09:00:00'),
   -- 课堂 KT202610002（含 sc_id 6,7）：已提交待学院核对（score_status=1，配随机码 K7M9P2）
-  (6, 6, 1, 0, 1, 40, 88.0, 84.0, 85.6, NULL,   3.70, 0, 1, 'T000010002', '2026-11-22 15:00:00', NULL),
-  (7, 7, 1, 0, 1, 40, 76.0, 70.0, 72.4, NULL,   2.40, 0, 1, 'T000010002', '2026-11-22 15:00:00', NULL),
+  (6, 6, 1, 0, 1, 40.00, 88.00, 84.00, 85.60, NULL,   3.70, 0, 1, 'T000010002', '2026-11-22 15:00:00', NULL),
+  (7, 7, 1, 0, 1, 40.00, 76.00, 70.00, 72.40, NULL,   2.40, 0, 1, 'T000010002', '2026-11-22 15:00:00', NULL),
   -- 课堂 KT202610004（含 sc_id 8）：五级制已发布（演示等级制更正）
-  (8, 8, 1, 0, 2, 40, NULL, NULL, NULL, '良',   3.40, 1, 3, 'T000010001', '2026-11-18 11:00:00', '2026-11-19 09:30:00'),
+  (8, 8, 1, 0, 2, 40.00, NULL, NULL, NULL, '良',   3.40, 1, 3, 'T000010001', '2026-11-18 11:00:00', '2026-11-19 09:30:00'),
   -- 课堂 KT202610003（来校交换生 sc_id 9）：已发布
-  (9, 9, 1, 0, 1, 30, 91.0, 89.0, 89.6, NULL,   3.70, 1, 3, 'T000020001', '2026-11-20 14:00:00', '2026-11-21 10:00:00');
+  (9, 9, 1, 0, 1, 30.00, 91.00, 89.00, 89.60, NULL,   3.70, 1, 3, 'T000020001', '2026-11-20 14:00:00', '2026-11-21 10:00:00');
 
-INSERT INTO score_audit (audit_id, lesson_no, submit_time, verify_code, auditor_id, audit_result, audit_opinion, audit_time) VALUES
+INSERT INTO sel_score_audit (audit_id, lesson_no, submitted_at, verify_code, auditor_id, audit_result, audit_opinion, reviewed_at) VALUES
   (1, 'KT202610001', '2026-11-18 10:00:00', 'A3H8W5', 'E000010001', 1, '核对纸质成绩单无误', '2026-11-18 16:00:00'),
   (2, 'KT202610002', '2026-11-22 15:00:00', 'K7M9P2', NULL,         0, NULL,                 NULL),
   (3, 'KT202610004', '2026-11-18 11:00:00', 'M4N6Q9', 'E000010001', 1, '核对通过',           '2026-11-18 16:30:00'),
   (4, 'KT202610003', '2026-11-20 14:00:00', 'R5T8Y2', 'E000020001', 1, '核对通过',           '2026-11-20 17:00:00');
 
--- 校外交流成绩换算认定（v8 第 13 表）：一条待教务处审批示例
-INSERT INTO exchange_score_convert (
+-- 校外交流成绩换算认定：一条待教务处审批示例
+INSERT INTO sel_exchange_score_convert (
   convert_id, student_id, exchange_apply_id, term, stat_stage, host_school,
   ext_course_code, ext_course_name, ext_credit, ext_score_raw, ext_scale_type,
   course_id, score_type, converted_score, converted_level, grade_point, is_final,
-  proof_no, proof_file_id, version_no, audit_status, apply_time,
+  proof_no, proof_file_id, version_no, audit_status, submitted_at,
   college_auditor_id, college_audit_opinion, college_audit_time,
   school_auditor_id, school_audit_opinion, school_audit_time
 ) VALUES
   (1, 'U202440001', 'SQ20260001', '2026-2027-1', 1, '新加坡国立大学 (NUS)',
    'IS3103', 'Information Systems Leadership', 4.0, 'A-', 2,
-   'CS202003', 1, 90.0, NULL, 4.00, 0,
+   'CS202003', 1, 90.00, NULL, 4.00, 0,
    'NUS-TR-2026-8821', 'FILE_EX_8821', 1, 1, '2026-11-21 10:00:00',
    'E000010001', '课程大纲匹配度达90%，建议按90分认定', '2026-11-22 09:30:00',
    NULL, NULL, NULL);
 
 -- ---------------------------------------------------------------------
--- 5. 业务⑤ 成绩更正申请（score_correction）
+-- 5. 业务⑤ 成绩更正申请（sel_score_correction）
 -- ---------------------------------------------------------------------
-INSERT INTO score_correction (
+INSERT INTO sel_score_correction (
   apply_id, score_id, apply_teacher_id, old_score, new_score, old_level, new_level,
-  apply_reason, apply_time, apply_status,
+  apply_reason, submitted_at, apply_status,
   college_auditor_id, college_audit_opinion, college_audit_time,
-  auditor_id, audit_opinion, audit_time
+  auditor_id, audit_opinion, reviewed_at
 ) VALUES
   -- 待学院审核（status=0）
-  (1, 2, 'T000010001', 80.8, 84.8, NULL, NULL,
+  (1, 2, 'T000010001', 80.80, 84.80, NULL, NULL,
    '复核实验报告得分时漏加第4次实验附加分，经核查原始卷面应为84.8分',
    '2026-11-21 14:20:00', 0, NULL, NULL, NULL, NULL, NULL, NULL),
   -- 待学院审批（status=0，等级制示例）
@@ -228,27 +228,27 @@ INSERT INTO score_correction (
    '2026-11-20 11:00:00', 0, NULL, NULL, NULL, NULL, NULL, NULL);
 
 -- ---------------------------------------------------------------------
--- 6. 业务④ 评教与学业统计快照（teach_eval、tc_eval_result、stu_gpa、stu_term_gpa）
+-- 6. 业务④ 评教与学业统计快照（sel_teach_eval、sel_tc_eval_result、sel_stu_gpa、sel_stu_term_gpa）
 -- ---------------------------------------------------------------------
-INSERT INTO teach_eval (sc_id, eval_score, eval_comment, eval_time) VALUES
-  (1, 95, '课程案例贴合实际，讲解非常清晰', '2026-11-19 10:30:00'),
-  (3, 92, '课堂互动很好',                   '2026-11-19 11:00:00'),
-  (8, 96, '实践指导非常细致',               '2026-11-19 10:35:00');
+INSERT INTO sel_teach_eval (sc_id, eval_score, eval_comment, eval_time) VALUES
+  (1, 95.00, '课程案例贴合实际，讲解非常清晰', '2026-11-19 10:30:00'),
+  (3, 92.00, '课堂互动很好',                   '2026-11-19 11:00:00'),
+  (8, 96.00, '实践指导非常细致',               '2026-11-19 10:35:00');
 -- 注意：U202440002（sc_id=2）故意暂未评教，用于演示“先评教后查分”拦截！
 
-INSERT INTO tc_eval_result (tc_id, eval_num, avg_eval_score, calc_time) VALUES
+INSERT INTO sel_tc_eval_result (tc_id, eval_num, avg_eval_score, calc_time) VALUES
   ('TC20261001', 1, 95.00, '2026-11-20 08:00:00'),
   ('TC20261002', 1, 92.00, '2026-11-20 08:00:00'),
   ('TC20261005', 1, 96.00, '2026-11-20 08:00:00'),
-  ('TC20261003', 0, NULL,  '2026-11-20 08:00:00'); -- 零参评均分为 NULL（v7 CHECK 验证）
+  ('TC20261003', 0, NULL,  '2026-11-20 08:00:00'); -- 零参评均分为 NULL（CHECK 验证）
 
-INSERT INTO stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, major_rank, major_rank_total, update_time) VALUES
+INSERT INTO sel_stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, major_rank, major_rank_total, updated_at) VALUES
   ('U202440001', 5.0, 0.0, 3.58, 87.52, 2, 3, '2026-11-19 09:35:00'),
   ('U202440002', 3.0, 0.0, 3.00, 80.80, 3, 3, '2026-11-19 09:35:00'),
   ('U202440003', 3.0, 0.0, 4.00, 93.60, 1, 3, '2026-11-19 09:35:00'),
   ('U202340004', 3.0, 0.0, 2.00, 69.20, 1, 1, '2026-11-19 09:35:00');
 
-INSERT INTO stu_term_gpa (student_id, term, term_credit, term_failed_credit, update_time) VALUES
+INSERT INTO sel_stu_term_gpa (student_id, term, term_credit, term_failed_credit, updated_at) VALUES
   ('U202440001', '2026-2027-1', 5.0, 0.0, '2026-11-19 09:35:00'),
   ('U202440002', '2026-2027-1', 3.0, 0.0, '2026-11-19 09:35:00'),
   ('U202440003', '2026-2027-1', 3.0, 0.0, '2026-11-19 09:35:00'),

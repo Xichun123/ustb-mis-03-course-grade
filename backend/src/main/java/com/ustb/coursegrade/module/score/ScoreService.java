@@ -38,15 +38,15 @@ public class ScoreService {
         StringBuilder sql = new StringBuilder("""
                 SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, tc.course_id, c.course_name, c.credit,
                        c.open_college, GROUP_CONCAT(DISTINCT tc.class_ids ORDER BY tc.class_ids SEPARATOR '、') AS class_ids,
-                       (SELECT COUNT(*) FROM sc JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                       (SELECT COUNT(*) FROM sel_sc sc JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND sc.select_status = 1) AS student_count,
-                       (SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                       (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                         JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS submitted_count,
-                       (SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                       (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                         JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 3) AS published_count
-                FROM lesson_class lc
+                FROM sel_lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE 1=1
@@ -88,13 +88,18 @@ public class ScoreService {
                        CAST(s.score_id AS CHAR) AS score_id,
                        s.usual_ratio, s.usual_score, s.exam_score, s.exam_flag, s.score_type,
                        s.score_level, s.total_score, s.grade_point, s.score_status
-                FROM sc
+                FROM sel_sc sc
                 LEFT JOIN student st ON sc.student_id = st.student_id
                 LEFT JOIN v_exchange_student ex ON ex.temp_student_no = sc.student_id
-                LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
+                LEFT JOIN sel_score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
                 WHERE sc.tc_id IN (%s) AND sc.select_status = 1
                 ORDER BY sc.student_id
                 """.formatted(marks(tcIds)), tcIds.toArray());
+        for (Map<String, Object> r : rows) {
+            if (r.get("usual_ratio") instanceof BigDecimal bd && bd.stripTrailingZeros().scale() <= 0) {
+                r.put("usual_ratio", bd.intValueExact());
+            }
+        }
         Map<String, Object> data = new LinkedHashMap<>(head);
         data.put("students", rows);
         data.put("ratio_min", ratioMin());
@@ -128,7 +133,7 @@ public class ScoreService {
         }
         List<String> tcIds = tcIds(head);
         Set<Long> allowed = new HashSet<>(jdbc.queryForList(
-                "SELECT sc_id FROM sc WHERE tc_id IN (" + marks(tcIds) + ") AND select_status = 1",
+                "SELECT sc_id FROM sel_sc WHERE tc_id IN (" + marks(tcIds) + ") AND select_status = 1",
                 Long.class, tcIds.toArray()));
         int saved = 0;
         for (Map<String, Object> item : items) {
@@ -137,7 +142,7 @@ public class ScoreService {
                 throw BizException.unprocessable("INVALID_STUDENT", "名单中不存在该选课记录：" + item.get("sc_id"));
             }
             List<Integer> curStatuses = jdbc.queryForList(
-                    "SELECT score_status FROM score WHERE sc_id = ? AND exam_type = 1", Integer.class, scId);
+                    "SELECT score_status FROM sel_score WHERE sc_id = ? AND exam_type = 1", Integer.class, scId);
             if (!curStatuses.isEmpty()) {
                 int st = curStatuses.get(0);
                 if (st == 1 || st == 2 || st == 3) {
@@ -179,13 +184,13 @@ public class ScoreService {
                 }
             }
             int updated = jdbc.update("""
-                    UPDATE score SET usual_ratio = ?, usual_score = ?, exam_score = ?, exam_flag = ?,
+                    UPDATE sel_score SET usual_ratio = ?, usual_score = ?, exam_score = ?, exam_flag = ?,
                            score_type = ?, score_level = ?, score_status = 0
                      WHERE sc_id = ? AND exam_type = 1
                     """, ratio, usual, exam, flag, scoreType, level, scId);
             if (updated == 0) {
                 jdbc.update("""
-                        INSERT INTO score(sc_id, exam_type, exam_flag, score_type, usual_ratio, usual_score,
+                        INSERT INTO sel_score(sc_id, exam_type, exam_flag, score_type, usual_ratio, usual_score,
                                           exam_score, score_level, score_status, input_teacher_id)
                         VALUES(?, 1, ?, ?, ?, ?, ?, ?, 0, ?)
                         """, scId, flag, scoreType, ratio, usual, exam, level, u.empId());
@@ -211,8 +216,8 @@ public class ScoreService {
         List<String> tcIds = tcIds(head);
         List<Map<String, Object>> rosterStates = jdbc.queryForList("""
                 SELECT sc.sc_id, s.score_id, s.score_status
-                FROM sc
-                LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
+                FROM sel_sc sc
+                LEFT JOIN sel_score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
                 WHERE sc.tc_id IN (%s) AND sc.select_status = 1
                 """.formatted(marks(tcIds)), tcIds.toArray());
         if (rosterStates.isEmpty()) {
@@ -234,9 +239,9 @@ public class ScoreService {
             throw BizException.conflict("SCORE_LOCKED", "该课堂全部成绩已提交或发布，无法再修改平时占比");
         }
         int updated = jdbc.update("""
-                UPDATE score SET usual_ratio = ?
+                UPDATE sel_score SET usual_ratio = ?
                  WHERE exam_type = 1 AND score_status IN (0, 4)
-                   AND sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s) AND select_status = 1)
+                   AND sc_id IN (SELECT sc_id FROM sel_sc WHERE tc_id IN (%s) AND select_status = 1)
                 """.formatted(marks(tcIds)), append(new Object[]{ratio}, tcIds));
         String message;
         if (updated > 0 && pendingNew == 0) {
@@ -260,9 +265,9 @@ public class ScoreService {
     private Integer classRatio(String lessonNo) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT s.usual_ratio AS ratio, COUNT(*) AS n
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
-                JOIN lesson_class lc ON sc.tc_id = lc.tc_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                JOIN sel_lesson_class lc ON sc.tc_id = lc.tc_id
                 WHERE lc.lesson_no = ? AND s.exam_type = 1 AND s.usual_ratio IS NOT NULL
                 GROUP BY s.usual_ratio
                 ORDER BY n DESC, s.usual_ratio DESC
@@ -302,8 +307,8 @@ public class ScoreService {
         Map<Long, Map<String, Object>> existingScores = new HashMap<>();
         jdbc.queryForList("""
                 SELECT sc.sc_id, sc.student_id, s.score_id, s.score_status, s.score_type
-                FROM sc
-                LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
+                FROM sel_sc sc
+                LEFT JOIN sel_score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
                 WHERE sc.tc_id IN (%s) AND sc.select_status = 1
                 """.formatted(marks(tcIds)), tcIds.toArray())
                 .forEach(r -> {
@@ -490,8 +495,8 @@ public class ScoreService {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT sc.sc_id, sc.student_id, s.score_id, s.usual_ratio, s.usual_score, s.exam_score,
                        s.exam_flag, s.score_type, s.score_level, s.score_status
-                FROM sc
-                LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
+                FROM sel_sc sc
+                LEFT JOIN sel_score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
                 WHERE sc.tc_id IN (%s) AND sc.select_status = 1
                 FOR UPDATE
                 """.formatted(marks(tcIds)), tcIds.toArray());
@@ -580,15 +585,15 @@ public class ScoreService {
                 }
             }
             jdbc.update("""
-                    UPDATE score SET total_score = ?, score_level = ?, grade_point = ?,
-                           score_status = 1, submit_time = ?
+                    UPDATE sel_score SET total_score = ?, score_level = ?, grade_point = ?,
+                           score_status = 1, submitted_at = ?
                      WHERE sc_id = ? AND exam_type = 1
                     """, total, scoreType == 1 ? null : (level.isEmpty() ? null : level), gp, ts, r.get("sc_id"));
         }
 
         String code = generateVerifyCode();
         jdbc.update("""
-                INSERT INTO score_audit (lesson_no, submit_time, verify_code, auditor_id, audit_result, audit_opinion, audit_time)
+                INSERT INTO sel_score_audit (lesson_no, submitted_at, verify_code, auditor_id, audit_result, audit_opinion, reviewed_at)
                 VALUES (?, ?, ?, NULL, 0, NULL, NULL)
                 """, lessonNo, ts, code);
         return Map.of("lesson_no", lessonNo, "submitted", rows.size(), "verify_code", code, "submit_time", submitTime.toString());
@@ -604,17 +609,17 @@ public class ScoreService {
         CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
                 SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, c.course_name, c.open_college,
-                       (SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                       (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                         JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS wait_count,
-                       (SELECT MAX(s.submit_time) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                       (SELECT MAX(s.submitted_at) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                         JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1) AS submit_time
-                FROM lesson_class lc
+                FROM sel_lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
-                WHERE EXISTS (SELECT 1 FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                               JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                WHERE EXISTS (SELECT 1 FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                               JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                                WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1)
                 """);
         List<Object> args = new ArrayList<>();
@@ -631,7 +636,7 @@ public class ScoreService {
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
-    /** 3.3 学院输码核对（对齐 v9 score_audit.lesson_no 与 verify_code）：通过置 2，退回置 4 并必填差异说明 */
+    /** 3.3 学院输码核对（对齐 sel_score_audit.lesson_no 与 verify_code）：通过置 2，退回置 4 并必填差异说明 */
     @Transactional
     public Map<String, Object> audit(String lessonNo, String verifyCode, int result, String opinion) {
         CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
@@ -649,7 +654,7 @@ public class ScoreService {
         }
         List<String> tcIds = tcIds(head);
         Integer wait = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
+                SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                  WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 1
                 """.formatted(marks(tcIds)), Integer.class, tcIds.toArray());
         if (wait == null || wait == 0) {
@@ -657,10 +662,10 @@ public class ScoreService {
         }
 
         List<Map<String, Object>> pendingAudits = jdbc.queryForList("""
-                SELECT audit_id, verify_code, submit_time
-                FROM score_audit
+                SELECT audit_id, verify_code, submitted_at
+                FROM sel_score_audit
                 WHERE lesson_no = ? AND audit_result = 0
-                ORDER BY submit_time DESC, audit_id DESC
+                ORDER BY submitted_at DESC, audit_id DESC
                 LIMIT 1 FOR UPDATE
                 """, lessonNo);
         if (pendingAudits.isEmpty()) {
@@ -675,13 +680,13 @@ public class ScoreService {
 
         long auditId = ((Number) batch.get("audit_id")).longValue();
         jdbc.update("""
-                UPDATE score_audit
-                SET auditor_id = ?, audit_result = ?, audit_opinion = ?, audit_time = NOW()
+                UPDATE sel_score_audit
+                SET auditor_id = ?, audit_result = ?, audit_opinion = ?, reviewed_at = NOW()
                 WHERE audit_id = ? AND audit_result = 0
                 """, u.empId(), result, op.isEmpty() ? (result == 1 ? "核对纸质成绩单无误" : op) : op, auditId);
         jdbc.update("""
-                UPDATE score SET score_status = ?
-                 WHERE sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s)) AND exam_type = 1 AND score_status = 1
+                UPDATE sel_score SET score_status = ?
+                 WHERE sc_id IN (SELECT sc_id FROM sel_sc WHERE tc_id IN (%s)) AND exam_type = 1 AND score_status = 1
                 """.formatted(marks(tcIds)), append(new Object[]{result == 1 ? 2 : 4}, tcIds));
         return Map.of("lesson_no", lessonNo, "audit_id", String.valueOf(auditId), "result", result,
                 "message", result == 1 ? "核对通过，等待教务处发布" : "已退回任课教师二次确认");
@@ -698,14 +703,14 @@ public class ScoreService {
         }
         return jdbc.queryForList("""
                 SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, c.course_name,
-                       (SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                         JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                       (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                         JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2) AS ready_count
-                FROM lesson_class lc
+                FROM sel_lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
-                WHERE EXISTS (SELECT 1 FROM score s JOIN sc ON s.sc_id = sc.sc_id
-                               JOIN lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                WHERE EXISTS (SELECT 1 FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                               JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                                WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2)
                 """ + termSql + """
                 GROUP BY lc.lesson_no, tc.term, c.course_name
@@ -713,24 +718,24 @@ public class ScoreService {
                 """, args.toArray());
     }
 
-    /** 3.4 成绩发布：校验本次提交批次已审核通过（score_audit.lesson_no），置 3、精准重标 is_final 并刷新学业统计 */
+    /** 3.4 成绩发布：校验本次提交批次已审核通过（sel_score_audit.lesson_no），置 3、精准重标 is_final 并刷新学业统计 */
     @Transactional
     public Map<String, Object> publish(String lessonNo) {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         Map<String, Object> head = requireClass(lessonNo);
         List<String> tcIds = tcIds(head);
         Integer ready = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM score s JOIN sc ON s.sc_id = sc.sc_id
+                SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                  WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 2
                 """.formatted(marks(tcIds)), Integer.class, tcIds.toArray());
         if (ready == null || ready == 0) {
             throw BizException.conflict("NOT_READY", "该课堂没有学院核对通过的成绩");
         }
         List<Map<String, Object>> latestAudit = jdbc.queryForList("""
-                SELECT audit_id, audit_result, submit_time
-                FROM score_audit
+                SELECT audit_id, audit_result, submitted_at
+                FROM sel_score_audit
                 WHERE lesson_no = ?
-                ORDER BY submit_time DESC, audit_id DESC
+                ORDER BY submitted_at DESC, audit_id DESC
                 LIMIT 1
                 """, lessonNo);
         if (latestAudit.isEmpty() || ((Number) latestAudit.get(0).get("audit_result")).intValue() != 1) {
@@ -738,15 +743,15 @@ public class ScoreService {
         }
 
         jdbc.update("""
-                UPDATE score SET score_status = 3, publish_time = NOW()
-                 WHERE sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s)) AND exam_type = 1 AND score_status = 2
+                UPDATE sel_score SET score_status = 3, published_at = NOW()
+                 WHERE sc_id IN (SELECT sc_id FROM sel_sc WHERE tc_id IN (%s)) AND exam_type = 1 AND score_status = 2
                 """.formatted(marks(tcIds)), tcIds.toArray());
 
         String courseId = String.valueOf(head.get("course_id"));
         String term = String.valueOf(head.get("term"));
         List<Map<String, Object>> targets = jdbc.queryForList("""
                 SELECT DISTINCT sc.student_id, sc.stat_stage
-                FROM score s JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 WHERE sc.tc_id IN (%s) AND s.exam_type = 1 AND s.score_status = 3
                 """.formatted(marks(tcIds)), tcIds.toArray());
         for (Map<String, Object> st : targets) {
@@ -769,8 +774,8 @@ public class ScoreService {
                        e.course_id, COALESCE(c.course_name, e.course_id) AS course_name,
                        e.score_type, e.converted_score, e.converted_level, e.grade_point,
                        e.is_final, e.proof_no, e.audit_status,
-                       e.college_audit_opinion, e.school_audit_opinion, e.apply_time
-                FROM exchange_score_convert e
+                       e.college_audit_opinion, e.school_audit_opinion, e.submitted_at AS apply_time
+                FROM sel_exchange_score_convert e
                 LEFT JOIN student st ON e.student_id = st.student_id
                 LEFT JOIN course c ON e.course_id = c.course_id
                 WHERE 1=1
@@ -852,10 +857,10 @@ public class ScoreService {
         String applyId = str(body.get("exchange_apply_id"));
         String extCode = str(body.get("ext_course_code"));
         jdbc.update("""
-                INSERT INTO exchange_score_convert(student_id, exchange_apply_id, term, stat_stage, host_school,
+                INSERT INTO sel_exchange_score_convert(student_id, exchange_apply_id, term, stat_stage, host_school,
                     ext_course_code, ext_course_name, ext_credit, ext_score_raw, ext_scale_type, course_id,
                     score_type, converted_score, converted_level, grade_point, is_final, proof_no,
-                    version_no, audit_status, apply_time)
+                    version_no, audit_status, submitted_at)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1, 0, NOW())
                 """, sid, applyId.isEmpty() ? null : applyId, term, toInt(body.get("stat_stage"), 1), host,
                 extCode.isEmpty() ? null : extCode, extName, credit, extRaw, scale, courseId,
@@ -876,7 +881,7 @@ public class ScoreService {
             throw BizException.unprocessable("OPINION_REQUIRED", "学院驳回时必须填写审核意见");
         }
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT convert_id, audit_status FROM exchange_score_convert WHERE convert_id = ? FOR UPDATE", convertId);
+                "SELECT convert_id, audit_status FROM sel_exchange_score_convert WHERE convert_id = ? FOR UPDATE", convertId);
         if (rows.isEmpty()) {
             throw BizException.notFound("校外成绩认定记录不存在");
         }
@@ -885,7 +890,7 @@ public class ScoreService {
         }
         int nextStatus = (decision == 1) ? 1 : 3;
         jdbc.update("""
-                UPDATE exchange_score_convert
+                UPDATE sel_exchange_score_convert
                 SET audit_status = ?, college_auditor_id = ?, college_audit_opinion = ?, college_audit_time = NOW()
                 WHERE convert_id = ? AND audit_status = 0
                 """, nextStatus, u.empId(), op.isEmpty() ? "学院审核通过" : op, convertId);
@@ -905,7 +910,7 @@ public class ScoreService {
             throw BizException.unprocessable("OPINION_REQUIRED", "教务处驳回时必须填写审批意见");
         }
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT convert_id, student_id, term, stat_stage, course_id, audit_status FROM exchange_score_convert WHERE convert_id = ? FOR UPDATE",
+                "SELECT convert_id, student_id, term, stat_stage, course_id, audit_status FROM sel_exchange_score_convert WHERE convert_id = ? FOR UPDATE",
                 convertId);
         if (rows.isEmpty()) {
             throw BizException.notFound("校外成绩认定记录不存在");
@@ -916,7 +921,7 @@ public class ScoreService {
         }
         int nextStatus = (decision == 1) ? 2 : 3;
         jdbc.update("""
-                UPDATE exchange_score_convert
+                UPDATE sel_exchange_score_convert
                 SET audit_status = ?, school_auditor_id = ?, school_audit_opinion = ?, school_audit_time = NOW()
                 WHERE convert_id = ? AND audit_status = 1
                 """, nextStatus, u.empId(), op.isEmpty() ? "教务处审批通过并生效" : op, convertId);
@@ -938,7 +943,7 @@ public class ScoreService {
         CurrentUser u = UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT convert_id, student_id, term, stat_stage, course_id, audit_status, college_auditor_id
-                FROM exchange_score_convert WHERE convert_id = ? FOR UPDATE
+                FROM sel_exchange_score_convert WHERE convert_id = ? FOR UPDATE
                 """, convertId);
         if (rows.isEmpty()) {
             throw BizException.notFound("校外成绩认定记录不存在");
@@ -954,7 +959,7 @@ public class ScoreService {
         String schoolOpinion = (opinion == null || opinion.isBlank()) ? "教务处认定：外校课程与本校课程对应，成绩与学分直接计入" : opinion.trim();
         String collegeOpinion = row.get("college_auditor_id") == null ? "教务处直接认定" : "学院已审核";
         jdbc.update("""
-                UPDATE exchange_score_convert
+                UPDATE sel_exchange_score_convert
                 SET audit_status = 2,
                     college_auditor_id = COALESCE(college_auditor_id, ?),
                     college_audit_opinion = COALESCE(college_audit_opinion, ?),
@@ -1014,21 +1019,21 @@ public class ScoreService {
 
     // ---------- 内部工具与统计同步 ----------
 
-    /** 联合 score(status=3) 与 exchange_score_convert(status=2) 按 (student_id, stat_stage, course_id) 唯一标记 is_final */
+    /** 联合 sel_score(status=3) 与 sel_exchange_score_convert(status=2) 按 (student_id, stat_stage, course_id) 唯一标记 is_final */
     private void recomputeIsFinalJoint(String studentId, int statStage, String courseId) {
         List<Map<String, Object>> candidates = jdbc.queryForList("""
                 SELECT 'SCORE' AS src, s.score_id AS rec_id,
                        COALESCE(s.grade_point, 0) AS gp, COALESCE(s.total_score, 0) AS num_score,
-                       s.publish_time AS eff_time
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                       s.published_at AS eff_time
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND tc.course_id = ? AND s.score_status = 3
                 UNION ALL
                 SELECT 'EXCHANGE' AS src, e.convert_id AS rec_id,
                        COALESCE(e.grade_point, 0) AS gp, COALESCE(e.converted_score, 0) AS num_score,
                        e.school_audit_time AS eff_time
-                FROM exchange_score_convert e
+                FROM sel_exchange_score_convert e
                 WHERE e.student_id = ? AND e.stat_stage = ? AND e.course_id = ? AND e.audit_status = 2
                 ORDER BY gp DESC, num_score DESC, eff_time DESC, rec_id DESC
                 """, studentId, statStage, courseId, studentId, statStage, courseId);
@@ -1042,14 +1047,14 @@ public class ScoreService {
             long id = ((Number) c.get("rec_id")).longValue();
             int flag = (src.equals(bestSrc) && id == bestId) ? 1 : 0;
             if ("SCORE".equals(src)) {
-                jdbc.update("UPDATE score SET is_final = ? WHERE score_id = ?", flag, id);
+                jdbc.update("UPDATE sel_score SET is_final = ? WHERE score_id = ?", flag, id);
             } else {
-                jdbc.update("UPDATE exchange_score_convert SET is_final = ? WHERE convert_id = ?", flag, id);
+                jdbc.update("UPDATE sel_exchange_score_convert SET is_final = ? WHERE convert_id = ?", flag, id);
             }
         }
     }
 
-    /** 同事务刷新 stu_gpa、stu_term_gpa 与同专业同年级排名（严格排除 sc.study_type=3 辅修） */
+    /** 同事务刷新 sel_stu_gpa、sel_stu_term_gpa 与同专业同年级排名（严格排除 sel_sc.study_type=3 辅修） */
     private void recomputeAcademicStats(String studentId, int statStage, String term) {
         Integer stuExists = jdbc.queryForObject("SELECT COUNT(*) FROM student WHERE student_id = ?", Integer.class, studentId);
         if (stuExists == null || stuExists == 0) {
@@ -1057,8 +1062,8 @@ public class ScoreService {
         }
         List<Map<String, Object>> finalScores = jdbc.queryForList("""
                 SELECT c.credit, s.score_type, s.total_score, s.score_level, s.grade_point
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
@@ -1066,7 +1071,7 @@ public class ScoreService {
                 UNION ALL
                 SELECT c.credit, e.score_type, e.converted_score AS total_score,
                        e.converted_level AS score_level, e.grade_point
-                FROM exchange_score_convert e
+                FROM sel_exchange_score_convert e
                 JOIN course c ON e.course_id = c.course_id
                 WHERE e.student_id = ? AND e.stat_stage = ?
                   AND e.audit_status = 2 AND e.is_final = 1
@@ -1096,24 +1101,24 @@ public class ScoreService {
                 ? scoreWeighted.divide(totalCredit, 2, RoundingMode.HALF_UP) : null;
 
         jdbc.update("""
-                INSERT INTO stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, update_time)
+                INSERT INTO sel_stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, updated_at)
                 VALUES (?, ?, ?, ?, ?, NOW())
                 ON DUPLICATE KEY UPDATE
                   earned_credit = VALUES(earned_credit), failed_credit = VALUES(failed_credit),
-                  gpa = VALUES(gpa), avg_score = VALUES(avg_score), update_time = NOW()
+                  gpa = VALUES(gpa), avg_score = VALUES(avg_score), updated_at = NOW()
                 """, studentId, earned, failed, gpa, avgScore);
 
         List<Map<String, Object>> termRows = jdbc.queryForList("""
                 SELECT course_id, MAX(credit) AS credit, MAX(gp) AS best_gp FROM (
                   SELECT tc.course_id, c.credit, COALESCE(s.grade_point, 0) AS gp
-                  FROM score s JOIN sc ON s.sc_id = sc.sc_id
+                  FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                   JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                   JOIN course c ON tc.course_id = c.course_id
                   WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
                     AND tc.term = ? AND s.score_status = 3
                   UNION ALL
                   SELECT e.course_id, c.credit, COALESCE(e.grade_point, 0) AS gp
-                  FROM exchange_score_convert e JOIN course c ON e.course_id = c.course_id
+                  FROM sel_exchange_score_convert e JOIN course c ON e.course_id = c.course_id
                   WHERE e.student_id = ? AND e.stat_stage = ? AND e.term = ? AND e.audit_status = 2
                 ) t GROUP BY course_id
                 """, studentId, statStage, term, studentId, statStage, term);
@@ -1129,10 +1134,10 @@ public class ScoreService {
             }
         }
         jdbc.update("""
-                INSERT INTO stu_term_gpa (student_id, term, term_credit, term_failed_credit, update_time)
+                INSERT INTO sel_stu_term_gpa (student_id, term, term_credit, term_failed_credit, updated_at)
                 VALUES (?, ?, ?, ?, NOW())
                 ON DUPLICATE KEY UPDATE
-                  term_credit = VALUES(term_credit), term_failed_credit = VALUES(term_failed_credit), update_time = NOW()
+                  term_credit = VALUES(term_credit), term_failed_credit = VALUES(term_failed_credit), updated_at = NOW()
                 """, studentId, term, termEarned, termFailed);
 
         List<Map<String, Object>> stuMeta = jdbc.queryForList(
@@ -1142,7 +1147,7 @@ public class ScoreService {
             Object grade = stuMeta.get(0).get("grade");
             List<Map<String, Object>> peers = jdbc.queryForList("""
                     SELECT g.student_id, g.avg_score
-                    FROM stu_gpa g JOIN student st ON g.student_id = st.student_id
+                    FROM sel_stu_gpa g JOIN student st ON g.student_id = st.student_id
                     WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NOT NULL
                     ORDER BY g.avg_score DESC, g.student_id ASC
                     """, majorId, grade);
@@ -1155,7 +1160,7 @@ public class ScoreService {
                     rank = i + 1;
                     prev = cur;
                 }
-                jdbc.update("UPDATE stu_gpa SET major_rank = ?, major_rank_total = ? WHERE student_id = ?",
+                jdbc.update("UPDATE sel_stu_gpa SET major_rank = ?, major_rank_total = ? WHERE student_id = ?",
                         rank, totalPeers, peers.get(i).get("student_id"));
             }
         }
@@ -1179,7 +1184,7 @@ public class ScoreService {
     private LocalDateTime nextUniqueSubmitTime(String lessonNo) {
         LocalDateTime candidate = LocalDateTime.now().withNano(0);
         List<Timestamp> latest = jdbc.queryForList(
-                "SELECT MAX(submit_time) FROM score_audit WHERE lesson_no = ?", Timestamp.class, lessonNo);
+                "SELECT MAX(submitted_at) FROM sel_score_audit WHERE lesson_no = ?", Timestamp.class, lessonNo);
         if (!latest.isEmpty() && latest.get(0) != null) {
             LocalDateTime last = latest.get(0).toLocalDateTime().withNano(0);
             if (!candidate.isAfter(last)) {
@@ -1191,9 +1196,9 @@ public class ScoreService {
 
     private String latestVerifyCode(String lessonNo) {
         List<String> codes = jdbc.queryForList("""
-                SELECT verify_code FROM score_audit
+                SELECT verify_code FROM sel_score_audit
                 WHERE lesson_no = ?
-                ORDER BY submit_time DESC, audit_id DESC
+                ORDER BY submitted_at DESC, audit_id DESC
                 LIMIT 1
                 """, String.class, lessonNo);
         return codes.isEmpty() ? null : codes.get(0);
@@ -1238,7 +1243,7 @@ public class ScoreService {
         List<Map<String, Object>> list = jdbc.queryForList("""
                 SELECT lc.lesson_no, lc.tc_id, tc.term, tc.course_id, c.course_name, c.credit,
                        c.open_college, c.assess_type, tc.teacher_id, tc.class_ids
-                FROM lesson_class lc
+                FROM sel_lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE lc.lesson_no = ?

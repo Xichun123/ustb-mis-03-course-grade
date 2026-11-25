@@ -40,15 +40,15 @@ public class CorrectionService {
                        sc.student_id, st.student_name, tc.term, tc.tc_id,
                        lc.lesson_no, c.course_id, c.course_name, c.credit,
                        s.exam_type, s.score_type, s.total_score, s.score_level,
-                       s.grade_point, s.publish_time,
-                       (SELECT COUNT(*) FROM score_correction cr
+                       s.grade_point, s.published_at AS publish_time,
+                       (SELECT COUNT(*) FROM sel_score_correction cr
                         WHERE cr.score_id = s.score_id AND cr.apply_status IN (0, 1)) AS pending_count
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 LEFT JOIN student st ON sc.student_id = st.student_id
-                LEFT JOIN lesson_class lc ON tc.tc_id = lc.tc_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 WHERE s.score_status = 3
                 """);
         List<Object> params = new ArrayList<>();
@@ -69,7 +69,7 @@ public class CorrectionService {
             params.add(like);
             params.add(like);
         }
-        sql.append(" ORDER BY s.publish_time DESC, s.score_id DESC LIMIT 100");
+        sql.append(" ORDER BY s.published_at DESC, s.score_id DESC LIMIT 100");
         return jdbc.queryForList(sql.toString(), params.toArray());
     }
 
@@ -86,8 +86,8 @@ public class CorrectionService {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT s.score_id, s.score_type, s.total_score, s.score_level, s.score_status,
                        s.input_teacher_id, tc.teacher_id
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 WHERE s.score_id = ? FOR UPDATE
                 """, scoreId);
@@ -105,7 +105,7 @@ public class CorrectionService {
         }
 
         Integer pending = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM score_correction WHERE score_id = ? AND apply_status IN (0, 1)",
+                "SELECT COUNT(*) FROM sel_score_correction WHERE score_id = ? AND apply_status IN (0, 1)",
                 Integer.class, scoreId);
         if (pending != null && pending > 0) {
             throw BizException.conflict("DUPLICATE_PENDING", "该成绩已存在待审核的更正申请，请勿重复提交");
@@ -161,9 +161,9 @@ public class CorrectionService {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("""
-                    INSERT INTO score_correction
+                    INSERT INTO sel_score_correction
                       (score_id, apply_teacher_id, old_score, new_score, old_level, new_level,
-                       apply_reason, apply_time, apply_status)
+                       apply_reason, submitted_at, apply_status)
                     VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 0)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setLong(1, scoreId);
@@ -192,16 +192,16 @@ public class CorrectionService {
                        c.course_id, c.course_name, c.open_college, s.score_type,
                        cr.apply_teacher_id, emp.emp_name AS teacher_name,
                        cr.old_score, cr.new_score, cr.old_level, cr.new_level,
-                       cr.apply_reason, cr.apply_time, cr.apply_status,
+                       cr.apply_reason, cr.submitted_at AS apply_time, cr.apply_status,
                        cr.college_auditor_id, cr.college_audit_opinion, cr.college_audit_time,
-                       cr.auditor_id, cr.audit_opinion, cr.audit_time
-                FROM score_correction cr
-                JOIN score s ON cr.score_id = s.score_id
-                JOIN sc ON s.sc_id = sc.sc_id
+                       cr.auditor_id, cr.audit_opinion, cr.reviewed_at AS audit_time
+                FROM sel_score_correction cr
+                JOIN sel_score s ON cr.score_id = s.score_id
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 LEFT JOIN student st ON sc.student_id = st.student_id
-                LEFT JOIN lesson_class lc ON tc.tc_id = lc.tc_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 LEFT JOIN t_employee emp ON cr.apply_teacher_id = emp.emp_id
                 WHERE 1=1
                 """);
@@ -240,9 +240,9 @@ public class CorrectionService {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT cr.*, s.score_type, s.total_score AS cur_score, s.score_level AS cur_level,
                        sc.student_id, sc.stat_stage, tc.course_id, tc.term, c.open_college
-                FROM score_correction cr
-                JOIN score s ON cr.score_id = s.score_id
-                JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score_correction cr
+                JOIN sel_score s ON cr.score_id = s.score_id
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE cr.apply_id = ? FOR UPDATE
@@ -261,7 +261,7 @@ public class CorrectionService {
 
         if (decision == 2) {
             jdbc.update("""
-                    UPDATE score_correction
+                    UPDATE sel_score_correction
                     SET apply_status = 3, college_auditor_id = ?, college_audit_opinion = ?, college_audit_time = NOW()
                     WHERE apply_id = ? AND apply_status = 0
                     """, user.empId(), op, applyId);
@@ -280,7 +280,7 @@ public class CorrectionService {
             }
             BigDecimal newVal = new BigDecimal(String.valueOf(row.get("new_score")));
             newGp = calcPercentGradePoint(newVal);
-            jdbc.update("UPDATE score SET total_score = ?, grade_point = ? WHERE score_id = ?",
+            jdbc.update("UPDATE sel_score SET total_score = ?, grade_point = ? WHERE score_id = ?",
                     newVal, newGp, scoreId);
         } else {
             String oldLv = String.valueOf(row.get("old_level"));
@@ -290,7 +290,7 @@ public class CorrectionService {
             }
             String newLv = String.valueOf(row.get("new_level"));
             newGp = calcLevelGradePoint(newLv);
-            jdbc.update("UPDATE score SET score_level = ?, grade_point = ? WHERE score_id = ?",
+            jdbc.update("UPDATE sel_score SET score_level = ?, grade_point = ? WHERE score_id = ?",
                     newLv, newGp, scoreId);
         }
 
@@ -304,14 +304,14 @@ public class CorrectionService {
 
         String finalOpinion = op.isEmpty() ? "学院审批通过，成绩已生效" : op;
         jdbc.update("""
-                UPDATE score_correction
+                UPDATE sel_score_correction
                 SET apply_status = 2,
                     college_auditor_id = ?,
                     college_audit_opinion = ?,
                     college_audit_time = NOW(),
                     auditor_id = ?,
                     audit_opinion = ?,
-                    audit_time = NOW()
+                    reviewed_at = NOW()
                 WHERE apply_id = ? AND apply_status = 0
                 """, user.empId(), finalOpinion, user.empId(), finalOpinion, applyId);
 
@@ -330,10 +330,10 @@ public class CorrectionService {
                 SELECT CAST(cr.apply_id AS CHAR) AS apply_id,
                        tc.term, c.course_id, c.course_name, s.score_type,
                        cr.old_score, cr.new_score, cr.old_level, cr.new_level,
-                       s.grade_point AS new_grade_point, cr.apply_reason, cr.audit_time
-                FROM score_correction cr
-                JOIN score s ON cr.score_id = s.score_id
-                JOIN sc ON s.sc_id = sc.sc_id
+                       s.grade_point AS new_grade_point, cr.apply_reason, cr.reviewed_at AS audit_time
+                FROM sel_score_correction cr
+                JOIN sel_score s ON cr.score_id = s.score_id
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND cr.apply_status = 2
@@ -344,7 +344,7 @@ public class CorrectionService {
             sql.append(" AND tc.term = ? ");
             params.add(term.trim());
         }
-        sql.append(" ORDER BY cr.audit_time DESC");
+        sql.append(" ORDER BY cr.reviewed_at DESC");
         return jdbc.queryForList(sql.toString(), params.toArray());
     }
 
@@ -374,12 +374,12 @@ public class CorrectionService {
 
     private void recomputeIsFinalForCourse(String studentId, int statStage, String courseId) {
         List<Map<String, Object>> published = jdbc.queryForList("""
-                SELECT s.score_id, s.total_score, s.grade_point, s.publish_time
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                SELECT s.score_id, s.total_score, s.grade_point, s.published_at
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND tc.course_id = ? AND s.score_status = 3
-                ORDER BY COALESCE(s.grade_point, 0) DESC, COALESCE(s.total_score, 0) DESC, s.publish_time DESC, s.score_id DESC
+                ORDER BY COALESCE(s.grade_point, 0) DESC, COALESCE(s.total_score, 0) DESC, s.published_at DESC, s.score_id DESC
                 """, studentId, statStage, courseId);
         if (published.isEmpty()) {
             return;
@@ -387,19 +387,19 @@ public class CorrectionService {
         long bestId = ((Number) published.get(0).get("score_id")).longValue();
         for (Map<String, Object> r : published) {
             long id = ((Number) r.get("score_id")).longValue();
-            jdbc.update("UPDATE score SET is_final = ? WHERE score_id = ?", (id == bestId ? 1 : 0), id);
+            jdbc.update("UPDATE sel_score SET is_final = ? WHERE score_id = ?", (id == bestId ? 1 : 0), id);
         }
     }
 
     /**
-     * 5.4 同事务刷新 stu_gpa、stu_term_gpa 与专业年级排名（与 4.3 统计算法一致：
-     * 严格排除 sc.study_type=3 辅修成绩，并联合 exchange_score_convert 生效记录）。
+     * 5.4 同事务刷新 sel_stu_gpa、sel_stu_term_gpa 与专业年级排名（与 4.3 统计算法一致：
+     * 严格排除 sel_sc.study_type=3 辅修成绩，并联合 sel_exchange_score_convert 生效记录）。
      */
     private void recomputeAcademicStatsSnapshot(String studentId, int statStage, String term) {
         List<Map<String, Object>> finalScores = jdbc.queryForList("""
                 SELECT c.credit, s.score_type, s.total_score, s.score_level, s.grade_point
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
@@ -407,7 +407,7 @@ public class CorrectionService {
                 UNION ALL
                 SELECT c.credit, e.score_type, e.converted_score AS total_score,
                        e.converted_level AS score_level, e.grade_point
-                FROM exchange_score_convert e
+                FROM sel_exchange_score_convert e
                 JOIN course c ON e.course_id = c.course_id
                 WHERE e.student_id = ? AND e.stat_stage = ?
                   AND e.audit_status = 2 AND e.is_final = 1
@@ -439,21 +439,21 @@ public class CorrectionService {
                 ? scoreWeighted.divide(totalCredit, 2, RoundingMode.HALF_UP) : null;
 
         jdbc.update("""
-                INSERT INTO stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, update_time)
+                INSERT INTO sel_stu_gpa (student_id, earned_credit, failed_credit, gpa, avg_score, updated_at)
                 VALUES (?, ?, ?, ?, ?, NOW())
                 ON DUPLICATE KEY UPDATE
                   earned_credit = VALUES(earned_credit),
                   failed_credit = VALUES(failed_credit),
                   gpa = VALUES(gpa),
                   avg_score = VALUES(avg_score),
-                  update_time = NOW()
+                  updated_at = NOW()
                 """, studentId, earned, failed, gpa, avgScore);
 
-        // 同步刷新本学期学业统计 stu_term_gpa（同样排除辅修）
+        // 同步刷新本学期学业统计 sel_stu_term_gpa（同样排除辅修）
         List<Map<String, Object>> termRows = jdbc.queryForList("""
                 SELECT tc.course_id, MAX(c.credit) AS credit, MAX(COALESCE(s.grade_point, 0)) AS best_gp
-                FROM score s
-                JOIN sc ON s.sc_id = sc.sc_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
                 JOIN teaching_class tc ON sc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id
                 WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
@@ -472,12 +472,12 @@ public class CorrectionService {
             }
         }
         jdbc.update("""
-                INSERT INTO stu_term_gpa (student_id, term, term_credit, term_failed_credit, update_time)
+                INSERT INTO sel_stu_term_gpa (student_id, term, term_credit, term_failed_credit, updated_at)
                 VALUES (?, ?, ?, ?, NOW())
                 ON DUPLICATE KEY UPDATE
                   term_credit = VALUES(term_credit),
                   term_failed_credit = VALUES(term_failed_credit),
-                  update_time = NOW()
+                  updated_at = NOW()
                 """, studentId, term, termEarned, termFailed);
 
         // 同步刷新同专业同年级排名（同分并列跳号）
@@ -488,7 +488,7 @@ public class CorrectionService {
             Object grade = stuMeta.get(0).get("grade");
             List<Map<String, Object>> peers = jdbc.queryForList("""
                     SELECT g.student_id, g.avg_score
-                    FROM stu_gpa g
+                    FROM sel_stu_gpa g
                     JOIN student st ON g.student_id = st.student_id
                     WHERE st.major_id = ? AND st.grade = ? AND g.avg_score IS NOT NULL
                     ORDER BY g.avg_score DESC, g.student_id ASC
@@ -502,7 +502,7 @@ public class CorrectionService {
                     currentRank = i + 1;
                     prevScore = cur;
                 }
-                jdbc.update("UPDATE stu_gpa SET major_rank = ?, major_rank_total = ? WHERE student_id = ?",
+                jdbc.update("UPDATE sel_stu_gpa SET major_rank = ?, major_rank_total = ? WHERE student_id = ?",
                         currentRank, totalPeers, peers.get(i).get("student_id"));
             }
         }
