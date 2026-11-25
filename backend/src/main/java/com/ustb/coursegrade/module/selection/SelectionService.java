@@ -2,6 +2,8 @@ package com.ustb.coursegrade.module.selection;
 
 import com.ustb.coursegrade.common.BizException;
 import com.ustb.coursegrade.common.auth.*;
+import com.ustb.coursegrade.module.selection.SelectionCatalogProperties.CourseType;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,12 +17,20 @@ import static com.ustb.coursegrade.module.selection.SelectionRules.*;
 
 /** 业务②：仅使用当前 v9 真实结构，状态、日志与人数同事务提交。 */
 @Service
+@EnableConfigurationProperties(SelectionCatalogProperties.class)
 public class SelectionService {
     private final JdbcTemplate jdbc;
     private final Clock clock;
+    private final SelectionCatalogProperties catalog;
     @Autowired
-    public SelectionService(JdbcTemplate jdbc){this(jdbc,Clock.system(ZoneId.of("Asia/Shanghai")));}
-    SelectionService(JdbcTemplate jdbc,Clock clock){this.jdbc=jdbc;this.clock=clock;}
+    public SelectionService(JdbcTemplate jdbc, SelectionCatalogProperties catalog) {
+        this(jdbc, Clock.system(ZoneId.of("Asia/Shanghai")), catalog);
+    }
+    SelectionService(JdbcTemplate jdbc, Clock clock, SelectionCatalogProperties catalog) {
+        this.jdbc = jdbc;
+        this.clock = clock;
+        this.catalog = catalog;
+    }
     private LocalDateTime now(){return LocalDateTime.now(clock);}
     public record Application(Integer roundId,String tcId,Integer studyType,Integer priority,String expectedVersion){}
     public record Withdrawal(Integer roundId,String expectedVersion,Boolean confirmed){}
@@ -30,9 +40,9 @@ public class SelectionService {
         CurrentUser user=UserContext.requireUser();
         List<Map<String,Object>> rounds=jdbc.queryForList("SELECT * FROM select_round WHERE round_status IN (2,3,4) ORDER BY start_time DESC,round_id DESC");
         for(var r:rounds)r.put("window_open",open(r));
-        return Map.of("user",user,"rounds",rounds,"terms",jdbc.queryForList("SELECT DISTINCT term FROM teaching_class WHERE term IS NOT NULL ORDER BY term DESC",String.class),"server_time",now(),"stop_write_enabled",false);
+        return Map.of("user",user,"rounds",rounds,"terms",jdbc.queryForList("SELECT DISTINCT term FROM teaching_class WHERE term IS NOT NULL ORDER BY term DESC",String.class),"server_time",now(),"stop_write_enabled",false,"course_types",CourseType.options());
     }
-    public Map<String,Object> courses(int roundId,String keyword,int page,int size){
+    public Map<String,Object> courses(int roundId,String keyword,int page,int size,CourseType filter){
         CurrentUser u=UserContext.requireRole(RoleEnum.STUDENT);var round=visibleRound(roundId);student(u.studentId(),text(round,"term"),false);
         List<Map<String,Object>> classes=jdbc.queryForList("""
           SELECT tc.*,c.course_name,c.course_type,c.credit,c.course_level,c.open_college,
@@ -42,16 +52,74 @@ public class SelectionService {
           WHERE rc.round_id=? AND tc.term=? AND tc.tc_status='4' AND (c.course_id LIKE ? OR c.course_name LIKE ?)
           ORDER BY c.course_id,tc.tc_id
           """,u.studentId(),roundId,round.get("term"),"%"+keyword+"%","%"+keyword+"%");
-        Map<String,Map<String,Object>> grouped=new LinkedHashMap<>();
-        for(var tc:classes){
-            tc.put("actual_num",count(text(tc,"tc_id")));tc.put("schedule",schedule(text(tc,"tc_id")));
-            tc.put("version",version(tc));tc.put("sc_id",stringId(tc.get("sc_id")));
-            tc.put("preferences",jdbc.queryForList("SELECT priority,COUNT(*) AS applicants FROM sc WHERE round_id=? AND tc_id=? AND select_status IN (0,1) GROUP BY priority ORDER BY priority",roundId,tc.get("tc_id")));
-            var course=grouped.computeIfAbsent(text(tc,"course_id"),id->{Map<String,Object> item=new LinkedHashMap<>();for(String key:List.of("course_id","course_name","course_type","credit","course_level","open_college"))item.put(key,tc.get(key));item.put("classes",new ArrayList<Map<String,Object>>());return item;});
-            @SuppressWarnings("unchecked") var list=(List<Map<String,Object>>)course.get("classes");list.add(tc);
+        Map<String, List<Map<String, Object>>> byCourse = new LinkedHashMap<>();
+        for (var tc : classes) {
+            String courseId = text(tc, "course_id");
+            CourseType type = catalog.courseType(courseId, text(tc, "course_type"));
+            if (filter != null && filter != type) continue;
+            tc.put("course_type_label", type.label());
+            byCourse.computeIfAbsent(courseId, id -> new ArrayList<>()).add(tc);
         }
-        var items=new ArrayList<>(grouped.values());int start=Math.min((page-1)*size,items.size());
-        return Map.of("items",items.subList(start,Math.min(start+size,items.size())),"total",items.size(),"round",round,"summary",summary(u.studentId(),text(round,"term")));
+
+        var groups = new ArrayList<>(byCourse.values());
+        int start = Math.min((page - 1) * size, groups.size());
+        var pageGroups = groups.subList(start, Math.min(start + size, groups.size()));
+        var classIds = pageGroups.stream().flatMap(List::stream).map(tc -> text(tc, "tc_id")).toList();
+        var limitsByClass = courseLimits(classIds);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (var group : pageGroups) {
+            for (var tc : group) {
+                String id = text(tc, "tc_id");
+                tc.put("actual_num", count(id));
+                tc.put("schedule", schedule(id));
+                tc.put("version", version(tc));
+                tc.put("sc_id", stringId(tc.get("sc_id")));
+                tc.put("preferences", jdbc.queryForList("SELECT priority,COUNT(*) AS applicants FROM sc WHERE round_id=? AND tc_id=? AND select_status IN (0,1) GROUP BY priority ORDER BY priority", roundId, id));
+                tc.put("audience", audience(tc, limitsByClass.getOrDefault(id, Map.of())));
+            }
+            var first = group.get(0);
+            Map<String, Object> course = new LinkedHashMap<>();
+            for (String key : List.of("course_id", "course_name", "course_type", "course_type_label", "credit", "course_level", "open_college")) {
+                course.put(key, first.get(key));
+            }
+            var sharedAudience = first.get("audience");
+            boolean sameAudience = group.stream().allMatch(tc -> sharedAudience.equals(tc.get("audience")));
+            course.put("audience", sameAudience ? sharedAudience : null);
+            course.put("classes", group);
+            items.add(course);
+        }
+        return Map.of("items", items, "total", groups.size(), "round", round, "summary", summary(u.studentId(), text(round,"term")));
+    }
+
+    private Map<String, Map<Integer, List<String>>> courseLimits(List<String> classIds) {
+        Map<String, Map<Integer, List<String>>> byClass = new HashMap<>();
+        if (classIds.isEmpty()) return byClass;
+
+        String placeholders = String.join(",", Collections.nCopies(classIds.size(), "?"));
+        String sql = "SELECT tc_id,limit_type,limit_value FROM select_limit WHERE tc_id IN (" + placeholders
+                + ") ORDER BY tc_id,limit_type,limit_value";
+        for (var row : jdbc.queryForList(sql, classIds.toArray())) {
+            byClass.computeIfAbsent(text(row, "tc_id"), id -> new HashMap<>())
+                   .computeIfAbsent(number(row.get("limit_type")), type -> new ArrayList<>())
+                   .add(text(row, "limit_value"));
+        }
+        return byClass;
+    }
+
+    private Map<String, Object> audience(Map<String, Object> tc, Map<Integer, List<String>> limits) {
+        Map<String, Object> audience = new LinkedHashMap<>();
+        audience.put("grades", limits.getOrDefault(1, List.of()));
+        audience.put("majors", limits.getOrDefault(2, List.of()));
+        audience.put("colleges", limits.getOrDefault(3, List.of()));
+        audience.put("levels", limits.getOrDefault(4, List.of()));
+        if ("1".equals(text(tc, "tc_type"))) {
+            var names = Arrays.stream(text(tc, "class_ids").split("[,，]"))
+                    .map(String::trim).filter(name -> !name.isEmpty()).distinct().sorted().toList();
+            audience.put("class_names", names);
+        }
+        String special = catalog.specialRequirements().get(text(tc, "tc_id"));
+        if (special != null && !special.isBlank()) audience.put("special_requirement", special.strip());
+        return audience;
     }
     public Map<String,Object> results(String term){
         CurrentUser u=UserContext.requireRole(RoleEnum.STUDENT);

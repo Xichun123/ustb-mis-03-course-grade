@@ -2,9 +2,13 @@ package com.ustb.coursegrade.module.selection;
 
 import com.ustb.coursegrade.common.BizException;
 import com.ustb.coursegrade.common.auth.*;
+import com.ustb.coursegrade.module.selection.SelectionCatalogProperties.CourseType;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.*;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
@@ -49,7 +53,11 @@ class SelectionServiceTest {
             for(int round:List.of(1,2))jdbc.update("INSERT INTO round_class VALUES(?,?)",round,id);
         }
         jdbc.update("INSERT INTO sys_code_dict VALUES('teacher_map','T1','E1',1)");
-        var target=new SelectionService(jdbc,Clock.fixed(Instant.parse("2026-11-24T04:00:00Z"),ZoneId.of("Asia/Shanghai")));
+        var catalog = new Binder(new MapConfigurationPropertySource(Map.of(
+                "selection.catalog.course-types[C002]", "FOREIGN_LANGUAGE",
+                "selection.catalog.special-requirements[B]", "大学英语四级成绩 > 500 分，或六级成绩 > 500 分"
+        ))).bind("selection.catalog", Bindable.of(SelectionCatalogProperties.class)).get();
+        var target=new SelectionService(jdbc,Clock.fixed(Instant.parse("2026-11-24T04:00:00Z"),ZoneId.of("Asia/Shanghai")),catalog);
         var proxy=new ProxyFactory(target);proxy.setProxyTargetClass(true);
         proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(ds),new AnnotationTransactionAttributeSource()));
         service=(SelectionService)proxy.getProxy();asStudent("S1");
@@ -70,6 +78,47 @@ class SelectionServiceTest {
     @Test void capacityCannotBeExceeded(){service.enroll(application("A"));asStudent("S2");assertThrows(BizException.class,()->service.enroll(application("A")));assertEquals(1,count("SELECT COUNT(*) FROM sc"));}
     @Test void creditIncludesPendingApplications(){jdbc.update("UPDATE select_round SET max_credit=5 WHERE round_id=1");jdbc.update("INSERT INTO sc(student_id,tc_id,round_id,study_type,is_exempt_attend,stu_level,stat_stage,priority,select_status,select_time) VALUES('S1','B',1,1,0,'本科',1,1,0,CURRENT_TIMESTAMP)");var e=assertThrows(BizException.class,()->service.enroll(application("A")));assertTrue(e.getMessage().contains("学分"));}
     @Test void sameLimitTypeIsOrAndDifferentTypesAreAnd(){jdbc.update("INSERT INTO select_limit(tc_id,limit_type,limit_value) VALUES('A',1,'2023'),('A',1,'2024'),('A',2,'OTHER')");assertThrows(BizException.class,()->service.enroll(application("A")));jdbc.update("INSERT INTO select_limit(tc_id,limit_type,limit_value) VALUES('A',2,'M1')");assertDoesNotThrow(()->service.enroll(application("A")));}
+
+    @Test void courseTypeFilterUsesConfiguredCategoriesAndLegacyCodesBeforePaging() {
+        jdbc.update("UPDATE course SET course_type='13' WHERE course_id='C002'");
+        jdbc.update("UPDATE course SET course_type='14' WHERE course_id='C003'");
+
+        var required = service.courses(1, "", 1, 1, CourseType.REQUIRED);
+        assertEquals(1, required.get("total"));
+        assertEquals("必修", rows(required.get("items")).get(0).get("course_type_label"));
+        var foreign = service.courses(1, "", 1, 1, CourseType.FOREIGN_LANGUAGE);
+        assertEquals(1, foreign.get("total"));
+        assertEquals("素质拓展课-外语", rows(foreign.get("items")).get(0).get("course_type_label"));
+        assertEquals("C002", rows(foreign.get("items")).get(0).get("course_id"));
+        assertTrue(rows(service.courses(1, "", 2, 1, CourseType.FOREIGN_LANGUAGE).get("items")).isEmpty());
+        var professional = service.courses(1, "C003", 1, 1, CourseType.PROFESSIONAL_EXTENSION);
+        assertEquals("专业拓展课", rows(professional.get("items")).get(0).get("course_type_label"));
+    }
+
+    @Test void courseListKeepsAudienceAndSpecialRequirementsWithTheirTeachingClass() {
+        jdbc.update("INSERT INTO teaching_class VALUES('B2',?,'C002','T1','信管242，信管243',1,'1','4',0)", TERM);
+        jdbc.update("INSERT INTO round_class VALUES(1,'B2')");
+        jdbc.update("INSERT INTO select_limit(tc_id,limit_type,limit_value) VALUES "
+                + "('B',1,'2024'),('B',1,'2025'),('B',2,'120102'),('B',3,'0001'),('B',4,'本科'),('B2',1,'2026')");
+
+        var course = rows(service.courses(1, "C002", 1, 10, null).get("items")).get(0);
+        assertNull(course.get("audience"));
+        var classes = rows(course.get("classes"));
+        assertEquals(Map.of(
+                "grades", List.of("2024", "2025"), "majors", List.of("120102"),
+                "colleges", List.of("0001"), "levels", List.of("本科"),
+                "special_requirement", "大学英语四级成绩 > 500 分，或六级成绩 > 500 分"
+        ), classes.get(0).get("audience"));
+        assertEquals(Map.of(
+                "grades", List.of("2026"), "majors", List.of(),
+                "colleges", List.of(), "levels", List.of(), "class_names", List.of("信管242", "信管243")
+        ), classes.get(1).get("audience"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> rows(Object value) {
+        return (List<Map<String, Object>>) value;
+    }
     @Test void staleWithdrawalIsRejectedAndHistoryIsKept(){var r=service.enroll(application("A"));String id=r.get("sc_id").toString();assertThrows(BizException.class,()->service.withdraw(id,new SelectionService.Withdrawal(1,"stale",true)));var drop=service.withdraw(id,new SelectionService.Withdrawal(1,r.get("version").toString(),true));assertEquals(3,SelectionRules.number(drop.get("select_status")));assertEquals(0,count("SELECT actual_num FROM teaching_class WHERE tc_id='A'"));assertEquals(2,count("SELECT COUNT(*) FROM select_log"));assertEquals(1,count("SELECT COUNT(*) FROM sc"));}
     @Test void downstreamScoresProtectWithdrawal(){var r=service.enroll(application("A"));jdbc.update("INSERT INTO score(sc_id,score_status) VALUES(?,0)",r.get("sc_id"));assertThrows(BizException.class,()->service.withdraw(r.get("sc_id").toString(),new SelectionService.Withdrawal(1,r.get("version").toString(),true)));assertEquals(1,count("SELECT actual_num FROM teaching_class WHERE tc_id='A'"));}
     @Test void logFailureRollsBackEnrollmentAndCount(){jdbc.execute("ALTER TABLE select_log ADD CONSTRAINT block_log CHECK(action_type<>1)");assertThrows(Exception.class,()->service.enroll(application("A")));assertEquals(0,count("SELECT COUNT(*) FROM sc"));assertEquals(0,count("SELECT actual_num FROM teaching_class WHERE tc_id='A'"));}
