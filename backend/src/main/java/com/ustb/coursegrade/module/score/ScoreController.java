@@ -1,8 +1,10 @@
 package com.ustb.coursegrade.module.score;
 
 import com.ustb.coursegrade.common.ApiResponse;
+import com.ustb.coursegrade.common.BizException;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -40,8 +42,7 @@ public class ScoreController {
     public ApiResponse<Map<String, Object>> saveGrades(
             @PathVariable String lessonNo, @RequestBody Map<String, Object> body) {
         List<Map<String, Object>> items = (List<Map<String, Object>>) body.getOrDefault("items", List.of());
-        Integer ratio = body.get("usual_ratio") == null ? null
-                : Integer.parseInt(String.valueOf(body.get("usual_ratio")));
+        Integer ratio = parseRatio(body.get("usual_ratio"), false);
         return ApiResponse.ok("成绩已保存", scoreService.saveGrades(lessonNo, items, ratio));
     }
 
@@ -49,7 +50,7 @@ public class ScoreController {
     @PutMapping("/classes/{lessonNo}/ratio")
     public ApiResponse<Map<String, Object>> setClassRatio(
             @PathVariable String lessonNo, @RequestBody Map<String, Object> body) {
-        int ratio = Integer.parseInt(String.valueOf(body.getOrDefault("usual_ratio", 30)));
+        int ratio = parseRatio(body.get("usual_ratio"), true);
         Map<String, Object> data = scoreService.setClassRatio(lessonNo, ratio);
         return ApiResponse.ok(String.valueOf(data.get("message")), data);
     }
@@ -59,14 +60,47 @@ public class ScoreController {
     public ApiResponse<Map<String, Object>> importGrades(
             @PathVariable String lessonNo,
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
-            @RequestParam(value = "usual_ratio", required = false) Integer usualRatio,
+            @RequestParam(value = "usual_ratio", required = false) String usualRatio,
             @RequestParam(value = "dry_run", defaultValue = "false") boolean dryRun) throws java.io.IOException {
         if (file == null || file.isEmpty()) {
             return ApiResponse.error("EMPTY_FILE", "请选择要上传的 Excel 文件");
         }
+        Integer ratio = parseRatio(usualRatio, false);
         Map<String, Object> data = scoreService.importGrades(
-                lessonNo, file.getInputStream(), file.getOriginalFilename(), usualRatio, dryRun);
+                lessonNo, file.getInputStream(), file.getOriginalFilename(), ratio, dryRun);
         return ApiResponse.ok(String.valueOf(data.get("message")), data);
+    }
+
+    /** 兼容统一字典 DECIMAL(5,2) 格式（如 "30.00"），同时要求平时占比必须为 0~100 的整数 */
+    static Integer parseRatio(Object raw, boolean required) {
+        if (raw == null) {
+            if (required) {
+                throw BizException.unprocessable("INVALID_RATIO", "请输入课堂平时占比（0~100 整数）");
+            }
+            return null;
+        }
+        String text = String.valueOf(raw).trim();
+        if (text.isEmpty()) {
+            if (required) {
+                throw BizException.unprocessable("INVALID_RATIO", "请输入课堂平时占比（0~100 整数）");
+            }
+            return null;
+        }
+        try {
+            BigDecimal bd = new BigDecimal(text).stripTrailingZeros();
+            if (bd.scale() > 0) {
+                throw BizException.unprocessable("INVALID_RATIO", "平时占比须为 0~100 之间的整数，不支持小数：" + text);
+            }
+            int value = bd.intValueExact();
+            if (value < 0 || value > 100) {
+                throw BizException.unprocessable("INVALID_RATIO", "平时占比须在 0~100 之间");
+            }
+            return value;
+        } catch (BizException e) {
+            throw e;
+        } catch (ArithmeticException | NumberFormatException e) {
+            throw BizException.unprocessable("INVALID_RATIO", "平时占比格式无效：" + text);
+        }
     }
 
     /** 3.2 总评计算与提交，返回 6 位核对码 */

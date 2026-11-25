@@ -114,6 +114,17 @@ class SelectionServiceTest {
         assertTrue(rows(service.courses(CATALOG_DEMO_ROUND, "", 2, 1, filter).get("items")).isEmpty());
     }
 
+    @Test void courseTypeFallbackFollowsUnifiedV13Codes() {
+        var props = new SelectionCatalogProperties(Map.of(), Map.of());
+        assertEquals(CourseType.REQUIRED, props.courseType("C11", "11"));
+        assertEquals(CourseType.REQUIRED, props.courseType("C12", "12"));
+        assertEquals(CourseType.REQUIRED, props.courseType("C13", "13"));
+        assertEquals(CourseType.PROFESSIONAL_EXTENSION, props.courseType("C14", "14"));
+        assertEquals(CourseType.GENERAL_ELECTIVE, props.courseType("C15", "15"));
+        assertEquals(CourseType.PRACTICE, props.courseType("C16", "16"));
+        assertEquals(CourseType.UNCLASSIFIED, props.courseType("C99", null));
+    }
+
     @Test void courseListKeepsAudienceAndSpecialRequirementsWithTheirTeachingClass() {
         loadCatalogDemo();
 

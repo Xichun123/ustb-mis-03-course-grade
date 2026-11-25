@@ -16,11 +16,11 @@ public record SelectionCatalogProperties(Map<String, CourseType> courseTypes,
     }
 
     CourseType courseType(String courseId, String code) {
-        return courseTypes.getOrDefault(courseId, switch (code) {
-            case "11", "12" -> CourseType.REQUIRED;
+        String normalized = code == null ? "" : code.trim();
+        return courseTypes.getOrDefault(courseId, switch (normalized) {
+            case "11", "12", "13" -> CourseType.REQUIRED;
             case "14" -> CourseType.PROFESSIONAL_EXTENSION;
-            case "13" -> CourseType.GENERAL_ELECTIVE;
-            case "15" -> CourseType.PUBLIC_ELECTIVE;
+            case "15" -> CourseType.GENERAL_ELECTIVE;
             case "16" -> CourseType.PRACTICE;
             default -> CourseType.UNCLASSIFIED;
         });

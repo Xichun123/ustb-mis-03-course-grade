@@ -40,9 +40,10 @@
           </div>
           <div class="toolbar">
             <el-upload
+              ref="uploadRef"
               :auto-upload="false"
               :show-file-list="false"
-              accept=".xlsx,.xls,.csv"
+              accept=".xlsx,.csv"
               :on-change="onImportFile"
             >
               <el-button :disabled="readOnly">选择 Excel 成绩表</el-button>
@@ -52,7 +53,7 @@
             <el-button type="warning" :disabled="readOnly || !importFile || importLoading" :loading="importLoading" @click="doImport">
               导入成绩
             </el-button>
-            <span class="muted">表头需包含：学号、平时成绩、期末成绩（可选考试情况）</span>
+            <span class="muted">支持 .xlsx / .csv，表头需包含：学号、平时成绩、期末成绩（等级制课堂填等级成绩，可选考试情况）</span>
           </div>
           <el-table :data="roster.students" border stripe max-height="440">
             <el-table-column prop="student_id" label="学号" width="135" />
@@ -62,30 +63,31 @@
               <template #default="{ row }">{{ { 1: '初修', 2: '重修', 3: '辅修' }[row.study_type] || '初修' }}</template>
             </el-table-column>
             <el-table-column label="平时占比%" width="100">
-              <template #default>
-                <span>{{ classRatio }}%</span>
+              <template #default="{ row }">
+                <span v-if="isLockedRow(row)">{{ row.usual_ratio ?? '—' }}<template v-if="row.usual_ratio != null">%</template></span>
+                <span v-else>{{ classRatio }}%</span>
               </template>
             </el-table-column>
             <el-table-column label="平时成绩" width="120">
               <template #default="{ row }">
-                <el-input-number v-if="row.score_type === 1" v-model="row.usual_score" :min="0" :max="100" :precision="1" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" />
+                <el-input-number v-if="row.score_type === 1" v-model="row.usual_score" :min="0" :max="100" :precision="1" :disabled="readOnly || isLockedRow(row)" size="small" />
                 <span v-else class="muted">等级制</span>
               </template>
             </el-table-column>
             <el-table-column label="期末/等级" width="125">
               <template #default="{ row }">
-                <el-input-number v-if="row.score_type === 1" v-model="row.exam_score" :min="0" :max="100" :precision="1" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" />
-                <el-select v-else-if="row.score_type === 2" v-model="row.score_level" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" placeholder="选等级">
+                <el-input-number v-if="row.score_type === 1" v-model="row.exam_score" :min="0" :max="100" :precision="1" :disabled="readOnly || isLockedRow(row)" size="small" />
+                <el-select v-else-if="row.score_type === 2" v-model="row.score_level" :disabled="readOnly || isLockedRow(row)" size="small" placeholder="选等级">
                   <el-option v-for="lv in ['优', '良', '中', '及格', '不及格']" :key="lv" :value="lv" :label="lv" />
                 </el-select>
-                <el-select v-else v-model="row.score_level" :disabled="readOnly || row.score_status === 1 || row.score_status === 2 || row.score_status === 3" size="small" placeholder="选等级">
+                <el-select v-else v-model="row.score_level" :disabled="readOnly || isLockedRow(row)" size="small" placeholder="选等级">
                   <el-option v-for="lv in ['合格', '不合格']" :key="lv" :value="lv" :label="lv" />
                 </el-select>
               </template>
             </el-table-column>
             <el-table-column label="考试情况" width="110">
               <template #default="{ row }">
-                <el-select v-model="row.exam_flag" :disabled="readOnly" size="small">
+                <el-select v-model="row.exam_flag" :disabled="readOnly || isLockedRow(row)" size="small">
                   <el-option :value="0" label="正常" />
                   <el-option :value="1" label="缺考" />
                   <el-option :value="2" label="缓考" />
@@ -260,7 +262,33 @@
         <el-form-item label="外校学分"><el-input-number v-model="exchangeForm.ext_credit" :min="0.5" :precision="1" controls-position="right" style="width: 100%" /></el-form-item>
         <el-form-item label="原始成绩"><el-input v-model="exchangeForm.ext_score_raw" placeholder="如 92 / A-" /></el-form-item>
         <el-form-item label="成绩单编号"><el-input v-model="exchangeForm.proof_no" /></el-form-item>
-        <el-form-item label="本校课程号"><el-input v-model="exchangeForm.course_id" /></el-form-item>
+        <el-form-item label="本校对应课程">
+          <el-select
+            v-model="exchangeForm.course_id"
+            filterable
+            remote
+            reserve-keyword
+            allow-create
+            default-first-option
+            clearable
+            :remote-method="searchCourseCandidates"
+            :loading="loadingCandidates"
+            placeholder="输入本校课程名或课程号检索"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="c in courseCandidates"
+              :key="c.course_id"
+              :value="c.course_id"
+              :label="`${c.course_id} ${c.course_name}（${c.course_type_name} · ${c.credit}学分）`"
+            >
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px">
+                <span>{{ c.course_id }} {{ c.course_name }}</span>
+                <el-tag size="small" :type="c.required ? 'warning' : 'info'">{{ c.course_type_name }}</el-tag>
+              </div>
+            </el-option>
+          </el-select>
+        </el-form-item>
         <el-form-item label="按必修认定">
           <el-checkbox v-model="exchangeForm.ext_required">外校必修学分直接对应本校必修课（本校课程须为必修）</el-checkbox>
         </el-form-item>
@@ -338,31 +366,47 @@ async function loadClasses() {
   }
 }
 
-async function openClass(row) {
-  currentClass.value = row
-  const res = await scoreApi.getRoster(row.lesson_no)
-  roster.students = res.data.students || []
-  roster.ratio_min = res.data.ratio_min
-  roster.verify_code = res.data.verify_code
-  classRatio.value = res.data.usual_ratio ?? res.data.ratio_min ?? 30
-  roster.students.forEach((s) => {
-    if (s.usual_ratio == null) s.usual_ratio = classRatio.value
-    if (s.exam_flag == null) s.exam_flag = 0
-    if (s.score_type == null) s.score_type = 1
-  })
-}
-
-async function applyRatio() {
-  await scoreApi.setClassRatio(currentClass.value.lesson_no, classRatio.value)
-  ElMessage.success(`课堂平时占比已设为 ${classRatio.value}%`)
-  await openClass(currentClass.value)
-}
-
+const isLockedRow = (row) => row && [1, 2, 3].includes(row.score_status)
+const uploadRef = ref(null)
 const importFile = ref(null)
 const importDryRun = ref(false)
 const importLoading = ref(false)
 const importVisible = ref(false)
 const importResult = reactive({ message: '', failed: 0, errors: [] })
+
+async function openClass(row, options = {}) {
+  const switched = currentClass.value?.lesson_no !== row.lesson_no
+  currentClass.value = row
+  if (switched || !options.keepFile) {
+    importFile.value = null
+    importDryRun.value = false
+    uploadRef.value?.clearFiles?.()
+  }
+  const res = await scoreApi.getRoster(row.lesson_no)
+  const defaultScoreType = res.data.default_score_type || 1
+  roster.students = res.data.students || []
+  roster.ratio_min = res.data.ratio_min
+  roster.verify_code = res.data.verify_code
+  classRatio.value = options.overrideRatio ?? res.data.usual_ratio ?? res.data.ratio_min ?? 30
+  roster.students.forEach((s) => {
+    if (s.usual_ratio == null) s.usual_ratio = classRatio.value
+    if (s.exam_flag == null) s.exam_flag = 0
+    if (s.score_type == null) s.score_type = defaultScoreType
+  })
+}
+
+async function applyRatio() {
+  const targetRatio = classRatio.value
+  const res = await scoreApi.setClassRatio(currentClass.value.lesson_no, targetRatio)
+  ElMessage.success(res.message || `课堂平时占比已设为 ${targetRatio}%`)
+  if (res.data?.persisted) {
+    await openClass(currentClass.value, { keepFile: true, overrideRatio: targetRatio })
+  } else {
+    roster.students.forEach((s) => {
+      if (!isLockedRow(s)) s.usual_ratio = targetRatio
+    })
+  }
+}
 
 function onImportFile(uploadFile) {
   importFile.value = uploadFile.raw
@@ -377,7 +421,7 @@ async function doImport() {
   try {
     const res = await scoreApi.importGrades(
       currentClass.value.lesson_no, importFile.value, classRatio.value, importDryRun.value)
-    Object.assign(importResult, res.data)
+    Object.assign(importResult, { message: '', failed: 0, errors: [] }, res.data)
     importVisible.value = true
     if (!importDryRun.value) {
       await openClass(currentClass.value)
@@ -388,9 +432,14 @@ async function doImport() {
 }
 
 async function saveAll() {
-  const items = roster.students.map((s) => ({
+  const editable = roster.students.filter((s) => !isLockedRow(s))
+  if (!editable.length) {
+    ElMessage.info('当前课堂所有学生成绩均已提交或发布，无需保存')
+    return
+  }
+  const items = editable.map((s) => ({
     sc_id: s.sc_id,
-    usual_ratio: s.usual_ratio,
+    usual_ratio: classRatio.value,
     usual_score: s.usual_score,
     exam_score: s.exam_score,
     exam_flag: s.exam_flag,
@@ -399,7 +448,7 @@ async function saveAll() {
   }))
   await scoreApi.saveGrades(currentClass.value.lesson_no, items, classRatio.value)
   ElMessage.success('成绩已保存')
-  await openClass(currentClass.value)
+  await openClass(currentClass.value, { keepFile: true })
 }
 
 const codeVisible = ref(false)
@@ -509,8 +558,22 @@ async function loadExchange() {
   exchangeList.value = res.data || []
 }
 
+const courseCandidates = ref([])
+const loadingCandidates = ref(false)
+
+async function searchCourseCandidates(keyword = '') {
+  loadingCandidates.value = true
+  try {
+    const res = await scoreApi.exchangeCandidates({ keyword: keyword || undefined })
+    courseCandidates.value = res.data || []
+  } finally {
+    loadingCandidates.value = false
+  }
+}
+
 function openExchange() {
   exchangeVisible.value = true
+  searchCourseCandidates('')
 }
 
 async function doExchange() {
@@ -520,7 +583,8 @@ async function doExchange() {
   await loadExchange()
 }
 
-async function decideExchange(row, stage, decision) {  let opinion = ''
+async function decideExchange(row, stage, decision) {
+  let opinion = ''
   if (decision === 2) {
     const promptRes = await ElMessageBox.prompt('请填写驳回意见', '驳回确认', {
       inputPlaceholder: '必填，说明退回原因',

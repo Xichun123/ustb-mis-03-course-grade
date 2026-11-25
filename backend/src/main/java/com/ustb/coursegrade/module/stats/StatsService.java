@@ -184,10 +184,10 @@ public class StatsService {
         if (code == null) return "其他";
         return switch (code.trim()) {
             case "11" -> "校级必修";
-            case "12" -> "专业必修";
-            case "13" -> "通识选修";
+            case "12" -> "院级必修";
+            case "13" -> "专业必修";
             case "14" -> "专业选修";
-            case "15" -> "公共选修";
+            case "15" -> "通识选修";
             case "16" -> "实践环节";
             default -> "课程(" + code + ")";
         };

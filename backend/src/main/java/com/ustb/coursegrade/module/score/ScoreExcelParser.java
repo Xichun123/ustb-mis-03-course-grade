@@ -31,6 +31,13 @@ public final class ScoreExcelParser {
         if (data.length == 0) {
             throw new IllegalArgumentException("文件为空");
         }
+        boolean legacyXls = (filename != null && filename.toLowerCase().endsWith(".xls"))
+                || (data.length >= 4
+                && (data[0] & 0xFF) == 0xD0 && (data[1] & 0xFF) == 0xCF
+                && (data[2] & 0xFF) == 0x11 && (data[3] & 0xFF) == 0xE0);
+        if (legacyXls) {
+            throw new IllegalArgumentException("暂不支持旧版 .xls 格式，请另存为 .xlsx 或 .csv 后再上传");
+        }
         boolean xlsx = (filename != null && filename.toLowerCase().endsWith(".xlsx"))
                 || (data.length > 1 && data[0] == 'P' && data[1] == 'K');
         List<List<String>> grid = xlsx ? readXlsx(data) : readCsv(data);
@@ -192,11 +199,16 @@ public final class ScoreExcelParser {
         List<String> header = grid.get(headerIdx);
         for (int i = 0; i < header.size(); i++) {
             String h = normalize(header.get(i));
-            if (h.contains("学号") && !cols.containsKey("student_id")) {
+            if ((h.contains("学号") || h.equalsIgnoreCase("student_id")) && !cols.containsKey("student_id")) {
                 cols.put("student_id", i);
             } else if (h.contains("平时") && h.contains("成绩")) {
                 cols.put("usual_score", i);
-            } else if (h.contains("期末") || h.contains("考试") && !h.contains("情况")) {
+            } else if (h.contains("等级")) {
+                cols.put("score_level", i);
+                if (h.contains("期末")) {
+                    cols.putIfAbsent("exam_score", i);
+                }
+            } else if (h.contains("期末") || (h.contains("考试") && !h.contains("情况"))) {
                 cols.putIfAbsent("exam_score", i);
             } else if (h.contains("考试情况") || h.equals("缺考")) {
                 cols.put("exam_flag", i);
@@ -219,6 +231,7 @@ public final class ScoreExcelParser {
             r.put("student_id", sid);
             r.put("usual_score", cell(line, cols.get("usual_score")));
             r.put("exam_score", cell(line, cols.get("exam_score")));
+            r.put("score_level", cell(line, cols.get("score_level")));
             r.put("exam_flag", cell(line, cols.get("exam_flag")));
             r.put("usual_ratio", cell(line, cols.get("usual_ratio")));
             rows.add(r);

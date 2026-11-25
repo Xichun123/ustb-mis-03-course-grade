@@ -21,13 +21,16 @@ const rows = computed(() => {
   const audience = props.audience
   if (!audience) return []
 
-  const grades = audience.grades.map(grade => /^\d{4}$/.test(grade) ? `${grade}级` : grade)
+  const grades = (audience.grades || []).map(grade => /^\d{4}$/.test(grade) ? `${grade}级` : grade)
+  const majors = audience.majors || []
+  const colleges = audience.colleges || []
+  const levels = audience.levels || []
   const rows = [
     { label: '年级', value: grades.join('或') || '未单独限选' },
-    { label: '专业', value: audience.majors.map(getMajorName).join('或') || '未单独限选' }
+    { label: '专业', value: majors.map(getMajorName).join('或') || '未单独限选' }
   ]
-  if (audience.colleges.length) rows.push({ label: '学院', value: audience.colleges.map(getCollegeName).join('或') })
-  if (audience.levels.length) rows.push({ label: '培养层次', value: audience.levels.join('或') })
+  if (colleges.length) rows.push({ label: '学院', value: colleges.map(getCollegeName).join('或') })
+  if (levels.length) rows.push({ label: '培养层次', value: levels.join('或') })
   if (audience.class_names) rows.push({ label: '班级', value: audience.class_names.join('、') || '待确认' })
   if (audience.special_requirement || props.detailed) {
     rows.push({ label: '特殊要求', value: audience.special_requirement || '未公布' })

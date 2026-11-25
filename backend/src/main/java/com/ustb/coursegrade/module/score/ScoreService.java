@@ -99,6 +99,7 @@ public class ScoreService {
         data.put("students", rows);
         data.put("ratio_min", ratioMin());
         data.put("usual_ratio", classRatio(lessonNo));
+        data.put("default_score_type", defaultScoreType(head));
         boolean canSeeCode = u.role() == RoleEnum.TEACHER || u.role() == RoleEnum.SYS_ADMIN;
         data.put("verify_code", canSeeCode ? latestVerifyCode(lessonNo) : null);
         return data;
@@ -208,13 +209,51 @@ public class ScoreService {
                     "课堂平时占比 " + ratio + "% 低于规定的下限 " + min + "%，不能用于本课堂");
         }
         List<String> tcIds = tcIds(head);
+        List<Map<String, Object>> rosterStates = jdbc.queryForList("""
+                SELECT sc.sc_id, s.score_id, s.score_status
+                FROM sc
+                LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
+                WHERE sc.tc_id IN (%s) AND sc.select_status = 1
+                """.formatted(marks(tcIds)), tcIds.toArray());
+        if (rosterStates.isEmpty()) {
+            throw BizException.unprocessable("EMPTY_ROSTER", "该课堂暂无已选中学生，无法设置平时占比");
+        }
+        int lockedCount = 0;
+        int pendingNew = 0;
+        for (Map<String, Object> r : rosterStates) {
+            if (r.get("score_id") == null) {
+                pendingNew++;
+            } else {
+                int st = ((Number) r.get("score_status")).intValue();
+                if (st >= 1 && st <= 3) {
+                    lockedCount++;
+                }
+            }
+        }
+        if (lockedCount == rosterStates.size()) {
+            throw BizException.conflict("SCORE_LOCKED", "该课堂全部成绩已提交或发布，无法再修改平时占比");
+        }
         int updated = jdbc.update("""
                 UPDATE score SET usual_ratio = ?
                  WHERE exam_type = 1 AND score_status IN (0, 4)
-                   AND sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s))
+                   AND sc_id IN (SELECT sc_id FROM sc WHERE tc_id IN (%s) AND select_status = 1)
                 """.formatted(marks(tcIds)), append(new Object[]{ratio}, tcIds));
-        return Map.of("lesson_no", lessonNo, "usual_ratio", ratio, "updated", updated,
-                "message", "课堂平时占比已设为 " + ratio + "%，已应用到全部未提交成绩");
+        String message;
+        if (updated > 0 && pendingNew == 0) {
+            message = "课堂平时占比已设为 " + ratio + "%，已应用到 " + updated + " 条未提交成绩";
+        } else if (updated > 0) {
+            message = "课堂平时占比已设为 " + ratio + "%，已更新 " + updated + " 条草稿，其余 " + pendingNew + " 名未录入学生将在保存或导入时生效";
+        } else {
+            message = "课堂平时占比已设为 " + ratio + "%（当前尚无已保存草稿，将在保存或导入成绩时按 " + ratio + "% 统一生效）";
+        }
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("lesson_no", lessonNo);
+        resp.put("usual_ratio", ratio);
+        resp.put("updated", updated);
+        resp.put("pending_new", pendingNew);
+        resp.put("persisted", updated > 0);
+        resp.put("message", message);
+        return resp;
     }
 
     /** 课堂当前占比：取已录记录中出现最多的值；还没有记录时返回 null */
@@ -233,7 +272,7 @@ public class ScoreService {
     }
 
     /**
-     * 3.1 Excel / CSV 批量导入：表格列包含 学号、平时成绩、期末成绩（可选 考试情况、平时占比）。
+     * 3.1 Excel / CSV 批量导入：百分制支持 学号、平时成绩、期末成绩（可选 考试情况）；等级制支持 学号、等级成绩（可选 考试情况）。
      * 整个课堂只用一个平时占比：参数优先，其次课堂已设占比，最后取参数下限。
      */
     @Transactional
@@ -257,13 +296,23 @@ public class ScoreService {
             throw BizException.unprocessable("RATIO_TOO_LOW",
                     "课堂平时占比 " + ratio + "% 低于规定的下限 " + min + "%");
         }
+        int defaultType = defaultScoreType(head);
         List<String> tcIds = tcIds(head);
         Map<String, Long> roster = new LinkedHashMap<>();
+        Map<Long, Map<String, Object>> existingScores = new HashMap<>();
         jdbc.queryForList("""
-                SELECT sc_id, student_id FROM sc
-                 WHERE tc_id IN (%s) AND select_status = 1
+                SELECT sc.sc_id, sc.student_id, s.score_id, s.score_status, s.score_type
+                FROM sc
+                LEFT JOIN score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
+                WHERE sc.tc_id IN (%s) AND sc.select_status = 1
                 """.formatted(marks(tcIds)), tcIds.toArray())
-                .forEach(r -> roster.put(String.valueOf(r.get("student_id")), ((Number) r.get("sc_id")).longValue()));
+                .forEach(r -> {
+                    long scId = ((Number) r.get("sc_id")).longValue();
+                    roster.put(String.valueOf(r.get("student_id")), scId);
+                    if (r.get("score_id") != null) {
+                        existingScores.put(scId, r);
+                    }
+                });
 
         List<Map<String, String>> rows;
         try {
@@ -276,6 +325,7 @@ public class ScoreService {
         }
         List<Map<String, Object>> items = new ArrayList<>();
         List<Map<String, Object>> errors = new ArrayList<>();
+        int skippedCount = 0;
         Set<String> seen = new HashSet<>();
         for (Map<String, String> r : rows) {
             String sid = r.getOrDefault("student_id", "").trim();
@@ -293,32 +343,51 @@ public class ScoreService {
                 errors.add(Map.of("row", rowNo, "student_id", sid, "message", "同一学号在表格中重复出现"));
                 continue;
             }
-            List<Integer> statuses = jdbc.queryForList(
-                    "SELECT score_status FROM score WHERE sc_id = ? AND exam_type = 1", Integer.class, scId);
-            if (!statuses.isEmpty() && statuses.get(0) >= 1 && statuses.get(0) <= 3) {
-                if (!dryRun) {
+            Map<String, Object> existingRow = existingScores.get(scId);
+            if (existingRow != null && existingRow.get("score_status") != null) {
+                int st = ((Number) existingRow.get("score_status")).intValue();
+                if (st >= 1 && st <= 3) {
+                    skippedCount++;
                     errors.add(Map.of("row", rowNo, "student_id", sid,
-                            "message", "成绩已提交/已发布，不能通过导入修改"));
+                            "message", dryRun
+                                    ? "预览提示：该成绩已提交/已发布，正式导入时会被跳过"
+                                    : "成绩已提交/已发布，不能通过导入修改"));
                     continue;
                 }
-                errors.add(Map.of("row", rowNo, "student_id", sid,
-                        "message", "预览提示：该成绩已提交/已发布，正式导入时会被跳过"));
             }
+            int targetScoreType = (existingRow != null && existingRow.get("score_type") != null)
+                    ? ((Number) existingRow.get("score_type")).intValue()
+                    : defaultType;
             try {
+                int examFlag = parseExamFlag(r.get("exam_flag"));
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("sc_id", scId);
                 item.put("usual_ratio", ratio);
-                item.put("usual_score", parseOptionalScore(r.get("usual_score"), "平时成绩"));
-                item.put("exam_score", parseOptionalScore(r.get("exam_score"), "期末成绩"));
-                item.put("exam_flag", parseExamFlag(r.get("exam_flag")));
-                item.put("score_type", 1);
+                item.put("exam_flag", examFlag);
+                item.put("score_type", targetScoreType);
+                if (targetScoreType == 1) {
+                    item.put("usual_score", parseOptionalScore(r.get("usual_score"), "平时成绩"));
+                    item.put("exam_score", parseOptionalScore(r.get("exam_score"), "期末成绩"));
+                    item.put("score_level", null);
+                } else {
+                    String rawLevel = r.getOrDefault("score_level", "").trim();
+                    if (rawLevel.isEmpty()) {
+                        rawLevel = r.getOrDefault("exam_score", "").trim();
+                    }
+                    String validatedLevel = parseOptionalLevel(rawLevel, targetScoreType);
+                    if (validatedLevel == null && examFlag == 0) {
+                        String typeName = targetScoreType == 2 ? "五级制（优/良/中/及格/不及格）" : "两级制（合格/不合格）";
+                        throw BizException.unprocessable("LEVEL_REQUIRED",
+                                "该课堂/记录为" + typeName + "记分，请填写有效等级，不能直接导入百分制分数");
+                    }
+                    item.put("usual_score", null);
+                    item.put("exam_score", null);
+                    item.put("score_level", validatedLevel);
+                }
                 items.add(item);
             } catch (BizException e) {
                 errors.add(Map.of("row", rowNo, "student_id", sid, "message", e.getMessage()));
             }
-        }
-        if (items.isEmpty()) {
-            throw BizException.unprocessable("NO_VALID_ROW", "没有可导入的有效行：" + summarizeErrors(errors));
         }
         if (dryRun) {
             Map<String, Object> preview = new LinkedHashMap<>();
@@ -327,20 +396,47 @@ public class ScoreService {
             preview.put("dry_run", true);
             preview.put("imported", 0);
             preview.put("preview_count", items.size());
+            preview.put("skipped", skippedCount);
             preview.put("failed", errors.size());
             preview.put("errors", errors);
-            preview.put("message", "预览通过 " + items.size() + " 行，确认后可正式导入");
+            String msg = items.isEmpty()
+                    ? "预览完成：没有可导入的有效行（" + errors.size() + " 行将被跳过或有误）"
+                    : "预览通过 " + items.size() + " 行" + (errors.isEmpty() ? "，确认后可正式导入" : "，" + errors.size() + " 行将被跳过或有误");
+            preview.put("message", msg);
             return preview;
+        }
+        if (items.isEmpty()) {
+            throw BizException.unprocessable("NO_VALID_ROW", "没有可导入的有效行：" + summarizeErrors(errors));
         }
         Map<String, Object> saved = saveGrades(lessonNo, items, ratio);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("lesson_no", lessonNo);
         result.put("usual_ratio", ratio);
         result.put("imported", saved.get("saved"));
+        result.put("skipped", skippedCount);
         result.put("failed", errors.size());
         result.put("errors", errors);
         result.put("message", "已导入 " + saved.get("saved") + " 条成绩" + (errors.isEmpty() ? "" : "，" + errors.size() + " 行未导入"));
         return result;
+    }
+
+    private static String parseOptionalLevel(String raw, int scoreType) {
+        String v = raw == null ? "" : raw.trim();
+        if (v.isEmpty() || v.equals("—") || v.equals("-")) {
+            return null;
+        }
+        if (scoreType == 2) {
+            if (!Set.of("优", "良", "中", "及格", "不及格").contains(v)) {
+                throw BizException.unprocessable("INVALID_LEVEL",
+                        "五级制课堂不能导入「" + v + "」，等级只能为 优/良/中/及格/不及格");
+            }
+            return v;
+        }
+        if (!Set.of("合格", "不合格").contains(v)) {
+            throw BizException.unprocessable("INVALID_LEVEL",
+                    "两级制课堂不能导入「" + v + "」，等级只能为 合格/不合格");
+        }
+        return v;
     }
 
     private static BigDecimal parseOptionalScore(String raw, String label) {
@@ -876,9 +972,9 @@ public class ScoreService {
                 "message", "教务处已认定，外校成绩与学分已计入本校成绩");
     }
 
-    /** 3.5 认定候选课程：按课程名检索校内课程，标明是否必修，供教务处做学分对应 */
+    /** 3.5 认定候选课程：按课程名检索校内课程，标明是否必修，供学院与教务处做学分对应 */
     public List<Map<String, Object>> listCourseCandidates(String keyword) {
-        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
+        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
                 SELECT course_id, course_name, course_type, credit, open_college
                 FROM course WHERE 1=1
@@ -1134,10 +1230,14 @@ public class ScoreService {
                 .anyMatch(t -> t.equals(u.empId()) || t.equals(u.teacherCode8()));
     }
 
+    private static int defaultScoreType(Map<String, Object> head) {
+        return "2".equals(str(head.get("assess_type"))) ? 2 : 1;
+    }
+
     private Map<String, Object> requireClass(String lessonNo) {
         List<Map<String, Object>> list = jdbc.queryForList("""
                 SELECT lc.lesson_no, lc.tc_id, tc.term, tc.course_id, c.course_name, c.credit,
-                       c.open_college, tc.teacher_id, tc.class_ids
+                       c.open_college, c.assess_type, tc.teacher_id, tc.class_ids
                 FROM lesson_class lc
                 JOIN teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN course c ON tc.course_id = c.course_id

@@ -8,11 +8,11 @@ INSERT INTO select_round (
 INSERT INTO course (course_id, course_name, course_type, credit, course_level, open_college) VALUES
     ('DEMO0001', '信息系统基础', '12', 3.0, 1, '0001'),
     ('DEMO0002', '数据可视化实践', '14', 2.0, 1, '0002'),
-    ('DEMO0003', '生活中的科学实验', '13', 2.0, 1, '0002'),
-    ('DEMO0004', '学术英语交流', '13', 2.0, 1, '0001'),
-    ('DEMO0005', '音乐鉴赏', '13', 2.0, 1, '0001'),
-    ('DEMO0006', '城市与人文', '13', 2.0, 1, '0001'),
-    ('DEMO0007', '创新项目与创业基础', '13', 2.0, 1, '0001'),
+    ('DEMO0003', '生活中的科学实验', '15', 2.0, 1, '0002'),
+    ('DEMO0004', '学术英语交流', '15', 2.0, 1, '0001'),
+    ('DEMO0005', '音乐鉴赏', '15', 2.0, 1, '0001'),
+    ('DEMO0006', '城市与人文', '15', 2.0, 1, '0001'),
+    ('DEMO0007', '创新项目与创业基础', '15', 2.0, 1, '0001'),
     ('DEMO0008', '信息系统实训', '16', 2.0, 1, '0001');
 
 INSERT INTO teaching_class (tc_id, term, course_id, teacher_id, class_ids, capacity, tc_type, tc_status, actual_num) VALUES
