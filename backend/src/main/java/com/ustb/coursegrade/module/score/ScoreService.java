@@ -324,16 +324,28 @@ public class ScoreService {
         int defaultType = defaultScoreType(head);
         List<String> tcIds = tcIds(head);
         Map<String, Long> roster = new LinkedHashMap<>();
+        Map<String, String> studentNames = new HashMap<>();
+        Map<String, String> classNames = new HashMap<>();
         Map<Long, Map<String, Object>> existingScores = new HashMap<>();
         jdbc.queryForList("""
-                SELECT sc.sc_id, sc.student_id, s.score_id, s.score_status, s.score_type
+                SELECT sc.sc_id, sc.student_id,
+                       COALESCE(p.person_name, ex.student_name, sc.student_id) AS student_name,
+                       COALESCE(cls.class_name, ex.sender_school_name, '交流生') AS class_name,
+                       s.score_id, s.score_status, s.score_type
                 FROM sel_sc sc
+                LEFT JOIN std_student st ON sc.student_id = st.student_id
+                LEFT JOIN sys_person p ON st.person_id = p.person_id
+                LEFT JOIN aca_class cls ON st.class_id = cls.class_id
+                LEFT JOIN v_exchange_student ex ON ex.temp_student_no = sc.student_id
                 LEFT JOIN sel_score s ON s.sc_id = sc.sc_id AND s.exam_type = 1
                 WHERE sc.tc_id IN (%s) AND sc.select_status = 1
                 """.formatted(marks(tcIds)), tcIds.toArray())
                 .forEach(r -> {
                     long scId = ((Number) r.get("sc_id")).longValue();
-                    roster.put(String.valueOf(r.get("student_id")), scId);
+                    String sid = String.valueOf(r.get("student_id"));
+                    roster.put(sid, scId);
+                    studentNames.put(sid, str(r.get("student_name")));
+                    classNames.put(sid, str(r.get("class_name")));
                     if (r.get("score_id") != null) {
                         existingScores.put(scId, r);
                     }
@@ -349,6 +361,7 @@ public class ScoreService {
             throw BizException.unprocessable("EMPTY_FILE", "表格里没有可导入的数据行");
         }
         List<Map<String, Object>> items = new ArrayList<>();
+        List<Map<String, Object>> parsedRows = new ArrayList<>();
         List<Map<String, Object>> errors = new ArrayList<>();
         int skippedCount = 0;
         Set<String> seen = new HashSet<>();
@@ -390,26 +403,68 @@ public class ScoreService {
                 item.put("usual_ratio", ratio);
                 item.put("exam_flag", examFlag);
                 item.put("score_type", targetScoreType);
+                BigDecimal usualVal = null;
+                BigDecimal examVal = null;
+                String levelVal = null;
                 if (targetScoreType == 1) {
-                    item.put("usual_score", parseOptionalScore(r.get("usual_score"), "平时成绩"));
-                    item.put("exam_score", parseOptionalScore(r.get("exam_score"), "期末成绩"));
+                    usualVal = parseOptionalScore(r.get("usual_score"), "平时成绩");
+                    examVal = parseOptionalScore(r.get("exam_score"), "期末成绩");
+                    item.put("usual_score", usualVal);
+                    item.put("exam_score", examVal);
                     item.put("score_level", null);
                 } else {
                     String rawLevel = r.getOrDefault("score_level", "").trim();
                     if (rawLevel.isEmpty()) {
                         rawLevel = r.getOrDefault("exam_score", "").trim();
                     }
-                    String validatedLevel = parseOptionalLevel(rawLevel, targetScoreType);
-                    if (validatedLevel == null && examFlag == 0) {
+                    levelVal = parseOptionalLevel(rawLevel, targetScoreType);
+                    if (levelVal == null && examFlag == 0) {
                         String typeName = targetScoreType == 2 ? "五级制（优/良/中/及格/不及格）" : "两级制（合格/不合格）";
                         throw BizException.unprocessable("LEVEL_REQUIRED",
                                 "该课堂/记录为" + typeName + "记分，请填写有效等级，不能直接导入百分制分数");
                     }
                     item.put("usual_score", null);
                     item.put("exam_score", null);
-                    item.put("score_level", validatedLevel);
+                    item.put("score_level", levelVal);
                 }
                 items.add(item);
+
+                BigDecimal estTotal = null;
+                BigDecimal estGp = null;
+                String estLevel = levelVal;
+                if (targetScoreType == 1) {
+                    if (examFlag == 0 && usualVal != null && examVal != null) {
+                        estTotal = usualVal.multiply(BigDecimal.valueOf(ratio))
+                                .add(examVal.multiply(BigDecimal.valueOf(100 - ratio)))
+                                .divide(BigDecimal.valueOf(100), 1, RoundingMode.HALF_UP);
+                        estGp = percentToPoint(estTotal);
+                    } else if (examFlag == 1 || examFlag == 3) {
+                        estTotal = BigDecimal.ZERO;
+                        estGp = BigDecimal.ZERO;
+                    }
+                } else {
+                    if (examFlag == 0 && estLevel != null && !estLevel.isEmpty()) {
+                        estGp = levelToPoint(estLevel);
+                    } else if (examFlag == 1 || examFlag == 3) {
+                        estLevel = (targetScoreType == 2) ? "不及格" : "不合格";
+                        estGp = BigDecimal.ZERO;
+                    }
+                }
+                Map<String, Object> rowView = new LinkedHashMap<>();
+                rowView.put("row", rowNo);
+                rowView.put("student_id", sid);
+                rowView.put("student_name", studentNames.getOrDefault(sid, sid));
+                rowView.put("class_name", classNames.getOrDefault(sid, ""));
+                rowView.put("score_type", targetScoreType);
+                rowView.put("usual_ratio", ratio);
+                rowView.put("usual_score", usualVal);
+                rowView.put("exam_score", examVal);
+                rowView.put("score_level", estLevel);
+                rowView.put("exam_flag", examFlag);
+                rowView.put("exam_flag_text", examFlagText(examFlag));
+                rowView.put("total_score", estTotal);
+                rowView.put("grade_point", estGp);
+                parsedRows.add(rowView);
             } catch (BizException e) {
                 errors.add(Map.of("row", rowNo, "student_id", sid, "message", e.getMessage()));
             }
@@ -423,10 +478,11 @@ public class ScoreService {
             preview.put("preview_count", items.size());
             preview.put("skipped", skippedCount);
             preview.put("failed", errors.size());
+            preview.put("rows", parsedRows);
             preview.put("errors", errors);
             String msg = items.isEmpty()
                     ? "预览完成：没有可导入的有效行（" + errors.size() + " 行将被跳过或有误）"
-                    : "预览通过 " + items.size() + " 行" + (errors.isEmpty() ? "，确认后可正式导入" : "，" + errors.size() + " 行将被跳过或有误");
+                    : "预览通过 " + items.size() + " 行" + (errors.isEmpty() ? "，核对无误后可点击「确认正式导入」" : "，" + errors.size() + " 行将被跳过或有误");
             preview.put("message", msg);
             return preview;
         }
@@ -437,9 +493,11 @@ public class ScoreService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("lesson_no", lessonNo);
         result.put("usual_ratio", ratio);
+        result.put("dry_run", false);
         result.put("imported", saved.get("saved"));
         result.put("skipped", skippedCount);
         result.put("failed", errors.size());
+        result.put("rows", parsedRows);
         result.put("errors", errors);
         result.put("message", "已导入 " + saved.get("saved") + " 条成绩" + (errors.isEmpty() ? "" : "，" + errors.size() + " 行未导入"));
         return result;
@@ -499,6 +557,15 @@ public class ScoreService {
             case "2", "缓考" -> 2;
             case "3", "违纪" -> 3;
             default -> throw BizException.unprocessable("INVALID_EXAM_FLAG", "考试情况只能为正常/缺考/缓考/违纪");
+        };
+    }
+
+    private static String examFlagText(int flag) {
+        return switch (flag) {
+            case 1 -> "缺考";
+            case 2 -> "缓考";
+            case 3 -> "违纪";
+            default -> "正常";
         };
     }
 

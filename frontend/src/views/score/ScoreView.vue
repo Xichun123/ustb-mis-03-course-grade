@@ -74,9 +74,11 @@
               <el-button :disabled="readOnly">选择 Excel 成绩表</el-button>
             </el-upload>
             <span class="muted" v-if="importFile">{{ importFile.name }}</span>
-            <el-checkbox v-model="importDryRun" :disabled="readOnly">仅预览</el-checkbox>
-            <el-button type="warning" :disabled="readOnly || !importFile || importLoading" :loading="importLoading" @click="doImport">
-              导入成绩
+            <el-button :disabled="readOnly || !importFile || importLoading" :loading="importMode === 'preview'" @click="doImport(true)">
+              预览
+            </el-button>
+            <el-button type="warning" :disabled="readOnly || !importFile || importLoading" :loading="importMode === 'import'" @click="doImport(false)">
+              导入
             </el-button>
             <span class="muted">先下载模板填好平时成绩与考试成绩后上传（支持 .xlsx / .csv，占比按课堂统一设置，表内无需填写占比）</span>
           </div>
@@ -429,15 +431,56 @@
       </template>
     </el-dialog>
     <!-- Excel 导入结果 -->
-    <el-dialog v-model="importVisible" title="Excel 导入结果" width="640px">
+    <el-dialog v-model="importVisible" :title="importResult.dry_run ? 'Excel 导入预览' : 'Excel 导入结果'" width="780px">
       <el-alert :title="importResult.message || '导入完成'" :type="importResult.failed ? 'warning' : 'success'" show-icon :closable="false" />
-      <el-table :data="importResult.errors || []" border size="small" style="margin-top: 12px" max-height="320">
-        <el-table-column prop="row" label="行号" width="70" />
-        <el-table-column prop="student_id" label="学号" width="140" />
-        <el-table-column prop="message" label="说明" min-width="300" />
-      </el-table>
+      <template v-if="importResult.rows?.length">
+        <div class="import-section-title">
+          {{ importResult.dry_run ? `待导入成绩预览（共 ${importResult.rows.length} 条）` : `已导入成绩明细（共 ${importResult.rows.length} 条）` }}
+        </div>
+        <el-table :data="importResult.rows" border size="small" max-height="280">
+          <el-table-column prop="row" label="行号" width="62" />
+          <el-table-column prop="student_id" label="学号" width="128" />
+          <el-table-column prop="student_name" label="姓名" width="90" />
+          <el-table-column label="平时成绩" width="85">
+            <template #default="{ row }">{{ row.score_type === 1 ? (row.usual_score ?? '—') : '—' }}</template>
+          </el-table-column>
+          <el-table-column label="考试/等级" width="90">
+            <template #default="{ row }">{{ row.score_type === 1 ? (row.exam_score ?? '—') : (row.score_level || '—') }}</template>
+          </el-table-column>
+          <el-table-column prop="exam_flag_text" label="考试情况" width="80" />
+          <el-table-column label="平时/考试占比" width="110">
+            <template #default="{ row }">
+              {{ row.score_type === 1 && row.usual_ratio != null ? `${row.usual_ratio}% / ${100 - row.usual_ratio}%` : '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="预计总评" width="80">
+            <template #default="{ row }">{{ row.score_type === 1 ? (row.total_score ?? '—') : (row.score_level || '—') }}</template>
+          </el-table-column>
+          <el-table-column label="预计绩点" min-width="75">
+            <template #default="{ row }">{{ row.grade_point ?? '—' }}</template>
+          </el-table-column>
+        </el-table>
+      </template>
+      <template v-if="importResult.errors?.length">
+        <div class="import-section-title import-section-warn">
+          未导入 / 跳过明细（共 {{ importResult.errors.length }} 条）
+        </div>
+        <el-table :data="importResult.errors" border size="small" max-height="220">
+          <el-table-column prop="row" label="行号" width="70" />
+          <el-table-column prop="student_id" label="学号" width="140" />
+          <el-table-column prop="message" label="说明" min-width="300" />
+        </el-table>
+      </template>
       <template #footer>
-        <el-button type="primary" @click="importVisible = false">知道了</el-button>
+        <el-button @click="importVisible = false">{{ importResult.dry_run && importResult.preview_count > 0 ? '关闭' : '知道了' }}</el-button>
+        <el-button
+          v-if="importResult.dry_run && importResult.preview_count > 0"
+          type="primary"
+          :loading="importLoading"
+          @click="confirmImportFromPreview"
+        >
+          确认正式导入
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -482,17 +525,16 @@ async function loadClasses() {
 const isLockedRow = (row) => row && [1, 2, 3].includes(row.score_status)
 const uploadRef = ref(null)
 const importFile = ref(null)
-const importDryRun = ref(false)
 const importLoading = ref(false)
+const importMode = ref('')
 const importVisible = ref(false)
-const importResult = reactive({ message: '', failed: 0, errors: [] })
+const importResult = reactive({ message: '', dry_run: false, preview_count: 0, imported: 0, failed: 0, rows: [], errors: [] })
 
 async function openClass(row, options = {}) {
   const switched = currentClass.value?.lesson_no !== row.lesson_no
   currentClass.value = row
   if (switched || !options.keepFile) {
     importFile.value = null
-    importDryRun.value = false
     uploadRef.value?.clearFiles?.()
   }
   const res = await scoreApi.getRoster(row.lesson_no)
@@ -546,23 +588,38 @@ function onImportFile(uploadFile) {
   importFile.value = uploadFile.raw
 }
 
-async function doImport() {
+async function doImport(dryRun = false) {
   if (!importFile.value) {
     ElMessage.warning('请先选择 Excel 文件')
     return
   }
+  const dryRunFlag = dryRun === true
   importLoading.value = true
+  importMode.value = dryRunFlag ? 'preview' : 'import'
   try {
     const res = await scoreApi.importGrades(
-      currentClass.value.lesson_no, importFile.value, classRatio.value, importDryRun.value)
-    Object.assign(importResult, { message: '', failed: 0, errors: [] }, res.data)
+      currentClass.value.lesson_no, importFile.value, classRatio.value, dryRunFlag)
+    Object.assign(importResult, {
+      message: '',
+      dry_run: false,
+      preview_count: 0,
+      imported: 0,
+      failed: 0,
+      rows: [],
+      errors: []
+    }, res.data)
     importVisible.value = true
-    if (!importDryRun.value) {
+    if (!dryRunFlag) {
       await openClass(currentClass.value)
     }
   } finally {
     importLoading.value = false
+    importMode.value = ''
   }
+}
+
+async function confirmImportFromPreview() {
+  await doImport(false)
 }
 
 async function saveAll() {
@@ -866,6 +923,15 @@ onMounted(() => {
   font-size: 11.5px;
   color: #c45656;
   margin-top: 2px;
+}
+.import-section-title {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+.import-section-warn {
+  color: #b88230;
 }
 .paper-sheet {
   border: 1px solid #dcdfe6;

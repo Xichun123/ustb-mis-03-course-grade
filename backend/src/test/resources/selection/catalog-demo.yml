@@ -1,10 +1,4 @@
 selection:
   catalog:
-    course-types:
-      "[DEMO0003]": SCIENCE_LITERACY
-      "[DEMO0004]": FOREIGN_LANGUAGE
-      "[DEMO0005]": AESTHETICS
-      "[DEMO0006]": HUMANITIES
-      "[DEMO0007]": INNOVATION_ENTREPRENEURSHIP
     special-requirements:
       "[DEMO-LANG-01]": "大学英语四级成绩 > 500 分，或六级成绩 > 500 分"

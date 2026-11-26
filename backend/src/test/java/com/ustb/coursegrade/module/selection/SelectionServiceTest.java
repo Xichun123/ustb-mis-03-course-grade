@@ -100,16 +100,14 @@ class SelectionServiceTest {
 
     @ParameterizedTest(name = "{1} 显示为 {2}")
     @CsvSource(textBlock = """
-            REQUIRED, DEMO0001, 必修
-            PROFESSIONAL_EXTENSION, DEMO0002, 专业拓展课
-            SCIENCE_LITERACY, DEMO0003, 素质拓展课-科学素养
-            FOREIGN_LANGUAGE, DEMO0004, 素质拓展课-外语
-            AESTHETICS, DEMO0005, 素质拓展课-美育
-            HUMANITIES, DEMO0006, 素质拓展课-人文素养
-            INNOVATION_ENTREPRENEURSHIP, DEMO0007, 素质拓展课-创新创业课程
-            PRACTICE, DEMO0008, 实践
+            UNIVERSITY_REQUIRED, DEMO0001, 校级必修
+            COLLEGE_REQUIRED, DEMO0002, 院级必修
+            MAJOR_REQUIRED, DEMO0003, 专业必修
+            MAJOR_ELECTIVE, DEMO0004, 专业选修
+            GENERAL_ELECTIVE, DEMO0005, 通识选修
+            PRACTICE, DEMO0006, 实践环节
             """)
-    void courseTypeFilterUsesConfiguredCategoriesAndLegacyCodesBeforePaging(CourseType filter, String id, String label) {
+    void courseTypeFilterAlignsWithGroup2SixCategoriesBeforePaging(CourseType filter, String id, String label) {
         loadCatalogDemo();
 
         var page = service.courses(CATALOG_DEMO_ROUND, "", 1, 1, filter);
@@ -120,21 +118,34 @@ class SelectionServiceTest {
         assertTrue(rows(service.courses(CATALOG_DEMO_ROUND, "", 2, 1, filter).get("items")).isEmpty());
     }
 
-    @Test void courseTypeFallbackFollowsUnifiedV13Codes() {
+    @Test void courseTypeMappingAndOptionsMatchGroup2SixCategories() {
         var props = new SelectionCatalogProperties(Map.of(), Map.of());
-        assertEquals(CourseType.REQUIRED, props.courseType("C11", "11"));
-        assertEquals(CourseType.REQUIRED, props.courseType("C12", "12"));
-        assertEquals(CourseType.REQUIRED, props.courseType("C13", "13"));
-        assertEquals(CourseType.PROFESSIONAL_EXTENSION, props.courseType("C14", "14"));
+        assertEquals(CourseType.UNIVERSITY_REQUIRED, props.courseType("C11", "11"));
+        assertEquals(CourseType.COLLEGE_REQUIRED, props.courseType("C12", "12"));
+        assertEquals(CourseType.MAJOR_REQUIRED, props.courseType("C13", "13"));
+        assertEquals(CourseType.MAJOR_ELECTIVE, props.courseType("C14", "14"));
         assertEquals(CourseType.GENERAL_ELECTIVE, props.courseType("C15", "15"));
         assertEquals(CourseType.PRACTICE, props.courseType("C16", "16"));
         assertEquals(CourseType.UNCLASSIFIED, props.courseType("C99", null));
+
+        assertEquals(CourseType.MAJOR_ELECTIVE, CourseType.fromParam("14"));
+        assertEquals(CourseType.MAJOR_ELECTIVE, CourseType.fromParam("MAJOR_ELECTIVE"));
+        assertNull(CourseType.fromParam(""));
+        assertThrows(IllegalArgumentException.class, () -> CourseType.fromParam("99"));
+
+        @SuppressWarnings("unchecked")
+        var options = (List<Map<String, String>>) service.context().get("course_types");
+        assertEquals(6, options.size());
+        assertEquals(List.of("11", "12", "13", "14", "15", "16"),
+                options.stream().map(m -> m.get("value")).toList());
+        assertEquals(List.of("校级必修", "院级必修", "专业必修", "专业选修", "通识选修", "实践环节"),
+                options.stream().map(m -> m.get("label")).toList());
     }
 
     @Test void courseListKeepsAudienceAndSpecialRequirementsWithTheirTeachingClass() {
         loadCatalogDemo();
 
-        var page = service.courses(CATALOG_DEMO_ROUND, "学术英语", 1, 10, CourseType.FOREIGN_LANGUAGE);
+        var page = service.courses(CATALOG_DEMO_ROUND, "学术英语", 1, 10, CourseType.GENERAL_ELECTIVE);
         assertEquals(1, page.get("total"));
         var course = rows(page.get("items")).get(0);
         assertNull(course.get("audience"));
@@ -155,15 +166,15 @@ class SelectionServiceTest {
         loadCatalogDemo();
 
         var page = service.courses(CATALOG_DEMO_ROUND, "", 1, 10, null);
-        assertEquals(8, page.get("total"));
+        assertEquals(6, page.get("total"));
         var courses = rows(page.get("items"));
         assertEquals(Map.of("grades", List.of("2024"), "majors", List.of("120102"),
                 "colleges", List.of(), "levels", List.of(), "class_names", List.of("信管241", "信管242")),
                 courses.get(0).get("audience"));
         assertEquals(Map.of("grades", List.of(), "majors", List.of("080901"), "colleges", List.of(), "levels", List.of()),
-                courses.get(1).get("audience"));
+                courses.get(3).get("audience"));
         assertEquals(Map.of("grades", List.of(), "majors", List.of(), "colleges", List.of(), "levels", List.of()),
-                courses.get(2).get("audience"));
+                courses.get(5).get("audience"));
     }
 
     @SuppressWarnings("unchecked")

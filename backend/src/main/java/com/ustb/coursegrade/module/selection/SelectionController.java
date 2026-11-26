@@ -24,7 +24,7 @@ public class SelectionController {
         if(page<1 || page>100000 || pageSize<1 || pageSize>100 || keyword.length()>100)throw BizException.unprocessable("BAD_QUERY","分页或查询条件无效");
         CourseType filter;
         try {
-            filter = courseType.isBlank() ? null : CourseType.valueOf(courseType);
+            filter = CourseType.fromParam(courseType);
         } catch (IllegalArgumentException e) {
             throw BizException.unprocessable("BAD_QUERY", "课程类型无效");
         }

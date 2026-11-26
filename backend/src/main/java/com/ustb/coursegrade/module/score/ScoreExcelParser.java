@@ -281,12 +281,20 @@ public final class ScoreExcelParser {
 
         StringBuilder sheet = new StringBuilder();
         sheet.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
-                .append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>");
+                .append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
+                .append("<cols>")
+                .append("<col min=\"1\" max=\"1\" width=\"16\" customWidth=\"1\"/>")
+                .append("<col min=\"2\" max=\"2\" width=\"16\" customWidth=\"1\"/>")
+                .append("<col min=\"3\" max=\"3\" width=\"14\" customWidth=\"1\"/>")
+                .append("<col min=\"4\" max=\"4\" width=\"24\" customWidth=\"1\"/>")
+                .append("<col min=\"5\" max=\"5\" width=\"14\" customWidth=\"1\"/>")
+                .append("<col min=\"6\" max=\"6\" width=\"16\" customWidth=\"1\"/>")
+                .append("</cols>")
+                .append("<sheetData>");
 
         int rowNum = 1;
         appendStringRow(sheet, rowNum++, List.of(
-                "课堂号", lessonNo, "课程名称", courseName, "学期", term,
-                "说明：平时与期末占比按课堂在系统顶部统一填一次即可，表格内只填学生成绩"));
+                "课堂号", lessonNo, "课程名称", courseName, "学期", term));
 
         if (defaultScoreType == 1) {
             appendStringRow(sheet, rowNum++, List.of("学号", "姓名", "班级", "平时成绩", "考试成绩", "考试情况"));

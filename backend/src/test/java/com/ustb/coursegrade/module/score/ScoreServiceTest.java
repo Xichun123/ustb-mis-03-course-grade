@@ -290,9 +290,13 @@ class ScoreServiceTest {
 
     @Test
     void excelTemplateExportRoundTripAndHeaderDisambiguation() throws Exception {
-        // 1. 导出百分制课堂模板：标准 .xlsx ZIP，可被解析器直接回读（自动跳过第 1 行课堂说明）
+        // 1. 导出百分制课堂模板：标准 .xlsx ZIP，不含冗余“说明：”提示，且可被解析器直接回读
         byte[] tpl = service.exportTemplate("KT1001");
         assertTrue(tpl.length > 100 && tpl[0] == 'P' && tpl[1] == 'K');
+        String sheetXml = readSheetXml(tpl);
+        assertFalse(sheetXml.contains("说明："));
+        assertTrue(sheetXml.contains("KT1001"));
+        assertTrue(sheetXml.contains("管理信息系统"));
         List<Map<String, String>> parsedTpl = ScoreExcelParser.parse(new ByteArrayInputStream(tpl), "grades_KT1001.xlsx");
         assertEquals(2, parsedTpl.size());
         assertEquals("S001", parsedTpl.get(0).get("student_id"));
@@ -305,16 +309,28 @@ class ScoreServiceTest {
         List<Map<String, String>> parsedLevelTpl = ScoreExcelParser.parse(new ByteArrayInputStream(levelTpl), "grades_KT1002.xlsx");
         assertEquals(2, parsedLevelTpl.size());
 
-        // 3. 表头兼容“平时分”“考试成绩”，且“期末占比”列不会被误识别为期末考试成绩；全课堂统一按 35% 生效
+        // 3. 表头兼容“平时分”“考试成绩”，且“期末占比”列不会被误识别为期末考试成绩；预览与正式导入均返回明细 rows
         byte[] customXlsx = buildSimpleXlsx(List.of(
-                List.of("课堂号", "KT1001", "说明", "平时与考试占比统一填一次即可"),
+                List.of("课堂号", "KT1001", "课程名称", "管理信息系统", "学期", TERM),
                 List.of("学号", "姓名", "平时分", "期末占比", "考试成绩", "考试情况"),
                 List.of("S001", "张三", "80", "70", "90", "正常"),
                 List.of("S002", "李四", "86", "70", "94", "正常")
         ));
+        Map<String, Object> preview = service.importGrades("KT1001", new ByteArrayInputStream(customXlsx), "custom.xlsx", 35, true);
+        assertEquals(2, preview.get("preview_count"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> previewRows = (List<Map<String, Object>>) preview.get("rows");
+        assertNotNull(previewRows);
+        assertEquals(2, previewRows.size());
+        assertEquals("张三", previewRows.get(0).get("student_name"));
+        assertEquals(0, new java.math.BigDecimal("86.5").compareTo(new java.math.BigDecimal(String.valueOf(previewRows.get(0).get("total_score")))));
+
         Map<String, Object> imported = service.importGrades("KT1001", new ByteArrayInputStream(customXlsx), "custom.xlsx", 35, false);
         assertEquals(2, imported.get("imported"));
         assertEquals(0, imported.get("failed"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> importedRows = (List<Map<String, Object>>) imported.get("rows");
+        assertEquals(2, importedRows.size());
         assertEquals(0, new java.math.BigDecimal("90.00").compareTo(jdbc.queryForObject(
                 "SELECT s.exam_score FROM sel_score s JOIN sel_sc sc ON s.sc_id=sc.sc_id WHERE sc.student_id='S001' AND sc.tc_id='TC1'",
                 java.math.BigDecimal.class)));
@@ -474,5 +490,17 @@ class ScoreServiceTest {
             zos.closeEntry();
         }
         return bos.toByteArray();
+    }
+
+    private static String readSheetXml(byte[] xlsx) throws Exception {
+        try (java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(new ByteArrayInputStream(xlsx))) {
+            ZipEntry e;
+            while ((e = zip.getNextEntry()) != null) {
+                if (e.getName().endsWith("sheet1.xml")) {
+                    return new String(zip.readAllBytes(), StandardCharsets.UTF_8);
+                }
+            }
+        }
+        return "";
     }
 }

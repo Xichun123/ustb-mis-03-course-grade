@@ -26,7 +26,7 @@
             <el-alert v-if="selectedRound" :title="selectedRound.round_name" :description="`${formatTime(selectedRound.start_time)} 至 ${formatTime(selectedRound.end_time)}；${selectedRound.notice_content || '请按本轮规则办理'}`" :type="selectedRound.window_open?'info':'warning'" :closable="false" class="notice" />
             <div class="toolbar">
               <el-input v-model="keyword" placeholder="输入课程代码或名称" clearable style="width:280px" @keyup.enter="searchCourses" />
-              <el-select v-model="courseType" aria-label="课程类型" placeholder="全部课程类型" clearable style="width:250px" @change="searchCourses">
+              <el-select v-model="courseType" aria-label="课程类型" placeholder="全部课程类型" clearable style="width:180px" @change="searchCourses">
                 <el-option v-for="type in context.course_types" :key="type.value" :value="type.value" :label="type.label" />
               </el-select>
               <el-button type="primary" @click="searchCourses">查询</el-button>
@@ -48,7 +48,7 @@
               </template></el-table-column>
               <el-table-column prop="course_id" label="课程代码" width="125" />
               <el-table-column prop="course_name" label="课程名称" min-width="170" />
-              <el-table-column prop="course_type_label" label="课程类型" min-width="172" />
+              <el-table-column prop="course_type_label" label="课程类型" width="115" />
               <el-table-column label="面向对象" min-width="230">
                 <template #default="{ row }">
                   <span v-if="row.audience === null" class="muted">各教学班要求不同，展开查看</span>
