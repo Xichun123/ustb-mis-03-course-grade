@@ -45,11 +45,12 @@ class StatsServiceTest {
                 "CREATE TABLE grad_scheme_course(scheme_course_id VARCHAR(50) PRIMARY KEY,scheme_id VARCHAR(50),course_id VARCHAR(10),direction_id VARCHAR(20),course_category INT,suggest_term INT)",
                 "CREATE TABLE aca_teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),emp_id VARCHAR(10),tc_status VARCHAR(2) DEFAULT '4')",
                 "CREATE TABLE sel_lesson_class(tc_id VARCHAR(20) PRIMARY KEY,lesson_no VARCHAR(20))",
-                "CREATE TABLE sel_sc(sc_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),study_type INT DEFAULT 1,stat_stage INT DEFAULT 1,select_status INT DEFAULT 1)",
-                "CREATE TABLE sel_score(score_id BIGINT AUTO_INCREMENT PRIMARY KEY,sc_id BIGINT,exam_type INT DEFAULT 1,score_type INT DEFAULT 1,total_score DECIMAL(5,2),score_level VARCHAR(10),grade_point DECIMAL(5,2),is_final INT DEFAULT 1,score_status INT DEFAULT 3,published_at TIMESTAMP)",
-                "CREATE TABLE sel_exchange_score_convert(convert_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),term VARCHAR(11),stat_stage INT DEFAULT 1,course_id VARCHAR(10),score_type INT DEFAULT 1,converted_score DECIMAL(5,2),converted_level VARCHAR(10),grade_point DECIMAL(5,2),audit_status INT DEFAULT 2,school_audit_time TIMESTAMP)",
+                "CREATE TABLE sel_sc(sc_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),study_type INT DEFAULT 1,is_exempt_attend INT DEFAULT 0,stat_stage INT DEFAULT 1,select_status INT DEFAULT 1)",
+                "CREATE TABLE sel_score(score_id BIGINT AUTO_INCREMENT PRIMARY KEY,sc_id BIGINT,exam_type INT DEFAULT 1,exam_flag INT DEFAULT 0,score_type INT DEFAULT 1,usual_ratio DECIMAL(5,2),usual_score DECIMAL(5,2),exam_score DECIMAL(5,2),total_score DECIMAL(5,2),score_level VARCHAR(10),grade_point DECIMAL(5,2),is_final INT DEFAULT 1,score_status INT DEFAULT 3,published_at TIMESTAMP)",
+                "CREATE TABLE sel_exchange_score_convert(convert_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),term VARCHAR(11),stat_stage INT DEFAULT 1,course_id VARCHAR(10),score_type INT DEFAULT 1,converted_score DECIMAL(5,2),converted_level VARCHAR(10),grade_point DECIMAL(5,2),is_final INT DEFAULT 1,host_school VARCHAR(100),ext_course_name VARCHAR(100),proof_no VARCHAR(50),audit_status INT DEFAULT 2,school_audit_time TIMESTAMP)",
                 "CREATE TABLE sel_teach_eval(sc_id BIGINT PRIMARY KEY,eval_score DECIMAL(5,2),eval_comment VARCHAR(200),eval_time TIMESTAMP)",
-                "CREATE TABLE sel_stu_gpa(student_id VARCHAR(20) PRIMARY KEY,earned_credit DECIMAL(5,1),failed_credit DECIMAL(5,1),gpa DECIMAL(5,2),avg_score DECIMAL(5,2),major_rank INT,major_rank_total INT,updated_at TIMESTAMP)"
+                "CREATE TABLE sel_stu_gpa(student_id VARCHAR(20) PRIMARY KEY,earned_credit DECIMAL(5,1),failed_credit DECIMAL(5,1),gpa DECIMAL(5,2),avg_score DECIMAL(5,2),major_rank INT,major_rank_total INT,updated_at TIMESTAMP)",
+                "CREATE TABLE sel_stu_term_gpa(student_id VARCHAR(20),term VARCHAR(11),term_credit DECIMAL(5,1),term_failed_credit DECIMAL(5,1),updated_at TIMESTAMP,PRIMARY KEY(student_id,term))"
         )) {
             jdbc.execute(ddl);
         }
@@ -212,5 +213,42 @@ class StatsServiceTest {
         assertEquals("2.0", gradCheck.get("total_shortfall_credit"));
         assertEquals("NOT_ELIGIBLE", gradCheck.get("status"));
         assertEquals(List.of("大数据分析方向课"), gradCheck.get("unpassed_required_courses"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void studentAcademicProfileAggregatesSummaryCategoryCreditsAndGradesForGroup1() {
+        jdbc.update("INSERT INTO aca_teaching_class VALUES('TC11','2025-2026-2','C11','E001','4')");
+        jdbc.update("INSERT INTO aca_teaching_class VALUES('TC12',?,'C12','E001','4')", TERM);
+        jdbc.update("INSERT INTO sel_sc(sc_id,student_id,tc_id,study_type,stat_stage,select_status) VALUES(21,'U001','TC11',1,1,1)");
+        jdbc.update("INSERT INTO sel_sc(sc_id,student_id,tc_id,study_type,stat_stage,select_status) VALUES(22,'U001','TC12',1,1,1)");
+        jdbc.update("INSERT INTO sel_score(sc_id,score_type,total_score,grade_point,is_final,score_status,published_at) VALUES(21,1,90.0,4.00,1,3,CURRENT_TIMESTAMP)");
+        jdbc.update("INSERT INTO sel_score(sc_id,score_type,total_score,grade_point,is_final,score_status,published_at) VALUES(22,1,80.0,3.00,1,3,CURRENT_TIMESTAMP)");
+        jdbc.update("INSERT INTO sel_exchange_score_convert(student_id,term,stat_stage,course_id,score_type,converted_score,grade_point,is_final,host_school,ext_course_name,proof_no,audit_status,school_audit_time) VALUES('U001','2025-2026-2',1,'C14',1,88.0,3.70,1,'NUS','Data Viz','P-01',2,CURRENT_TIMESTAMP)");
+        jdbc.update("INSERT INTO sel_stu_gpa VALUES('U001',7.5,0.0,3.51,85.33,1,3,CURRENT_TIMESTAMP)");
+        jdbc.update("INSERT INTO sel_stu_term_gpa VALUES('U001',?,3.0,0.0,CURRENT_TIMESTAMP)", TERM);
+
+        asOffice();
+        Map<String, Object> profile = service.getStudentAcademicProfile("U001", null);
+        Map<String, Object> summary = (Map<String, Object>) profile.get("summary");
+        assertEquals("7.5", summary.get("earned_credit"));
+        assertEquals(0, new java.math.BigDecimal("3.51").compareTo(new java.math.BigDecimal(String.valueOf(summary.get("gpa")))));
+        assertEquals(0, new java.math.BigDecimal("85.33").compareTo(new java.math.BigDecimal(String.valueOf(summary.get("avg_score")))));
+        assertEquals(1, ((Number) summary.get("major_rank")).intValue());
+
+        List<Map<String, Object>> cats = (List<Map<String, Object>>) profile.get("credit_by_category");
+        assertEquals(6, cats.size());
+        Map<String, Object> c11 = cats.stream().filter(c -> "11".equals(c.get("course_type"))).findFirst().orElseThrow();
+        assertEquals("2.0", c11.get("earned_credit"));
+        Map<String, Object> c14 = cats.stream().filter(c -> "14".equals(c.get("course_type"))).findFirst().orElseThrow();
+        assertEquals("2.5", c14.get("earned_credit"));
+
+        List<Map<String, Object>> grades = (List<Map<String, Object>>) profile.get("course_grades");
+        assertEquals(3, grades.size());
+        assertTrue(grades.stream().anyMatch(g -> "EXCHANGE".equals(g.get("record_source")) && "C14".equals(g.get("course_id"))));
+
+        List<Map<String, Object>> termSums = (List<Map<String, Object>>) profile.get("term_summaries");
+        assertEquals(1, termSums.size());
+        assertEquals(TERM, termSums.get(0).get("term"));
     }
 }

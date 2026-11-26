@@ -1205,6 +1205,58 @@ public class StatsService {
         return m;
     }
 
+    /** 跨组/学籍对接聚合只读接口：一次返回某学生的总学分、加权平均分、GPA、分类已修学分、学期学分及各科成绩明细 */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getStudentAcademicProfile(String studentId, String term) {
+        if (studentId == null || studentId.isBlank()) {
+            throw BizException.unprocessable("MISSING_STUDENT_ID", "学号不能为空");
+        }
+        String sid = studentId.trim();
+        validateTermFormat(term);
+        String trimmedTerm = (term == null || term.isBlank()) ? null : term.trim();
+
+        // 复用 getAcademicProgress 完成统一角色权限校验、学生评教门禁、分类已修学分及毕业达标预判
+        Map<String, Object> progress = getAcademicProgress(sid);
+        Map<String, Object> gradCheck = (Map<String, Object>) progress.get("graduation_check");
+        Map<String, Object> gpaSnapshot = (Map<String, Object>) progress.get("gpa_snapshot");
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("earned_credit", gradCheck.get("earned_credit"));
+        summary.put("failed_credit", gradCheck.get("failed_credit"));
+        summary.put("in_progress_credit", gradCheck.get("in_progress_credit"));
+        summary.put("graduation_min_credit", gradCheck.get("graduation_min_credit"));
+        summary.put("total_shortfall_credit", gradCheck.get("total_shortfall_credit"));
+        summary.put("credit_satisfied", gradCheck.get("credit_satisfied"));
+        summary.put("graduation_status", gradCheck.get("status"));
+        summary.put("gpa", gpaSnapshot == null ? null : gpaSnapshot.get("gpa"));
+        summary.put("avg_score", gpaSnapshot == null ? null : gpaSnapshot.get("avg_score"));
+        summary.put("major_rank", gpaSnapshot == null ? null : gpaSnapshot.get("major_rank"));
+        summary.put("major_rank_total", gpaSnapshot == null ? null : gpaSnapshot.get("major_rank_total"));
+        summary.put("gpa_updated_at", gpaSnapshot == null ? null : gpaSnapshot.get("update_time"));
+
+        List<Map<String, Object>> termSummaries = jdbc.queryForList("""
+                SELECT term, term_credit, term_failed_credit, updated_at AS update_time
+                FROM sel_stu_term_gpa
+                WHERE student_id = ?
+                ORDER BY term DESC
+                """, sid);
+
+        List<Map<String, Object>> courseGrades = fetchPublishedGradeRecords(sid, trimmedTerm, null, null);
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("student", progress.get("student"));
+        resp.put("stat_stage", progress.get("stat_stage"));
+        resp.put("queried_term", trimmedTerm);
+        resp.put("summary", summary);
+        resp.put("term_summaries", termSummaries);
+        resp.put("credit_by_group", progress.get("group_summaries"));
+        resp.put("credit_by_category", progress.get("categories"));
+        resp.put("minor_summary", progress.get("minor_summary"));
+        resp.put("course_grades", courseGrades);
+        resp.put("data_time", LocalDateTime.now().format(TS_FMT));
+        return resp;
+    }
+
     private static String fmtCredit(BigDecimal val) {
         if (val == null) return "0.0";
         return val.setScale(1, RoundingMode.HALF_UP).toPlainString();
