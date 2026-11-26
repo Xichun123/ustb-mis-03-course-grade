@@ -1,5 +1,5 @@
 <template>
-  <div class="app-shell">
+  <div v-if="userState.currentUser" class="app-shell">
     <!-- 移动端抽屉侧边栏 -->
     <el-drawer
       v-if="isMobile"
@@ -175,7 +175,7 @@
       </header>
 
       <main class="app-content">
-        <router-view :key="userState.currentKey" />
+        <router-view v-if="userState.currentKey && userState.currentUser && canOpenPage" :key="userState.currentKey" />
       </main>
     </div>
   </div>
@@ -185,7 +185,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { initUserStore, logoutSession, userState } from '../stores/user'
+import { logoutSession, userState } from '../stores/user'
 import { setThemeMode, themeState } from '../stores/theme'
 import { canAccessPath, getHomeTitle, getPageTitle, visibleModulesForRole } from '../stores/permissions'
 
@@ -200,6 +200,7 @@ const tooltipContent = ref('')
 const tooltipTriggerEl = ref(null)
 
 const currentRole = computed(() => userState.currentUser?.role)
+const canOpenPage = computed(() => canAccessPath(route.path, currentRole.value))
 const homeTitle = computed(() => getHomeTitle(currentRole.value))
 const pageTitle = computed(() => getPageTitle(route.path, currentRole.value))
 const themeTooltip = computed(() => ({
@@ -218,8 +219,8 @@ const menuGroups = computed(() => {
   return grouped
 })
 
-watch([currentRole, () => route.path], ([role, path]) => {
-  if (role && !canAccessPath(path, role)) {
+watch(canOpenPage, (allowed) => {
+  if (!allowed) {
     router.replace('/dashboard')
   }
 }, { immediate: true })
@@ -266,11 +267,7 @@ function toggleCollapse() {
   localStorage.setItem(COLLAPSED_KEY, String(collapsed.value))
 }
 
-onMounted(async () => {
-  const ok = await initUserStore()
-  if (!ok) {
-    router.replace('/login')
-  }
+onMounted(() => {
   window.addEventListener('resize', handleResize)
 })
 
@@ -278,8 +275,8 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
 })
 
-async function handleLogout() {
-  await logoutSession()
+function handleLogout() {
+  if (!logoutSession()) return
   ElMessage.success('已退出登录')
   router.replace('/login')
 }

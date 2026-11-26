@@ -1,6 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import MainLayout from '../layout/MainLayout.vue'
 import { getAuthToken } from '../api/request'
+import { canAccessPath } from '../stores/permissions'
+import { initUserStore, userState } from '../stores/user'
 
 const routes = [
   {
@@ -34,12 +36,15 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to) => {
-  const hasToken = !!getAuthToken()
-  if (!to.meta?.public && !hasToken) {
+router.beforeResolve(async (to) => {
+  if (to.meta.public) {
+    if (!getAuthToken()) return true
+    return (await initUserStore()) ? '/dashboard' : true
+  }
+  if (!(await initUserStore())) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
-  if (to.path === '/login' && hasToken) {
+  if (!canAccessPath(to.path, userState.currentUser?.role)) {
     return '/dashboard'
   }
   return true

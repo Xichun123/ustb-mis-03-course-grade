@@ -60,12 +60,11 @@
 
 <script setup>
 import { reactive, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { loginWithPassword } from '../stores/user'
+import { getLoginRedirect, loginWithPassword } from '../stores/user'
 
 const router = useRouter()
-const route = useRoute()
 const formRef = ref(null)
 const submitting = ref(false)
 
@@ -80,21 +79,15 @@ const rules = {
 }
 
 async function handleLogin() {
-  if (!formRef.value) return
-  try {
-    await formRef.value.validate()
-  } catch {
-    return
-  }
+  if (!formRef.value || submitting.value) return
   submitting.value = true
   try {
-    const user = await loginWithPassword(form.username.trim(), form.password)
+    if (!(await formRef.value.validate().catch(() => false))) return
+    const user = await loginWithPassword(form.username.trim(), form.password).catch(() => null)
+    if (!user) return
     const shortName = (user.displayName || '').replace(/（.*）$/, '').trim()
     ElMessage.success(`欢迎回来，${shortName}`)
-    const redirect = typeof route.query.redirect === 'string' && route.query.redirect !== '/login'
-      ? route.query.redirect
-      : '/dashboard'
-    router.replace(redirect)
+    await router.replace(getLoginRedirect(router))
   } finally {
     submitting.value = false
   }

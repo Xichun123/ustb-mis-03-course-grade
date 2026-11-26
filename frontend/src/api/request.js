@@ -1,22 +1,27 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
-const TOKEN_KEY = 'ustb_cg_auth_token'
+export const AUTH_TOKEN_KEY = 'ustb_cg_auth_token'
+export const AUTH_EXPIRED_EVENT = 'ustb-auth-expired'
+
+sessionStorage.removeItem(AUTH_TOKEN_KEY)
 
 export function getAuthToken() {
-  return sessionStorage.getItem(TOKEN_KEY) || ''
+  return localStorage.getItem(AUTH_TOKEN_KEY) || ''
 }
 
 export function setAuthToken(token) {
+  sessionStorage.removeItem(AUTH_TOKEN_KEY)
   if (token) {
-    sessionStorage.setItem(TOKEN_KEY, token)
+    localStorage.setItem(AUTH_TOKEN_KEY, token)
   } else {
-    sessionStorage.removeItem(TOKEN_KEY)
+    clearAuthToken()
   }
 }
 
 export function clearAuthToken() {
-  sessionStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(AUTH_TOKEN_KEY)
+  localStorage.removeItem(AUTH_TOKEN_KEY)
 }
 
 const request = axios.create({
@@ -31,7 +36,7 @@ request.interceptors.request.use((config) => {
     config.headers['X-Demo-User'] = token
   }
   return config
-})
+}, undefined, { synchronous: true })
 
 request.interceptors.response.use(
   (res) => {
@@ -50,9 +55,13 @@ request.interceptors.response.use(
     const status = err?.response?.status
     const msg = err?.response?.data?.message || err.message || '网络异常，请稍后重试'
     if (status === 401 && !err.config?.url?.includes('/auth/login')) {
-      clearAuthToken()
-      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        window.location.href = '/login'
+      const requestToken = err.config?.headers?.['X-Demo-User']
+      const activeToken = getAuthToken()
+      if (requestToken && requestToken === activeToken) {
+        clearAuthToken()
+        window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+      } else if (!requestToken && !activeToken) {
+        window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
       }
       return Promise.reject(err)
     }
