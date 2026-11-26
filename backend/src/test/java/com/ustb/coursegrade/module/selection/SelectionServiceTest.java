@@ -48,7 +48,7 @@ class SelectionServiceTest {
             "CREATE TABLE aca_teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),emp_id VARCHAR(10),class_ids VARCHAR(100),capacity INT,tc_type VARCHAR(20),tc_status VARCHAR(2),actual_num INT,selected_count INT DEFAULT 0,hours DECIMAL(18,2) DEFAULT 48.00,open_lower INT DEFAULT 6,no_open_reason VARCHAR(100))",
             "CREATE TABLE sel_round_class(round_id INT,tc_id VARCHAR(20),PRIMARY KEY(round_id,tc_id))",
             "CREATE TABLE sel_select_limit(limit_id INT AUTO_INCREMENT PRIMARY KEY,tc_id VARCHAR(20),limit_type INT,limit_value VARCHAR(20))",
-            "CREATE TABLE aca_schedule_result(sched_id VARCHAR(14) PRIMARY KEY,tc_id VARCHAR(20),week_range VARCHAR(20),week_day VARCHAR(20),start_slot INT,end_slot INT,room_id VARCHAR(12))",
+            "CREATE TABLE aca_schedule_result(sched_id VARCHAR(14) PRIMARY KEY,tc_id VARCHAR(20),week_range VARCHAR(20),week_day VARCHAR(20),start_slot INT,end_slot INT,room_id VARCHAR(12),sched_status VARCHAR(2) DEFAULT '0')",
             "CREATE TABLE sel_sc(sc_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),round_id INT,study_type INT,is_exempt_attend INT,stu_level VARCHAR(20),stat_stage INT,priority INT,select_status INT,select_time TIMESTAMP,drop_time TIMESTAMP,UNIQUE(student_id,tc_id),CHECK(select_status=3 OR drop_time IS NULL),CHECK(is_exempt_attend=0 OR study_type=2))",
             "CREATE TABLE sel_select_log(log_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),round_id INT,action_type INT,operator_id VARCHAR(40),operated_at TIMESTAMP,remark VARCHAR(500),CHECK(action_type<>4 OR remark IS NOT NULL))",
             "CREATE TABLE sel_score(sc_id BIGINT,score_status INT,total_score DECIMAL(5,2),score_level VARCHAR(6))",
@@ -71,7 +71,7 @@ class SelectionServiceTest {
         jdbc.update("INSERT INTO sys_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','min_open_students','6','01')");
         for(String id:List.of("A","B","D")){
             jdbc.update("INSERT INTO aca_teaching_class(tc_id,term,course_id,emp_id,class_ids,capacity,tc_type,tc_status,actual_num,selected_count) VALUES(?,?,?,'E1','信管241',1,'2','4',0,0)",id,TERM,id.equals("A")?"C001":id.equals("B")?"C002":"C003");
-            jdbc.update("INSERT INTO aca_schedule_result VALUES(?,?,?,'1',1,2,'教室1')","SCH_"+id,id,id.equals("A")?"1-8":id.equals("B")?"9-16":"1-16");
+            jdbc.update("INSERT INTO aca_schedule_result(sched_id,tc_id,week_range,week_day,start_slot,end_slot,room_id,sched_status) VALUES(?,?,?,'1',1,2,'教室1','1')","SCH_"+id,id,id.equals("A")?"1-8":id.equals("B")?"9-16":"1-16");
             for(int round:List.of(1,2))jdbc.update("INSERT INTO sel_round_class VALUES(?,?)",round,id);
         }
         var demoConfig = new YamlPropertySourceLoader().load("selection-catalog-demo",
@@ -316,6 +316,37 @@ class SelectionServiceTest {
         jdbc.update("INSERT INTO aca_teaching_class(tc_id,term,course_id,emp_id,class_ids,capacity,tc_type,tc_status,actual_num,selected_count) VALUES('PRE1','2025-2026-2','C001','E1','信管241',30,'1','4',1,1)");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,round_id,study_type,is_exempt_attend,stu_level,stat_stage,priority,select_status,select_time) VALUES('S1','PRE1',1,1,0,'本科',1,NULL,1,CURRENT_TIMESTAMP)");
         jdbc.update("INSERT INTO sel_score SELECT sc_id,3,85.0,NULL FROM sel_sc WHERE tc_id='PRE1'");
+        assertEquals(1, SelectionRules.number(service.enroll(application("B")).get("select_status")));
+    }
+
+    @Test void pendingScheduleIsIgnoredAcrossCoursesCheckEnrollAndTimetable() {
+        // 将 B 班排课置为 0（待审核），业务②应与业务①统一口径：视为排课待确认
+        jdbc.update("UPDATE aca_schedule_result SET sched_status='0' WHERE tc_id='B'");
+
+        var page = service.courses(1, "C002", 1, 10, null);
+        var bClass = rows(rows(page.get("items")).get(0).get("classes")).get(0);
+        assertTrue(rows(bClass.get("schedule")).isEmpty());
+
+        BizException checkEx = assertThrows(BizException.class, () -> service.check(application("B")));
+        assertEquals("DATA_PENDING", checkEx.getCode());
+        BizException enrollEx = assertThrows(BizException.class, () -> service.enroll(application("B")));
+        assertEquals("DATA_PENDING", enrollEx.getCode());
+
+        // 已选课程若排课退回待审核，周课表不展示该未审核时段并列入排课缺失提示
+        service.enroll(application("A"));
+        jdbc.update("UPDATE aca_schedule_result SET sched_status='0' WHERE tc_id='A'");
+        var table = service.timetable(TERM, 1);
+        assertTrue(rows(table.get("blocks")).isEmpty());
+        assertEquals(List.of("A"), table.get("missing_schedule"));
+
+        // 排课状态变为 2（已发布）与 3（已调课）后恢复可见并允许选课
+        jdbc.update("UPDATE aca_schedule_result SET sched_status='2' WHERE tc_id='B'");
+        // 已选课 A 仍处于待审核时，冲突检测会拦截防止漏检
+        assertEquals("DATA_PENDING", assertThrows(BizException.class, () -> service.enroll(application("B"))).getCode());
+        jdbc.update("UPDATE aca_schedule_result SET sched_status='3' WHERE tc_id='A'");
+        var pageAfter = service.courses(1, "C002", 1, 10, null);
+        var bAfter = rows(rows(pageAfter.get("items")).get(0).get("classes")).get(0);
+        assertEquals(1, rows(bAfter.get("schedule")).size());
         assertEquals(1, SelectionRules.number(service.enroll(application("B")).get("select_status")));
     }
 }

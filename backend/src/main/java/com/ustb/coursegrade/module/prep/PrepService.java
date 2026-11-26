@@ -26,7 +26,8 @@ import java.util.*;
 public class PrepService {
 
     // 第 2 组：0 待审核，1 已审核，2 已发布，3 已调课。
-    private static final String CONFIRMED_SCHEDULE = "sr.sched_status IN ('1', '2', '3')";
+    private static final String CONFIRMED_SCHEDULE_STATUS = "('1', '2', '3')";
+    private static final String CONFIRMED_SCHEDULE = "sr.sched_status IN " + CONFIRMED_SCHEDULE_STATUS;
     private static final String HAS_SCHEDULE = "EXISTS (SELECT 1 FROM aca_schedule_result sr"
             + " WHERE sr.tc_id = tc.tc_id AND " + CONFIRMED_SCHEDULE + ")";
 
@@ -56,11 +57,19 @@ public class PrepService {
             params.add(tcStatus.trim());
         }
         if (scheduled != null) {
-            where.append(scheduled ? " AND " : " AND NOT ").append(HAS_SCHEDULE);
+            if (scheduled) {
+                where.append(" AND ").append(HAS_SCHEDULE);
+            } else {
+                if (tcStatus == null || tcStatus.isBlank()) {
+                    where.append(" AND tc.tc_status = '4' ");
+                }
+                where.append(" AND NOT ").append(HAS_SCHEDULE);
+            }
         }
         if (keyword != null && !keyword.isBlank()) {
-            where.append(" AND (tc.tc_id LIKE ? OR c.course_id LIKE ? OR c.course_name LIKE ? OR COALESCE(emp.emp_name, '') LIKE ?) ");
+            where.append(" AND (tc.tc_id LIKE ? OR c.course_id LIKE ? OR c.course_name LIKE ? OR COALESCE(emp.emp_name, '') LIKE ? OR COALESCE(tc.emp_id, '') LIKE ?) ");
             String like = "%" + keyword.trim() + "%";
+            params.add(like);
             params.add(like);
             params.add(like);
             params.add(like);
@@ -140,6 +149,9 @@ public class PrepService {
     /** 1.3 查询本学期所有已发布的轮次候选教学班 */
     public List<Map<String, Object>> listRoundClassOptions(String term) {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
+        if (term == null || term.isBlank()) {
+            return List.of();
+        }
         return jdbc.queryForList("""
                 SELECT tc.tc_id, c.course_name, COALESCE(emp.emp_name, tc.emp_id) AS teacher_name,
                        CASE WHEN %s THEN 1 ELSE 0 END AS has_schedule
@@ -365,9 +377,13 @@ public class PrepService {
                 SELECT sr.*,
                        sr.start_at AS start_time, sr.end_at AS end_time,
                        sr.approved_at AS approve_time, sr.published_at AS publish_time,
-                       (SELECT COUNT(*) FROM sel_round_class rc WHERE rc.round_id = sr.round_id) AS class_count
+                       (SELECT COUNT(*) FROM sel_round_class rc WHERE rc.round_id = sr.round_id) AS class_count,
+                       (SELECT COUNT(*) FROM sel_round_class rc
+                         WHERE rc.round_id = sr.round_id
+                           AND NOT EXISTS (SELECT 1 FROM aca_schedule_result asr
+                                            WHERE asr.tc_id = rc.tc_id AND asr.sched_status IN %s)) AS unscheduled_class_count
                 FROM sel_select_round sr
-                """ + where + " ORDER BY sr.round_id DESC LIMIT ? OFFSET ?";
+                """.formatted(CONFIRMED_SCHEDULE_STATUS) + where + " ORDER BY sr.round_id DESC LIMIT ? OFFSET ?";
         return new PageResult<>(jdbc.queryForList(sql, dataParams.toArray()), total, page, pageSize);
     }
 
@@ -400,7 +416,11 @@ public class PrepService {
                 WHERE rc.round_id = ? ORDER BY rc.tc_id
                 """, roundId);
         attachSchedulesAndLabels(classes);
+        long unscheduledCount = classes.stream()
+                .filter(c -> !Boolean.TRUE.equals(c.get("has_schedule")))
+                .count();
         round.put("classes", classes);
+        round.put("unscheduled_class_count", unscheduledCount);
         return round;
     }
 
@@ -631,6 +651,7 @@ public class PrepService {
         List<String> parts = new ArrayList<>();
         for (Map<String, Object> s : schedules) {
             String wr = s.get("week_range") == null ? "" : String.valueOf(s.get("week_range")).trim();
+            String weekText = wr.isEmpty() ? "" : (wr.endsWith("周") ? wr : wr + "周");
             String wdRaw = s.get("week_day") == null ? "" : String.valueOf(s.get("week_day")).trim();
             String dayLabel = wdRaw;
             try {
@@ -639,8 +660,16 @@ public class PrepService {
             } catch (NumberFormatException ignored) {}
             Object st = s.get("start_slot");
             Object ed = s.get("end_slot");
+            String slotText = (st != null && ed != null) ? (st + "-" + ed + "节") : "";
             String room = s.get("room_id") == null ? "" : String.valueOf(s.get("room_id")).trim();
-            parts.add(wr + "周 " + dayLabel + " " + st + "-" + ed + "节 " + room);
+            List<String> segs = new ArrayList<>(4);
+            if (!weekText.isEmpty()) segs.add(weekText);
+            if (!dayLabel.isEmpty()) segs.add(dayLabel);
+            if (!slotText.isEmpty()) segs.add(slotText);
+            if (!room.isEmpty()) segs.add(room);
+            if (!segs.isEmpty()) {
+                parts.add(String.join(" ", segs));
+            }
         }
         return String.join("；", parts);
     }

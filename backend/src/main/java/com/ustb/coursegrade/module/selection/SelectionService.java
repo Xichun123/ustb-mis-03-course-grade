@@ -37,6 +37,8 @@ public class SelectionService {
     }
     public record Withdrawal(Integer roundId,String expectedVersion,Boolean confirmed){}
     public static final int DEFAULT_MIN_OPEN_STUDENTS = 6;
+    // 与业务①保持一致：第 2 组 0 待审核，1 已审核，2 已发布，3 已调课；仅读取已确认排课。
+    private static final String CONFIRMED_SCHEDULE = "sched_status IN ('1', '2', '3')";
     public record Adjustment(String studentId,String operation,Integer studyType,String reason){}
     public record StopRequest(@com.fasterxml.jackson.annotation.JsonAlias("tc_ids") List<String> tcIds,String reason){}
 
@@ -615,7 +617,7 @@ public class SelectionService {
           WHERE tc.tc_id=?
           """,id);
     }
-    private List<Map<String,Object>> schedule(String id){return jdbc.queryForList("SELECT week_range,week_day,start_slot,end_slot,room_id FROM aca_schedule_result WHERE tc_id=? ORDER BY week_day,start_slot,week_range",id);}
+    private List<Map<String,Object>> schedule(String id){return jdbc.queryForList("SELECT week_range,week_day,start_slot,end_slot,room_id FROM aca_schedule_result WHERE tc_id=? AND "+CONFIRMED_SCHEDULE+" ORDER BY week_day,start_slot,week_range,sched_id",id);}
     private Map<String,Object> relation(String s,String tc,boolean lock){var rows=jdbc.queryForList("SELECT * FROM sel_sc WHERE student_id=? AND tc_id=?"+(lock?" FOR UPDATE":""),s,tc);return rows.isEmpty()?null:rows.get(0);}
     private int count(String tc){return jdbc.queryForObject("SELECT COUNT(*) FROM sel_sc WHERE tc_id=? AND select_status=1",Integer.class,tc);}
     private void recount(String tc){int c=count(tc);jdbc.update("UPDATE aca_teaching_class SET actual_num=?,selected_count=? WHERE tc_id=?",c,c,tc);}

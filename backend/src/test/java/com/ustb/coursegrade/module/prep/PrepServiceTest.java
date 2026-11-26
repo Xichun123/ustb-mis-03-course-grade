@@ -107,6 +107,11 @@ class PrepServiceTest {
         assertEquals(1, scheduledOnly.getTotal());
         assertEquals("TC1", scheduledOnly.getItems().get(0).get("tc_id"));
 
+        // 按排课待确认筛选且未显式指定教学班状态时，应仅返回已发布待排班 TC2，不混入已停开班 TC3
+        var unscheduledDefault = service.listTeachingClasses(TERM, null, null, null, false, 1, 20);
+        assertEquals(1, unscheduledDefault.getTotal());
+        assertEquals("TC2", unscheduledDefault.getItems().get(0).get("tc_id"));
+
         var pending = service.listTeachingClasses(TERM, "李晓静", null, "4", false, 1, 20);
         assertEquals(1, pending.getTotal());
         assertEquals("TC2", pending.getItems().get(0).get("tc_id"));
@@ -142,6 +147,10 @@ class PrepServiceTest {
         assertEquals("王明远", bound.get(0).get("teacher_name"));
         assertTrue(String.valueOf(bound.get(0).get("schedule_summary")).contains("1-16周"));
         assertEquals(false, bound.get(1).get("has_schedule"));
+        assertEquals(1L, ((Number) created.get("unscheduled_class_count")).longValue());
+
+        var roundList = service.listRounds(TERM, null, 1, 20);
+        assertEquals(1L, ((Number) roundList.getItems().get(0).get("unscheduled_class_count")).longValue());
 
         service.submitRound(roundId);
         asDirector();
@@ -175,5 +184,40 @@ class PrepServiceTest {
         assertEquals(List.of("TC1"), page.getItems().stream().map(row -> row.get("tc_id")).toList());
         assertEquals(1L, service.getScheduleSyncSummary(TERM).get("total_classes"));
         assertThrows(BizException.class, () -> service.listRoundClassOptions(TERM));
+    }
+
+    @Test
+    void scheduleFormattingAvoidsDuplicateWeekSuffixAndKeywordMatchesEmpIdFallback() {
+        // 上游周次自带“周”且教室为空、教师暂缺 hr_employee 记录时应平滑兼容且可按工号检索
+        jdbc.update("INSERT INTO aca_teaching_class(tc_id,term,course_id,emp_id,class_name,capacity,tc_status) VALUES('TC4',?,'C001','T999','外聘-01班',40,'4')", TERM);
+        jdbc.update("INSERT INTO aca_schedule_result VALUES('SCH4','TC4','1-16周','4',5,6,'','2')");
+
+        var found = service.listTeachingClasses(TERM, "T999", null, null, null, 1, 20);
+        assertEquals(1, found.getTotal());
+        Map<String, Object> tc4 = found.getItems().get(0);
+        assertEquals("T999", tc4.get("teacher_name"));
+        assertEquals("1-16周 周四 5-6节", tc4.get("schedule_summary"));
+        assertTrue(service.listRoundClassOptions("   ").isEmpty());
+    }
+
+    @Test
+    void collegeSecretaryAndRestrictedRolesRespectScope() {
+        jdbc.update("INSERT INTO org_organization VALUES('ORG002','计通学院','0002')");
+        jdbc.update("INSERT INTO aca_course VALUES('C009','计算机网络','13',3.0,'ORG002')");
+        jdbc.update("INSERT INTO aca_teaching_class(tc_id,term,course_id,emp_id,capacity,tc_status) VALUES('TC9',?,'C009','T001',50,'4')", TERM);
+
+        // 学院教学秘书即使传其他学院编码，也只能看到本学院课程
+        UserContext.set(new CurrentUser("sec1", "经管秘书", RoleEnum.COLLEGE_SECRETARY, null, "E101", null, "0001", "ORG001"));
+        assertEquals(3, service.listTeachingClasses(TERM, null, null, null, null, 1, 20).getTotal());
+        assertEquals(0, service.listTeachingClasses(TERM, null, "0002", null, null, 1, 20).getTotal());
+        assertEquals(3L, service.getScheduleSyncSummary(TERM).get("total_classes"));
+
+        // 研究生院和学生不可访问开课列表与概况
+        UserContext.set(new CurrentUser("grad", "研究生院", RoleEnum.GRADUATE_SCHOOL, null, "G001", null, null, "ORG901"));
+        assertThrows(BizException.class, () -> service.listTeachingClasses(TERM, null, null, null, null, 1, 20));
+        assertThrows(BizException.class, () -> service.getScheduleSyncSummary(TERM));
+
+        UserContext.set(new CurrentUser("stu", "张晨曦", RoleEnum.STUDENT, "U202440001", null, null, "0001", null));
+        assertThrows(BizException.class, () -> service.listTeachingClasses(TERM, null, null, null, null, 1, 20));
     }
 }

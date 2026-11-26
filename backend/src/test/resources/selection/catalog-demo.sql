@@ -27,14 +27,14 @@ INSERT INTO sel_round_class (round_id, tc_id) VALUES
     (910, 'DEMO-PROF'), (910, 'DEMO-LANG-01'), (910, 'DEMO-LANG-02'),
     (910, 'DEMO-PRACTICE');
 
-INSERT INTO aca_schedule_result (sched_id, tc_id, week_range, week_day, start_slot, end_slot, room_id) VALUES
-    ('DS001', 'DEMO-UNI-REQ', '1-16', '1', 1, 2, '示例教室101'),
-    ('DS002', 'DEMO-COL-REQ', '1-16', '1', 1, 2, '示例教室101'),
-    ('DS003', 'DEMO-MAJ-REQ', '1-16', '1', 1, 2, '示例教室101'),
-    ('DS004', 'DEMO-PROF', '1-16', '1', 1, 2, '示例教室101'),
-    ('DS005', 'DEMO-LANG-01', '1-16', '1', 1, 2, '示例教室101'),
-    ('DS006', 'DEMO-LANG-02', '1-16', '1', 1, 2, '示例教室101'),
-    ('DS007', 'DEMO-PRACTICE', '1-16', '1', 1, 2, '示例教室101');
+INSERT INTO aca_schedule_result (sched_id, tc_id, week_range, week_day, start_slot, end_slot, room_id, sched_status) VALUES
+    ('DS001', 'DEMO-UNI-REQ', '1-16', '1', 1, 2, '示例教室101', '1'),
+    ('DS002', 'DEMO-COL-REQ', '1-16', '1', 1, 2, '示例教室101', '1'),
+    ('DS003', 'DEMO-MAJ-REQ', '1-16', '1', 1, 2, '示例教室101', '1'),
+    ('DS004', 'DEMO-PROF', '1-16', '1', 1, 2, '示例教室101', '1'),
+    ('DS005', 'DEMO-LANG-01', '1-16', '1', 1, 2, '示例教室101', '1'),
+    ('DS006', 'DEMO-LANG-02', '1-16', '1', 1, 2, '示例教室101', '1'),
+    ('DS007', 'DEMO-PRACTICE', '1-16', '1', 1, 2, '示例教室101', '1');
 
 INSERT INTO sel_select_limit (tc_id, limit_type, limit_value) VALUES
     ('DEMO-UNI-REQ', 1, '2024'), ('DEMO-UNI-REQ', 2, '120102'),

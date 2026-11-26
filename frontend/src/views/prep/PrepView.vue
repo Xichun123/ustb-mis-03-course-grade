@@ -21,14 +21,14 @@
           <el-select v-model="classQuery.term" placeholder="全部学期" clearable style="width: 170px" @change="refreshClasses">
             <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
           </el-select>
-          <el-input v-model="classQuery.keyword" placeholder="教学班号 / 课程名 / 任课教师" style="width: 240px"
+          <el-input v-model="classQuery.keyword" placeholder="教学班号 / 课程名 / 教师姓名或工号" style="width: 260px"
             clearable @keyup.enter="refreshClasses" @clear="refreshClasses" />
-          <el-select v-model="classQuery.tc_status" placeholder="教学班状态" clearable style="width: 130px">
+          <el-select v-model="classQuery.tc_status" placeholder="教学班状态" clearable style="width: 130px" @change="refreshClasses">
             <el-option label="已发布" value="4" />
             <el-option label="不开课" value="2" />
             <el-option label="已取消" value="5" />
           </el-select>
-          <el-select v-model="classQuery.scheduled" placeholder="排课状态" clearable style="width: 130px">
+          <el-select v-model="classQuery.scheduled" placeholder="排课状态" clearable style="width: 130px" @change="refreshClasses">
             <el-option label="已排课" :value="true" />
             <el-option label="排课待确认" :value="false" />
           </el-select>
@@ -46,7 +46,7 @@
           <el-table-column label="课程名称" min-width="165">
             <template #default="{ row }">
               <div>{{ row.course_name }}</div>
-              <div class="cell-sub">{{ row.course_type_label }} · {{ row.credit }} 学分 · {{ Number(row.hours) }} 学时</div>
+              <div class="cell-sub">{{ courseMetaLine(row) }}</div>
               <div v-if="classFormatLabel(row)" class="cell-sub">{{ classFormatLabel(row) }}</div>
             </template>
           </el-table-column>
@@ -136,7 +136,19 @@
             </template>
           </el-table-column>
           <el-table-column prop="max_credit" label="学分上限" width="85" />
-          <el-table-column v-if="!isStudent" prop="class_count" label="教学班数" width="85" />
+          <el-table-column v-if="!isStudent" label="教学班数" width="120">
+            <template #default="{ row }">
+              <span>{{ row.class_count ?? 0 }}</span>
+              <el-tag
+                v-if="Number(row.unscheduled_class_count) > 0"
+                size="small"
+                type="warning"
+                style="margin-left: 6px"
+              >
+                待排 {{ row.unscheduled_class_count }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="状态" width="125">
             <template #default="{ row }">
               <el-tag :type="statusTagType(row.round_status)" size="small">
@@ -309,6 +321,14 @@
           <div class="round-classes-header">
             开放教学班（共 {{ (roundDetail.classes || []).length }} 个）
           </div>
+          <el-alert
+            v-if="roundDetailUnscheduledCount > 0"
+            type="warning"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 8px"
+            :title="`本轮有 ${roundDetailUnscheduledCount} 个教学班排课待确认，学生须待排课确认后方可正常选课。`"
+          />
           <el-table
             v-if="(roundDetail.classes || []).length"
             :data="roundDetail.classes"
@@ -446,7 +466,7 @@
             <el-option
               v-for="tc in publishedClassOptions"
               :key="tc.tc_id"
-              :label="`${tc.tc_id} · ${tc.course_name} · ${tc.teacher_name || '教师待定'}${tc.has_schedule ? '' : '（排课待确认）'}`"
+              :label="`${tc.tc_id} · ${tc.course_name} · ${tc.teacher_name || '教师待定'}${tc.invalid_for_round ? '（已停开或非本学期，请移除）' : (tc.has_schedule ? '' : '（排课待确认）')}`"
               :value="tc.tc_id"
             />
           </el-select>
@@ -562,9 +582,31 @@ function formatDateTime(val) {
   return String(val || '').replace('T', ' ').slice(0, 16) || '—'
 }
 
+const roundDetailUnscheduledCount = computed(() =>
+  (roundDetail.value?.classes || []).filter(c => !c.has_schedule).length
+)
+
+function courseMetaLine(row) {
+  const parts = [row.course_type_label]
+  if (row.credit != null && row.credit !== '') parts.push(`${row.credit} 学分`)
+  if (row.hours != null && row.hours !== '' && Number.isFinite(Number(row.hours))) {
+    parts.push(`${Number(row.hours)} 学时`)
+  }
+  return parts.filter(Boolean).join(' · ')
+}
+
 function classFormatLabel(row) {
-  const teaching = { 1: '讲课', 2: '实验', 3: '上机', 4: '实践', 5: '研讨' }[Number(row.teach_type)]
-  const assessment = { 1: '考试', 2: '考查' }[Number(row.assess_type)]
+  const teachMap = { 1: '讲课', 2: '实验', 3: '上机', 4: '实践', 5: '研讨' }
+  const assessMap = { 1: '考试', 2: '考查' }
+  const mapCodeOrText = (raw, dict) => {
+    if (raw == null) return ''
+    const text = String(raw).trim()
+    if (!text) return ''
+    if (/^\d+$/.test(text)) return dict[Number(text)] || ''
+    return text
+  }
+  const teaching = mapCodeOrText(row.teach_type, teachMap)
+  const assessment = mapCodeOrText(row.assess_type, assessMap)
   return [teaching, assessment].filter(Boolean).join(' · ')
 }
 
@@ -690,7 +732,24 @@ async function openRoundDialog(roundId) {
   })
   roundReadOnly.value = d.round_status !== 0 || !canManageRound.value
   roundDialogVisible.value = true
-  if (!roundReadOnly.value) await loadRoundClassOptions(roundForm.term)
+  if (!roundReadOnly.value) {
+    const options = await loadRoundClassOptions(roundForm.term)
+    if (options && roundDialogVisible.value && roundForm.round_id === d.round_id) {
+      const existingIds = new Set(options.map(tc => tc.tc_id))
+      const missingBound = (d.classes || [])
+        .filter(c => !existingIds.has(c.tc_id))
+        .map(c => ({
+          tc_id: c.tc_id,
+          course_name: c.course_name || '未知课程',
+          teacher_name: c.teacher_name || '教师待定',
+          has_schedule: Boolean(c.has_schedule),
+          invalid_for_round: true
+        }))
+      if (missingBound.length) {
+        publishedClassOptions.value = [...options, ...missingBound]
+      }
+    }
+  }
 }
 
 function goToSelection() {
@@ -710,8 +769,30 @@ async function saveRound() {
   loadRounds()
 }
 
+async function loadUnscheduledClassesForRound(roundId) {
+  const res = await prepApi.getRound(roundId)
+  return (res.data?.classes || []).filter(c => !c.has_schedule)
+}
+
+function formatUnscheduledHint(list) {
+  const preview = list.slice(0, 3).map(c => `${c.tc_id} ${c.course_name || ''}`.trim()).join('、')
+  return list.length > 3 ? `${preview} 等 ${list.length} 个教学班` : preview
+}
+
 async function handleSubmitRound(roundId) {
-  await ElMessageBox.confirm('确认提交教务处处长审批？提交后将锁定关联教学班的限选条件。', '提交审批')
+  const unscheduled = await loadUnscheduledClassesForRound(roundId)
+  const msg = unscheduled.length
+    ? `当前轮次仍有 ${unscheduled.length} 个教学班排课待确认（${formatUnscheduledHint(unscheduled)}），学生须待排课确认后才能正常选课。确认仍要提交教务处处长审批？提交后将锁定关联教学班的限选条件。`
+    : '确认提交教务处处长审批？提交后将锁定关联教学班的限选条件。'
+  try {
+    await ElMessageBox.confirm(msg, '提交审批', {
+      type: unscheduled.length ? 'warning' : 'info',
+      confirmButtonText: unscheduled.length ? '仍要提交' : '确认提交',
+      cancelButtonText: '取消'
+    })
+  } catch {
+    return
+  }
   await prepApi.submitRound(roundId)
   ElMessage.success('已提交审批')
   loadRounds()
@@ -735,7 +816,19 @@ async function confirmApprove() {
 }
 
 async function handlePublishRound(roundId) {
-  await ElMessageBox.confirm('确认发布该选课轮次并向学生公开通知？', '发布确认')
+  const unscheduled = await loadUnscheduledClassesForRound(roundId)
+  const msg = unscheduled.length
+    ? `当前轮次仍有 ${unscheduled.length} 个教学班排课待确认（${formatUnscheduledHint(unscheduled)}），发布后学生可看到但暂无法选课。确认仍要发布该选课轮次并向学生公开通知？`
+    : '确认发布该选课轮次并向学生公开通知？'
+  try {
+    await ElMessageBox.confirm(msg, '发布确认', {
+      type: unscheduled.length ? 'warning' : 'info',
+      confirmButtonText: unscheduled.length ? '仍要发布' : '确认发布',
+      cancelButtonText: '取消'
+    })
+  } catch {
+    return
+  }
   await prepApi.publishRound(roundId)
   ElMessage.success('选课通知已发布')
   loadRounds()
