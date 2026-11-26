@@ -45,7 +45,7 @@ public class StatsService {
 
     public String getCurrentTerm() {
         List<String> rows = jdbc.queryForList(
-                "SELECT item_name FROM sys_dict_item WHERE dict_type = 'system_param' AND item_code = 'current_term' AND item_status IN ('01', '1') LIMIT 1",
+                "SELECT item_name FROM al_dict_item WHERE dict_type = 'system_param' AND item_code = 'current_term' AND item_status IN ('01', '1') LIMIT 1",
                 String.class);
         if (!rows.isEmpty() && rows.get(0) != null && !rows.get(0).isBlank()) {
             return rows.get(0).trim();

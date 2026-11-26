@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS sys_person (
   UNIQUE KEY uk_sys_person_id_card (id_card_no)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = 'DBA 统一自然人主索引（v1.3）';
 
-CREATE TABLE IF NOT EXISTS sys_dict_type (
+CREATE TABLE IF NOT EXISTS al_dict_type (
   dict_type   VARCHAR(40)  NOT NULL COMMENT '字典类型码',
   type_name   VARCHAR(100) NOT NULL COMMENT '类型名称',
   is_system   TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '是否内置：0否 1是',
@@ -59,9 +59,9 @@ CREATE TABLE IF NOT EXISTS sys_dict_type (
   PRIMARY KEY (dict_type)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = 'DBA 统一字典类型表（v1.3）';
 
-CREATE TABLE IF NOT EXISTS sys_dict_item (
+CREATE TABLE IF NOT EXISTS al_dict_item (
   dict_id        BIGINT       NOT NULL AUTO_INCREMENT COMMENT '字典项ID',
-  dict_type      VARCHAR(40)  NOT NULL COMMENT '字典类型码，关联 sys_dict_type.dict_type',
+  dict_type      VARCHAR(40)  NOT NULL COMMENT '字典类型码，关联 al_dict_type.dict_type',
   item_code      VARCHAR(100) NOT NULL COMMENT '码值',
   item_name      VARCHAR(200) NOT NULL COMMENT '码值名称',
   sort_no        INT          NULL     DEFAULT 0 COMMENT '排序号',
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS sys_dict_item (
   effective_to   DATE         NULL     COMMENT '失效日期',
   item_status    CHAR(2)      NOT NULL DEFAULT '01' COMMENT '字典项状态：01启用 02停用',
   PRIMARY KEY (dict_id),
-  UNIQUE KEY uk_sys_dict_item_type_code (dict_type, item_code)
+  UNIQUE KEY uk_al_dict_item_type_code (dict_type, item_code)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = 'DBA 统一字典项表（v1.3）';
 
 -- =====================================================================

@@ -43,8 +43,8 @@ class PrepServiceTest {
                 "CREATE TABLE sel_select_limit(limit_id INT AUTO_INCREMENT PRIMARY KEY,tc_id VARCHAR(20),limit_type INT,limit_value VARCHAR(20))",
                 "CREATE TABLE sel_select_round(round_id INT AUTO_INCREMENT PRIMARY KEY,term VARCHAR(11),round_name VARCHAR(30),round_type INT,target_level INT,start_at TIMESTAMP,end_at TIMESTAMP,max_credit DECIMAL(5,1),select_mode INT,allow_retake INT,retake_ignore_conflict INT,round_status INT,notice_content VARCHAR(500),published_at TIMESTAMP,approver_id VARCHAR(10),approved_at TIMESTAMP,approve_opinion VARCHAR(200))",
                 "CREATE TABLE sel_round_class(round_id INT,tc_id VARCHAR(20),PRIMARY KEY(round_id,tc_id))",
-                "CREATE TABLE sys_dict_type(dict_type VARCHAR(40) PRIMARY KEY,type_name VARCHAR(100),is_system TINYINT DEFAULT 0,dict_status VARCHAR(2) DEFAULT '01',remark VARCHAR(200))",
-                "CREATE TABLE sys_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),sort_no INT DEFAULT 0,version VARCHAR(40),effective_from DATE,item_status VARCHAR(2) DEFAULT '01')"
+                "CREATE TABLE al_dict_type(dict_type VARCHAR(40) PRIMARY KEY,type_name VARCHAR(100),is_system TINYINT DEFAULT 0,dict_status VARCHAR(2) DEFAULT '01',remark VARCHAR(200))",
+                "CREATE TABLE al_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),sort_no INT DEFAULT 0,version VARCHAR(40),effective_from DATE,item_status VARCHAR(2) DEFAULT '01')"
         )) {
             jdbc.execute(ddl);
         }

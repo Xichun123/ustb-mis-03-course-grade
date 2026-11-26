@@ -1485,7 +1485,7 @@ public class ScoreService {
 
     private int ratioMin() {
         List<String> vals = jdbc.queryForList("""
-                SELECT item_name FROM sys_dict_item
+                SELECT item_name FROM al_dict_item
                  WHERE item_status IN ('01', '1')
                    AND ((dict_type = 'system_param' AND item_code = 'usual_ratio_min')
                         OR dict_type = 'usual_ratio_min')

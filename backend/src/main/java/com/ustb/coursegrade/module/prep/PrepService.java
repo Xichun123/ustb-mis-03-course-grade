@@ -103,7 +103,7 @@ public class PrepService {
                        tc.hours, tc.week_count, tc.teach_type, tc.tc_type, tc.tc_status,
                        tc.open_lower, tc.no_open_reason, ci.assess_type,
                        (SELECT COUNT(*) FROM sel_select_limit sl WHERE sl.tc_id = tc.tc_id) AS limit_count,
-                       (SELECT di.item_name FROM sys_dict_item di
+                       (SELECT di.item_name FROM al_dict_item di
                          WHERE di.dict_type = 'tc_special_requirement' AND di.item_code = tc.tc_id
                            AND di.item_status IN ('01', '1') LIMIT 1) AS special_requirement,
                        (SELECT lc.lesson_no FROM sel_lesson_class lc WHERE lc.tc_id = tc.tc_id LIMIT 1) AS lesson_no
@@ -301,7 +301,7 @@ public class PrepService {
 
     private String loadSpecialRequirement(String tcId) {
         List<String> rows = jdbc.queryForList("""
-                SELECT item_name FROM sys_dict_item
+                SELECT item_name FROM al_dict_item
                  WHERE dict_type = 'tc_special_requirement' AND item_code = ? AND item_status IN ('01', '1')
                  ORDER BY dict_id LIMIT 1
                 """, String.class, tcId);
@@ -309,20 +309,20 @@ public class PrepService {
     }
 
     private void saveSpecialRequirement(String tcId, String text) {
-        jdbc.update("DELETE FROM sys_dict_item WHERE dict_type = 'tc_special_requirement' AND item_code = ?", tcId);
+        jdbc.update("DELETE FROM al_dict_item WHERE dict_type = 'tc_special_requirement' AND item_code = ?", tcId);
         if (text == null || text.isEmpty()) {
             return;
         }
         Integer typeExists = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM sys_dict_type WHERE dict_type = 'tc_special_requirement'", Integer.class);
+                "SELECT COUNT(*) FROM al_dict_type WHERE dict_type = 'tc_special_requirement'", Integer.class);
         if (typeExists == null || typeExists == 0) {
             jdbc.update("""
-                    INSERT INTO sys_dict_type(dict_type, type_name, is_system, dict_status, remark)
+                    INSERT INTO al_dict_type(dict_type, type_name, is_system, dict_status, remark)
                     VALUES('tc_special_requirement', '教学班选课特殊要求', 0, '01', '按教学班号记录四六级成绩等特殊选课要求说明')
                     """);
         }
         jdbc.update("""
-                INSERT INTO sys_dict_item(dict_type, item_code, item_name, sort_no, version, effective_from, item_status)
+                INSERT INTO al_dict_item(dict_type, item_code, item_name, sort_no, version, effective_from, item_status)
                 VALUES('tc_special_requirement', ?, ?, 0, '教学班特殊要求', CURRENT_DATE, '01')
                 """, tcId, text);
     }

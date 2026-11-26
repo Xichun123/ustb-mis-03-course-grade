@@ -41,8 +41,8 @@ class SelectionServiceTest {
             "CREATE TABLE std_student(student_id VARCHAR(20) PRIMARY KEY,person_id VARCHAR(20),class_id VARCHAR(10),major_id VARCHAR(6),org_id VARCHAR(6),grade VARCHAR(40),enrollment_year INT,student_type VARCHAR(2),student_status VARCHAR(2))",
             "CREATE TABLE aca_course(course_id VARCHAR(10) PRIMARY KEY,course_name VARCHAR(100),course_type VARCHAR(2),credit DECIMAL(5,1),org_id VARCHAR(6))",
             "CREATE TABLE hr_employee(emp_id VARCHAR(10) PRIMARY KEY,emp_name VARCHAR(50))",
-            "CREATE TABLE sys_dict_type(dict_type VARCHAR(40) PRIMARY KEY,type_name VARCHAR(100),is_system TINYINT DEFAULT 0,dict_status VARCHAR(2) DEFAULT '01',remark VARCHAR(200))",
-            "CREATE TABLE sys_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),sort_no INT DEFAULT 0,version VARCHAR(40),effective_from DATE,item_status VARCHAR(2) DEFAULT '01')",
+            "CREATE TABLE al_dict_type(dict_type VARCHAR(40) PRIMARY KEY,type_name VARCHAR(100),is_system TINYINT DEFAULT 0,dict_status VARCHAR(2) DEFAULT '01',remark VARCHAR(200))",
+            "CREATE TABLE al_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),sort_no INT DEFAULT 0,version VARCHAR(40),effective_from DATE,item_status VARCHAR(2) DEFAULT '01')",
             "CREATE TABLE aca_course_id(course_id VARCHAR(10) PRIMARY KEY,pre_course_id VARCHAR(40))",
             "CREATE TABLE sel_exchange_score_convert(convert_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),course_id VARCHAR(10),converted_score DECIMAL(5,2),converted_level VARCHAR(10),audit_status INT)",
             "CREATE TABLE aca_teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),emp_id VARCHAR(10),class_ids VARCHAR(100),capacity INT,tc_type VARCHAR(20),tc_status VARCHAR(2),actual_num INT,selected_count INT DEFAULT 0,hours DECIMAL(18,2) DEFAULT 48.00,open_lower INT DEFAULT 6,no_open_reason VARCHAR(100))",
@@ -68,7 +68,7 @@ class SelectionServiceTest {
         }
         for(String id:List.of("C001","C002","C003"))jdbc.update("INSERT INTO aca_course VALUES(?,?,'11',3,'ORG001')",id,id);
         jdbc.update("INSERT INTO hr_employee VALUES('E1','王老师'),('OTHER','李老师')");
-        jdbc.update("INSERT INTO sys_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','min_open_students','6','01')");
+        jdbc.update("INSERT INTO al_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','min_open_students','6','01')");
         for(String id:List.of("A","B","D")){
             jdbc.update("INSERT INTO aca_teaching_class(tc_id,term,course_id,emp_id,class_ids,capacity,tc_type,tc_status,actual_num,selected_count) VALUES(?,?,?,'E1','信管241',1,'2','4',0,0)",id,TERM,id.equals("A")?"C001":id.equals("B")?"C002":"C003");
             jdbc.update("INSERT INTO aca_schedule_result(sched_id,tc_id,week_range,week_day,start_slot,end_slot,room_id,sched_status) VALUES(?,?,?,'1',1,2,'教室1','1')","SCH_"+id,id,id.equals("A")?"1-8":id.equals("B")?"9-16":"1-16");
@@ -274,7 +274,7 @@ class SelectionServiceTest {
     @Test void studentsCannotReadTeacherRoster(){assertThrows(BizException.class,()->service.roster("A",""));}
 
     @Test void specialRequirementFromDatabaseIsShownAndRequiresConfirmationOnEnroll() {
-        jdbc.update("INSERT INTO sys_dict_item(dict_type,item_code,item_name,item_status) VALUES('tc_special_requirement','A','大学英语六级成绩 >= 425 分','01')");
+        jdbc.update("INSERT INTO al_dict_item(dict_type,item_code,item_name,item_status) VALUES('tc_special_requirement','A','大学英语六级成绩 >= 425 分','01')");
 
         // 1. 选课列表实时展示数据库中的特殊要求
         var page = service.courses(1, "C001", 1, 10, null);

@@ -31,7 +31,7 @@ class StatsServiceTest {
         jdbc = new JdbcTemplate(ds);
 
         for (String ddl : List.of(
-                "CREATE TABLE sys_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),item_status VARCHAR(2) DEFAULT '01')",
+                "CREATE TABLE al_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),item_status VARCHAR(2) DEFAULT '01')",
                 "CREATE TABLE org_organization(org_id VARCHAR(6) PRIMARY KEY,org_name VARCHAR(100),college_id VARCHAR(4))",
                 "CREATE TABLE sys_person(person_id VARCHAR(20) PRIMARY KEY,person_name VARCHAR(100))",
                 "CREATE TABLE hr_employee(emp_id VARCHAR(10) PRIMARY KEY,emp_name VARCHAR(50))",
@@ -55,7 +55,7 @@ class StatsServiceTest {
             jdbc.execute(ddl);
         }
 
-        jdbc.update("INSERT INTO sys_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','current_term',?,'01')", TERM);
+        jdbc.update("INSERT INTO al_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','current_term',?,'01')", TERM);
         jdbc.update("INSERT INTO org_organization VALUES('ORG001','经济管理学院','0001'),('ORG002','计通学院','0002')");
         jdbc.update("INSERT INTO hr_employee VALUES('E001','王老师')");
         jdbc.update("INSERT INTO aca_class VALUES('CLS241','信管241'),('CLS26M','管科硕261')");

@@ -128,7 +128,7 @@ public class SelectionService {
         }
         try {
             String placeholders = String.join(",", Collections.nCopies(classIds.size(), "?"));
-            String sql = "SELECT item_code, item_name FROM sys_dict_item WHERE dict_type='tc_special_requirement' AND item_status IN ('01','1') AND item_code IN (" + placeholders + ") ORDER BY dict_id";
+            String sql = "SELECT item_code, item_name FROM al_dict_item WHERE dict_type='tc_special_requirement' AND item_status IN ('01','1') AND item_code IN (" + placeholders + ") ORDER BY dict_id";
             for (var row : jdbc.queryForList(sql, classIds.toArray())) {
                 String tcId = text(row, "item_code");
                 String val = text(row, "item_name");
@@ -141,7 +141,7 @@ public class SelectionService {
     private String specialRequirementFor(String tcId) {
         try {
             List<String> vals = jdbc.queryForList(
-                    "SELECT item_name FROM sys_dict_item WHERE dict_type='tc_special_requirement' AND item_code=? AND item_status IN ('01','1') ORDER BY dict_id LIMIT 1",
+                    "SELECT item_name FROM al_dict_item WHERE dict_type='tc_special_requirement' AND item_code=? AND item_status IN ('01','1') ORDER BY dict_id LIMIT 1",
                     String.class, tcId);
             if (!vals.isEmpty() && vals.get(0) != null && !vals.get(0).isBlank()) {
                 return vals.get(0).trim();
@@ -539,7 +539,7 @@ public class SelectionService {
     private int minOpenStudents(){
         try{
             List<String> vals=jdbc.queryForList("""
-                    SELECT item_name FROM sys_dict_item
+                    SELECT item_name FROM al_dict_item
                      WHERE item_status IN ('01','1')
                        AND ((dict_type='system_param' AND item_code='min_open_students')
                             OR dict_type='min_open_students')

@@ -59,14 +59,14 @@ class ScoreServiceTest {
                 "CREATE TABLE sel_exchange_score_convert(convert_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),exchange_apply_id VARCHAR(50),term VARCHAR(11),stat_stage INT DEFAULT 1,host_school VARCHAR(200),ext_course_code VARCHAR(30),ext_course_name VARCHAR(100),ext_credit DECIMAL(5,1),ext_score_raw VARCHAR(20),ext_scale_type INT DEFAULT 1,course_id VARCHAR(10),score_type INT DEFAULT 1,converted_score DECIMAL(5,2),converted_level VARCHAR(20),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,proof_no VARCHAR(50),version_no INT DEFAULT 1,audit_status INT DEFAULT 0,submitted_at TIMESTAMP,college_auditor_id VARCHAR(10),college_audit_opinion VARCHAR(200),college_audit_time TIMESTAMP,school_auditor_id VARCHAR(10),school_audit_opinion VARCHAR(200),school_audit_time TIMESTAMP)",
                 "CREATE TABLE sel_stu_gpa(student_id VARCHAR(20) PRIMARY KEY,earned_credit DECIMAL(5,1),failed_credit DECIMAL(5,1),gpa DECIMAL(5,2),avg_score DECIMAL(5,2),major_rank INT,major_rank_total INT,updated_at TIMESTAMP)",
                 "CREATE TABLE sel_stu_term_gpa(student_id VARCHAR(20),term VARCHAR(11),term_credit DECIMAL(5,1),term_failed_credit DECIMAL(5,1),updated_at TIMESTAMP,PRIMARY KEY(student_id,term))",
-                "CREATE TABLE sys_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),item_status VARCHAR(2) DEFAULT '01')"
+                "CREATE TABLE al_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),item_status VARCHAR(2) DEFAULT '01')"
         )) {
             jdbc.execute(ddl);
         }
 
         jdbc.update("INSERT INTO hr_employee VALUES('E001','王老师'),('E002','学院秘书'),('E003','教务处')");
 
-        jdbc.update("INSERT INTO sys_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','usual_ratio_min','30','01')");
+        jdbc.update("INSERT INTO al_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','usual_ratio_min','30','01')");
         jdbc.update("INSERT INTO org_organization VALUES('ORG001','经济管理学院','0001')");
         jdbc.update("INSERT INTO org_organization VALUES('ORG002','计通学院','0002')");
         jdbc.update("INSERT INTO aca_class VALUES('CLS241','信管241')");
