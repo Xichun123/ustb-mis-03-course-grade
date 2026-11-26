@@ -50,7 +50,7 @@ class ScoreServiceTest {
                 "CREATE TABLE v_exchange_student(temp_student_no VARCHAR(20),student_name VARCHAR(50),sender_school_name VARCHAR(100))",
                 "CREATE TABLE aca_course(course_id VARCHAR(10) PRIMARY KEY,course_name VARCHAR(100),course_type VARCHAR(2),credit DECIMAL(5,1),org_id VARCHAR(6))",
                 "CREATE TABLE aca_course_id(course_id VARCHAR(10) PRIMARY KEY,assess_type VARCHAR(20),open_college VARCHAR(20))",
-                "CREATE TABLE aca_teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),emp_id VARCHAR(10),class_ids VARCHAR(100))",
+                "CREATE TABLE aca_teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),emp_id VARCHAR(10),class_ids VARCHAR(100),tc_status VARCHAR(2) DEFAULT '4',hours DECIMAL(18,2) DEFAULT 48.00,no_open_reason VARCHAR(100))",
                 "CREATE TABLE sel_lesson_class(tc_id VARCHAR(20) PRIMARY KEY,lesson_no VARCHAR(20))",
                 "CREATE TABLE sel_sc(sc_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),study_type INT DEFAULT 1,stu_level VARCHAR(20) DEFAULT '本科',stat_stage INT DEFAULT 1,select_status INT DEFAULT 1)",
                 "CREATE TABLE sel_score(score_id BIGINT AUTO_INCREMENT PRIMARY KEY,sc_id BIGINT,exam_type INT DEFAULT 1,exam_flag INT DEFAULT 0,score_type INT DEFAULT 1,usual_ratio DECIMAL(5,2),usual_score DECIMAL(5,2),exam_score DECIMAL(5,2),score_level VARCHAR(10),total_score DECIMAL(5,2),grade_point DECIMAL(5,2),is_final INT DEFAULT 0,score_status INT DEFAULT 0,input_teacher_id VARCHAR(10),submitted_at TIMESTAMP,published_at TIMESTAMP)",
@@ -83,13 +83,13 @@ class ScoreServiceTest {
         jdbc.update("INSERT INTO aca_course_id VALUES('C11','1','0001'),('C12','1','0001'),('C13','1','0001'),('C14','1','0002'),('C15','1','0001'),('C16','2','0001')");
 
         // 百分制课堂 KT1001（未录入）
-        jdbc.update("INSERT INTO aca_teaching_class VALUES('TC1',?,'C12','E001','信管241')", TERM);
+        jdbc.update("INSERT INTO aca_teaching_class(tc_id,term,course_id,emp_id,class_ids,tc_status) VALUES('TC1',?,'C12','E001','信管241','4')", TERM);
         jdbc.update("INSERT INTO sel_lesson_class VALUES('TC1','KT1001')");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S001','TC1',1,'本科',1,1)");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S002','TC1',1,'本科',1,1)");
 
         // 五级制考查课课堂 KT1002
-        jdbc.update("INSERT INTO aca_teaching_class VALUES('TC2',?,'C16','E001','信管241')", TERM);
+        jdbc.update("INSERT INTO aca_teaching_class(tc_id,term,course_id,emp_id,class_ids,tc_status) VALUES('TC2',?,'C16','E001','信管241','4')", TERM);
         jdbc.update("INSERT INTO sel_lesson_class VALUES('TC2','KT1002')");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S001','TC2',1,'本科',1,1)");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,study_type,stu_level,stat_stage,select_status) VALUES('S002','TC2',1,'本科',1,1)");
@@ -490,6 +490,32 @@ class ScoreServiceTest {
             zos.closeEntry();
         }
         return bos.toByteArray();
+    }
+
+    @Test
+    void stoppedClassIsExcludedFromGradeEntryAndMarkedNoWorkload() {
+        // 将 TC2（课堂 KT1002）标记为因人数不足停开（tc_status='2'）
+        jdbc.update("UPDATE aca_teaching_class SET tc_status='2', no_open_reason='选课人数不足6人停开' WHERE tc_id='TC2'");
+
+        // 1. 教师“我的课堂”只返回正常开课的 KT1001，不再包含已停开的 KT1002
+        List<Map<String, Object>> active = service.myClasses(TERM, null);
+        assertEquals(1, active.size());
+        assertEquals("KT1001", active.get(0).get("lesson_no"));
+
+        // 2. 已停开课程只读清单中展示 TC2，并明确标识不计入工作量
+        List<Map<String, Object>> stopped = service.stoppedClasses(TERM, null);
+        assertEquals(1, stopped.size());
+        assertEquals("TC2", stopped.get(0).get("tc_id"));
+        assertEquals("选课人数不足6人停开", stopped.get(0).get("no_open_reason"));
+        assertEquals(false, stopped.get(0).get("workload_counted"));
+
+        // 3. 尝试直接打开、保存或提交已停开课堂均被后端拒绝
+        BizException ex = assertThrows(BizException.class, () -> service.roster("KT1002"));
+        assertEquals("CLASS_STOPPED", ex.getCode());
+        assertTrue(ex.getMessage().contains("停开"));
+        assertTrue(ex.getMessage().contains("工作量"));
+        assertThrows(BizException.class, () -> service.saveGrades("KT1002", List.of(), 30));
+        assertThrows(BizException.class, () -> service.submit("KT1002"));
     }
 
     private static String readSheetXml(byte[] xlsx) throws Exception {

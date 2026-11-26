@@ -32,7 +32,7 @@
           <el-table-column label="状态" width="90">
             <template #default="{ row }">
               <el-tag :type="row.tc_status === '4' ? 'success' : 'info'" size="small">
-                {{ row.tc_status === '4' ? '已发布' : row.tc_status === '2' ? '不开课' : '其他' }}
+                {{ row.tc_status === '4' ? '已发布' : row.tc_status === '2' ? '不开课' : row.tc_status === '5' ? '已取消' : '其他' }}
               </el-tag>
             </template>
           </el-table-column>

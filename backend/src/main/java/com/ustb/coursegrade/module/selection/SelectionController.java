@@ -10,7 +10,7 @@ import java.util.Map;
 
 /**
  * 【业务② 学生选课（2.1–2.7）· 负责人：张文浩】
- * 接口复用公共身份与响应协议；2.5停开在编码确认前只提供预览。
+ * 接口复用公共身份与响应协议；2.5 支持人数不足（默认低于 6 人）停开预警与确认停开闭环。
  */
 @RestController
 @RequestMapping("/api/v1/selection")
@@ -18,7 +18,7 @@ public class SelectionController {
 
     private final SelectionService service;
     public SelectionController(SelectionService service){this.service=service;}
-    @GetMapping("/module-info") public ApiResponse<?> info(){return ApiResponse.ok(Map.of("module","学生选课","status","运行中","features",List.of("课程查询","选课与退选","选课校验","录取与筛选","停开预览","结果与课表名单","名单调整")));}
+    @GetMapping("/module-info") public ApiResponse<?> info(){return ApiResponse.ok(Map.of("module","学生选课","status","运行中","features",List.of("课程查询","选课与退选","选课校验","录取与筛选","停开处理","结果与课表名单","名单调整")));}
     @GetMapping("/context") public ApiResponse<?> context(){return ApiResponse.ok(service.context());}
     @GetMapping("/courses") public ApiResponse<?> courses(@RequestParam int roundId,@RequestParam(defaultValue="") String keyword,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="10") int pageSize,@RequestParam(defaultValue="") String courseType){
         if(page<1 || page>100000 || pageSize<1 || pageSize>100 || keyword.length()>100)throw BizException.unprocessable("BAD_QUERY","分页或查询条件无效");
@@ -40,5 +40,6 @@ public class SelectionController {
     @PostMapping("/teaching-classes/{tcId}/adjustments") public ApiResponse<?> adjust(@PathVariable String tcId,@RequestBody SelectionService.Adjustment request){return ApiResponse.ok(service.adjust(tcId,request));}
     @PostMapping("/rounds/{roundId}/screen") public ApiResponse<?> screen(@PathVariable int roundId){return ApiResponse.ok(service.screen(roundId));}
     @GetMapping("/stop-preview") public ApiResponse<?> stop(@RequestParam String term){return ApiResponse.ok(service.stopPreview(term(term)));}
+    @PostMapping("/stop-classes") public ApiResponse<?> stopClasses(@RequestBody SelectionService.StopRequest request){var data=service.stopClasses(request);return ApiResponse.ok(String.valueOf(data.get("message")),data);}
     private String term(String term){if(term==null || !term.matches("[0-9]{4}-[0-9]{4}-[12]"))throw BizException.unprocessable("BAD_TERM","学年学期格式应为2026-2027-1");return term;}
 }

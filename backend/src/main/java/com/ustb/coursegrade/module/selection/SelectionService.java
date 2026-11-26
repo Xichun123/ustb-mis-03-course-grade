@@ -34,13 +34,15 @@ public class SelectionService {
     private LocalDateTime now(){return LocalDateTime.now(clock);}
     public record Application(Integer roundId,String tcId,Integer studyType,Integer priority,String expectedVersion){}
     public record Withdrawal(Integer roundId,String expectedVersion,Boolean confirmed){}
+    public static final int DEFAULT_MIN_OPEN_STUDENTS = 6;
     public record Adjustment(String studentId,String operation,Integer studyType,String reason){}
+    public record StopRequest(@com.fasterxml.jackson.annotation.JsonAlias("tc_ids") List<String> tcIds,String reason){}
 
     public Map<String,Object> context(){
         CurrentUser user=UserContext.requireUser();
         List<Map<String,Object>> rounds=jdbc.queryForList("SELECT r.*,r.start_at AS start_time,r.end_at AS end_time,r.approved_at AS approve_time,r.published_at AS publish_time FROM sel_select_round r WHERE r.round_status IN (2,3,4) ORDER BY r.start_at DESC,r.round_id DESC");
         for(var r:rounds)r.put("window_open",open(r));
-        return Map.of("user",user,"rounds",rounds,"terms",jdbc.queryForList("SELECT DISTINCT term FROM aca_teaching_class WHERE term IS NOT NULL ORDER BY term DESC",String.class),"server_time",now(),"stop_write_enabled",false,"course_types",CourseType.options());
+        return Map.of("user",user,"rounds",rounds,"terms",jdbc.queryForList("SELECT DISTINCT term FROM aca_teaching_class WHERE term IS NOT NULL ORDER BY term DESC",String.class),"server_time",now(),"stop_write_enabled",true,"min_open_students",minOpenStudents(),"course_types",CourseType.options());
     }
     public Map<String,Object> courses(int roundId,String keyword,int page,int size,CourseType filter){
         CurrentUser u=UserContext.requireRole(RoleEnum.STUDENT);var round=visibleRound(roundId);student(u.studentId(),text(round,"term"),false);
@@ -127,12 +129,13 @@ public class SelectionService {
     public Map<String,Object> results(String term){
         CurrentUser u=UserContext.requireRole(RoleEnum.STUDENT);
         var rows=jdbc.queryForList("""
-          SELECT sc.*,tc.term,tc.emp_id AS teacher_id,tc.emp_id,tc.capacity,tc.tc_status,c.course_id,c.course_name,c.course_type,c.credit
+          SELECT sc.*,tc.term,tc.emp_id AS teacher_id,tc.emp_id,tc.capacity,tc.tc_status,tc.no_open_reason,c.course_id,c.course_name,c.course_type,c.credit
           FROM sel_sc sc JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id JOIN aca_course c ON c.course_id=tc.course_id
           WHERE sc.student_id=? AND tc.term=? ORDER BY sc.select_time DESC,sc.sc_id DESC
           """,u.studentId(),term);
         for(var row:rows){row.put("version",version(row));row.put("schedule",schedule(text(row,"tc_id")));
-            List<Integer> dropRounds=number(row.get("select_status"))==1 ? jdbc.queryForList("SELECT sr.round_id FROM sel_select_round sr JOIN sel_round_class rc ON rc.round_id=sr.round_id WHERE rc.tc_id=? AND sr.term=? AND sr.round_type=3 AND sr.round_status IN (2,3) AND sr.start_at<=? AND sr.end_at>? AND NOT EXISTS(SELECT 1 FROM sel_score WHERE sc_id=?) AND NOT EXISTS(SELECT 1 FROM sel_teach_eval WHERE sc_id=?) ORDER BY sr.start_at DESC,sr.round_id DESC",Integer.class,row.get("tc_id"),term,now(),now(),row.get("sc_id"),row.get("sc_id")) : List.of();
+            boolean activeClass="4".equals(text(row,"tc_status"));
+            List<Integer> dropRounds=(number(row.get("select_status"))==1 && activeClass) ? jdbc.queryForList("SELECT sr.round_id FROM sel_select_round sr JOIN sel_round_class rc ON rc.round_id=sr.round_id WHERE rc.tc_id=? AND sr.term=? AND sr.round_type=3 AND sr.round_status IN (2,3) AND sr.start_at<=? AND sr.end_at>? AND NOT EXISTS(SELECT 1 FROM sel_score WHERE sc_id=?) AND NOT EXISTS(SELECT 1 FROM sel_teach_eval WHERE sc_id=?) ORDER BY sr.start_at DESC,sr.round_id DESC",Integer.class,row.get("tc_id"),term,now(),now(),row.get("sc_id"),row.get("sc_id")) : List.of();
             row.put("withdraw_round_id",dropRounds.isEmpty()?null:dropRounds.get(0));row.put("sc_id",stringId(row.get("sc_id")));}
         return Map.of("items",rows,"summary",summary(u.studentId(),term));
     }
@@ -218,6 +221,7 @@ public class SelectionService {
             if(old==null)jdbc.update("INSERT INTO sel_sc(student_id,tc_id,round_id,study_type,is_exempt_attend,stu_level,stat_stage,priority,select_status,select_time,drop_time) VALUES(?,?,?,?,0,?,?,NULL,1,?,NULL)",r.studentId(),tcId,rounds.get(0),r.studyType(),s.get("degree_level"),stage,now());
             else jdbc.update("UPDATE sel_sc SET round_id=?,study_type=?,is_exempt_attend=0,stu_level=?,stat_stage=?,priority=NULL,select_status=1,select_time=?,drop_time=NULL WHERE sc_id=?",rounds.get(0),r.studyType(),s.get("degree_level"),stage,now(),old.get("sc_id"));
         }else{
+            if(!"4".equals(text(tc,"tc_status")))throw conflict("教学班已停开，请在停开处理中统一清退名单");
             if(old==null || number(old.get("select_status"))!=1)throw conflict("该生当前不在有效名单中");protect(old);
             jdbc.update("UPDATE sel_sc SET select_status=3,drop_time=? WHERE sc_id=? AND select_status=1",now(),old.get("sc_id"));
         }
@@ -246,8 +250,162 @@ public class SelectionService {
         return Map.of("accepted",accepted,"rejected",rejected,"message",candidates.isEmpty()?"没有待筛选申请，未重复筛选":"整轮筛选已完成");
     }
     public Map<String,Object> stopPreview(String term){
-        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE);
-        return Map.of("write_enabled",false,"reason","停开状态与日志编码尚未由全组确认，仅预览，不执行失效写入","items",jdbc.queryForList("SELECT tc.tc_id,c.course_name,tc.tc_status,COUNT(sc.sc_id) AS affected_count FROM aca_teaching_class tc JOIN aca_course c ON c.course_id=tc.course_id LEFT JOIN sel_sc sc ON sc.tc_id=tc.tc_id AND sc.select_status IN (0,1) WHERE tc.term=? AND tc.tc_status IN ('2','5') GROUP BY tc.tc_id,c.course_name,tc.tc_status ORDER BY tc.tc_id",term));
+        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE,RoleEnum.SYS_ADMIN);
+        int minOpen=minOpenStudents();
+        var rows=jdbc.queryForList("""
+          SELECT tc.tc_id,tc.course_id,c.course_name,tc.tc_type,tc.emp_id AS teacher_id,
+                 COALESCE(emp.emp_name,tc.emp_id) AS teacher_name,
+                 tc.capacity,tc.hours,tc.tc_status,tc.no_open_reason,
+                 (SELECT COUNT(*) FROM sel_sc sc WHERE sc.tc_id=tc.tc_id AND sc.select_status=1) AS active_count,
+                 (SELECT COUNT(*) FROM sel_sc sc WHERE sc.tc_id=tc.tc_id AND sc.select_status=0) AS pending_count,
+                 (SELECT COUNT(*) FROM sel_sc sc WHERE sc.tc_id=tc.tc_id AND sc.select_status IN (0,1)) AS affected_count,
+                 (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id=sc.sc_id WHERE sc.tc_id=tc.tc_id) AS score_count,
+                 (SELECT COUNT(*) FROM sel_teach_eval te JOIN sel_sc sc ON te.sc_id=sc.sc_id WHERE sc.tc_id=tc.tc_id) AS eval_count
+          FROM aca_teaching_class tc
+          JOIN aca_course c ON c.course_id=tc.course_id
+          LEFT JOIN hr_employee emp ON emp.emp_id=tc.emp_id
+          WHERE tc.term=?
+          ORDER BY tc.tc_id
+          """,term);
+        List<Map<String,Object>> items=new ArrayList<>();
+        int underMinCount=0,stoppedCount=0;
+        for(var raw:rows){
+            String status=text(raw,"tc_status");
+            int activeCount=number(raw.get("active_count"));
+            int affectedCount=number(raw.get("affected_count"));
+            int scoreCount=number(raw.get("score_count"));
+            int evalCount=number(raw.get("eval_count"));
+            boolean alreadyStopped="2".equals(status) || "5".equals(status);
+            boolean underMin="4".equals(status) && activeCount<minOpen;
+            if(!alreadyStopped && !underMin)continue;
+            Map<String,Object> item=new LinkedHashMap<>(raw);
+            item.put("min_open_students",minOpen);
+            boolean hasDownstream=scoreCount>0 || evalCount>0;
+            item.put("has_scores",scoreCount>0);
+            item.put("has_evals",evalCount>0);
+            if(underMin){
+                underMinCount++;
+                item.put("stop_category","UNDER_MIN");
+                item.put("status_label","人数不足（符合停开）");
+                item.put("can_stop",!hasDownstream);
+                item.put("block_reason",hasDownstream?"该教学班已有成绩或评教记录，不可直接停开":null);
+                item.put("workload_counted",true);
+                item.put("workload_note","确认停开后不录入成绩，不计入教师教学工作量");
+            }else if(affectedCount>0){
+                stoppedCount++;
+                item.put("stop_category","STOPPED_PENDING_CLEANUP");
+                item.put("status_label","已标停开（待清退名单）");
+                item.put("can_stop",!hasDownstream);
+                item.put("block_reason",hasDownstream?"该教学班已有成绩或评教记录，请先核查":null);
+                item.put("workload_counted",false);
+                item.put("workload_note","已停开：不录入成绩，不计入教师教学工作量");
+            }else{
+                stoppedCount++;
+                item.put("stop_category","STOPPED");
+                item.put("status_label","5".equals(status)?"已取消":"已停开（不开课）");
+                item.put("can_stop",false);
+                item.put("block_reason",null);
+                item.put("workload_counted",false);
+                item.put("workload_note","已停开：不录入成绩，不计入教师教学工作量");
+            }
+            items.add(item);
+        }
+        Map<String,Object> resp=new LinkedHashMap<>();
+        resp.put("term",term);
+        resp.put("min_open_students",minOpen);
+        resp.put("write_enabled",true);
+        resp.put("under_min_count",underMinCount);
+        resp.put("stopped_count",stoppedCount);
+        resp.put("reason","选课人数低于 "+minOpen+" 人符合停开标准；确认停开后将清退学生选课、关闭成绩录入通道，且该课程不计入教师教学工作量。");
+        resp.put("items",items);
+        return resp;
+    }
+
+    /** 2.5 确认停开人数不足或已标停开的教学班：置为不开课、清退受影响学生并记日志、排除成绩录入与教师工作量核算 */
+    @Transactional(isolation=Isolation.READ_COMMITTED)
+    public Map<String,Object> stopClasses(StopRequest request){
+        CurrentUser u=UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE,RoleEnum.SYS_ADMIN);
+        if(request==null || request.tcIds()==null || request.tcIds().isEmpty()){
+            throw invalid("请至少选择一个需要停开的教学班");
+        }
+        List<String> tcIds=request.tcIds().stream()
+                .filter(Objects::nonNull).map(String::trim).filter(s->!s.isEmpty())
+                .distinct().sorted().toList();
+        if(tcIds.isEmpty() || tcIds.size()>50){
+            throw invalid("单次停开教学班数量须在 1—50 之间");
+        }
+        int minOpen=minOpenStudents();
+        String customReason=request.reason()==null?"":request.reason().trim();
+        String noOpenReason=customReason.isEmpty()?("选课人数不足"+minOpen+"人停开"):customReason;
+        if(noOpenReason.length()>100)noOpenReason=noOpenReason.substring(0,100);
+        String logRemark=noOpenReason+"（系统停开取消，不录入成绩且不计入教师工作量）";
+        if(logRemark.length()>200)logRemark=logRemark.substring(0,200);
+        String operator=(u.empId()!=null && !u.empId().isBlank())?u.empId().trim():u.userId();
+
+        List<String> stoppedIds=new ArrayList<>();
+        int cancelledStudents=0;
+        for(String tcId:tcIds){
+            var tcRows=jdbc.queryForList("SELECT tc_id,term,tc_status,no_open_reason FROM aca_teaching_class WHERE tc_id=? FOR UPDATE",tcId);
+            if(tcRows.isEmpty())throw BizException.notFound("教学班不存在："+tcId);
+            Map<String,Object> tc=tcRows.get(0);
+            String status=text(tc,"tc_status");
+            int scoreCnt=jdbc.queryForObject("SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id=sc.sc_id WHERE sc.tc_id=?",Integer.class,tcId);
+            int evalCnt=jdbc.queryForObject("SELECT COUNT(*) FROM sel_teach_eval te JOIN sel_sc sc ON te.sc_id=sc.sc_id WHERE sc.tc_id=?",Integer.class,tcId);
+            if(scoreCnt>0 || evalCnt>0){
+                throw conflict("教学班 "+tcId+" 已有成绩或评教记录，不能直接停开");
+            }
+            int activeCount=count(tcId);
+            if("4".equals(status)){
+                if(activeCount>=minOpen){
+                    throw invalid("教学班 "+tcId+" 当前有效人数为 "+activeCount+" 人，已达到最低开班人数（"+minOpen+" 人），不符合停开条件");
+                }
+            }else if(!"2".equals(status) && !"5".equals(status)){
+                throw conflict("教学班 "+tcId+" 当前状态（"+status+"）不支持执行停开");
+            }
+            var affected=jdbc.queryForList("SELECT sc_id,student_id,round_id,select_status FROM sel_sc WHERE tc_id=? AND select_status IN (0,1) ORDER BY sc_id FOR UPDATE",tcId);
+            for(var sc:affected){
+                jdbc.update("UPDATE sel_sc SET select_status=3,drop_time=? WHERE sc_id=? AND select_status IN (0,1)",now(),sc.get("sc_id"));
+                log(text(sc,"student_id"),tcId,number(sc.get("round_id")),4,operator,logRemark);
+                cancelledStudents++;
+            }
+            if("4".equals(status)){
+                jdbc.update("UPDATE aca_teaching_class SET tc_status='2',no_open_reason=?,actual_num=0,selected_count=0 WHERE tc_id=?",noOpenReason,tcId);
+            }else if("2".equals(status) && text(tc,"no_open_reason").isEmpty()){
+                jdbc.update("UPDATE aca_teaching_class SET no_open_reason=?,actual_num=0,selected_count=0 WHERE tc_id=?",noOpenReason,tcId);
+            }else{
+                jdbc.update("UPDATE aca_teaching_class SET actual_num=0,selected_count=0 WHERE tc_id=?",tcId);
+            }
+            try{
+                jdbc.update("DELETE FROM sel_tc_eval_result WHERE tc_id=?",tcId);
+            }catch(Exception ignored){}
+            stoppedIds.add(tcId);
+        }
+        Map<String,Object> resp=new LinkedHashMap<>();
+        resp.put("stopped_classes",stoppedIds);
+        resp.put("stopped_count",stoppedIds.size());
+        resp.put("cancelled_students",cancelledStudents);
+        resp.put("min_open_students",minOpen);
+        resp.put("no_open_reason",noOpenReason);
+        resp.put("workload_counted",false);
+        resp.put("message","已停开 "+stoppedIds.size()+" 个教学班，清退 "+cancelledStudents+" 条选课记录；停开课程不录入成绩，不计入教师教学工作量。");
+        return resp;
+    }
+
+    private int minOpenStudents(){
+        try{
+            List<String> vals=jdbc.queryForList("""
+                    SELECT item_name FROM sys_dict_item
+                     WHERE item_status IN ('01','1')
+                       AND ((dict_type='system_param' AND item_code='min_open_students')
+                            OR dict_type='min_open_students')
+                     ORDER BY dict_id LIMIT 1
+                    """,String.class);
+            if(!vals.isEmpty()){
+                int parsed=Integer.parseInt(vals.get(0).trim());
+                if(parsed>=1 && parsed<=500)return parsed;
+            }
+        }catch(Exception ignored){}
+        return DEFAULT_MIN_OPEN_STUDENTS;
     }
 
     private int validate(Application r,Map<String,Object> round,Map<String,Object> s,Map<String,Object> tc,boolean screening){

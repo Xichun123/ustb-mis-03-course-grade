@@ -32,31 +32,36 @@ public class ScoreService {
         this.jdbc = jdbc;
     }
 
-    /** 3.1 我的课堂列表（按课堂号聚合，本学期在前、往届在后） */
+    /** 3.1 我的课堂列表（仅包含正常开课教学班，已停开课程不进入成绩录入） */
     public List<Map<String, Object>> myClasses(String term, String keyword) {
         CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
                 SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, tc.course_id, c.course_name, c.credit,
                        COALESCE(org.college_id, c.org_id) AS open_college,
                        GROUP_CONCAT(DISTINCT tc.class_ids ORDER BY tc.class_ids SEPARATOR '、') AS class_ids,
-                       (SELECT COUNT(*) FROM sel_sc sc JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
-                         WHERE lc2.lesson_no = lc.lesson_no AND sc.select_status = 1) AS student_count,
+                       (SELECT COUNT(*) FROM sel_sc sc
+                         JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
+                         JOIN aca_teaching_class tc2 ON lc2.tc_id = tc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND tc2.tc_status = '4' AND sc.select_status = 1) AS student_count,
                        (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
-                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1) AS submitted_count,
+                         JOIN aca_teaching_class tc2 ON lc2.tc_id = tc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND tc2.tc_status = '4' AND s.exam_type = 1 AND s.score_status = 1) AS submitted_count,
                        (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
-                         WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 3) AS published_count,
+                         JOIN aca_teaching_class tc2 ON lc2.tc_id = tc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND tc2.tc_status = '4' AND s.exam_type = 1 AND s.score_status = 3) AS published_count,
                        (SELECT COUNT(*) FROM sel_score_correction cr
                          JOIN sel_score s ON cr.score_id = s.score_id
                          JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
-                         WHERE lc2.lesson_no = lc.lesson_no AND cr.apply_status = 1 AND s.score_status IN (0, 4)) AS correction_pending_count
+                         JOIN aca_teaching_class tc2 ON lc2.tc_id = tc2.tc_id
+                         WHERE lc2.lesson_no = lc.lesson_no AND tc2.tc_status = '4' AND cr.apply_status = 1 AND s.score_status IN (0, 4)) AS correction_pending_count
                 FROM sel_lesson_class lc
                 JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN aca_course c ON tc.course_id = c.course_id
                 LEFT JOIN org_organization org ON c.org_id = org.org_id
-                WHERE 1=1
+                WHERE tc.tc_status = '4'
                 """);
         List<Object> args = new ArrayList<>();
         if (u.role() == RoleEnum.TEACHER) {
@@ -76,6 +81,44 @@ public class ScoreService {
         sql.append(" GROUP BY lc.lesson_no, tc.term, tc.course_id, c.course_name, c.credit, COALESCE(org.college_id, c.org_id) ");
         sql.append(" ORDER BY tc.term DESC, lc.lesson_no ASC ");
         return jdbc.queryForList(sql.toString(), args.toArray());
+    }
+
+    /** 3.1 已停开课程只读清单（无需录入成绩，且不计入教师教学工作量） */
+    public List<Map<String, Object>> stoppedClasses(String term, String keyword) {
+        CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
+        StringBuilder sql = new StringBuilder("""
+                SELECT tc.tc_id, lc.lesson_no, tc.term, tc.course_id, c.course_name, c.credit,
+                       tc.hours, tc.class_ids, tc.tc_status, tc.no_open_reason,
+                       tc.emp_id AS teacher_id, COALESCE(emp.emp_name, tc.emp_id) AS teacher_name
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
+                LEFT JOIN hr_employee emp ON emp.emp_id = tc.emp_id
+                WHERE tc.tc_status IN ('2', '5')
+                """);
+        List<Object> args = new ArrayList<>();
+        if (u.role() == RoleEnum.TEACHER) {
+            sql.append(" AND TRIM(tc.emp_id) = ? ");
+            args.add(u.empId());
+        }
+        if (term != null && !term.isBlank()) {
+            sql.append(" AND tc.term = ? ");
+            args.add(term.trim());
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            sql.append(" AND (tc.tc_id LIKE ? OR COALESCE(lc.lesson_no, '') LIKE ? OR c.course_name LIKE ?) ");
+            String like = "%" + keyword.trim() + "%";
+            args.add(like);
+            args.add(like);
+            args.add(like);
+        }
+        sql.append(" ORDER BY tc.term DESC, tc.tc_id ASC ");
+        List<Map<String, Object>> rows = jdbc.queryForList(sql.toString(), args.toArray());
+        for (Map<String, Object> r : rows) {
+            r.put("workload_counted", false);
+            r.put("workload_note", "课程已停开，无需录入成绩，不计入教师教学工作量");
+        }
+        return rows;
     }
 
     /** 3.1 课堂名单与已录成绩（聚合该课堂号下全部教学班，兼容来校交换生并标注更正重录学生） */
@@ -739,9 +782,11 @@ public class ScoreService {
                 JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN aca_course c ON tc.course_id = c.course_id
                 LEFT JOIN org_organization org ON c.org_id = org.org_id
-                WHERE EXISTS (SELECT 1 FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                WHERE tc.tc_status = '4'
+                  AND EXISTS (SELECT 1 FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                                JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
-                               WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 1)
+                               JOIN aca_teaching_class tc2 ON lc2.tc_id = tc2.tc_id
+                               WHERE lc2.lesson_no = lc.lesson_no AND tc2.tc_status = '4' AND s.exam_type = 1 AND s.score_status = 1)
                 """);
         List<Object> args = new ArrayList<>();
         if (u.role() == RoleEnum.COLLEGE_SECRETARY && u.collegeId() != null) {
@@ -835,9 +880,11 @@ public class ScoreService {
                 FROM sel_lesson_class lc
                 JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN aca_course c ON tc.course_id = c.course_id
-                WHERE EXISTS (SELECT 1 FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                WHERE tc.tc_status = '4'
+                  AND EXISTS (SELECT 1 FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                                JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
-                               WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2)
+                               JOIN aca_teaching_class tc2 ON lc2.tc_id = tc2.tc_id
+                               WHERE lc2.lesson_no = lc.lesson_no AND tc2.tc_status = '4' AND s.exam_type = 1 AND s.score_status = 2)
                 """ + termSql + """
                 GROUP BY lc.lesson_no, tc.term, c.course_name
                 ORDER BY tc.term DESC, lc.lesson_no
@@ -1406,7 +1453,7 @@ public class ScoreService {
                 SELECT lc.lesson_no, lc.tc_id, tc.term, tc.course_id, c.course_name, c.credit,
                        COALESCE(org.college_id, c.org_id) AS open_college,
                        COALESCE(ci.assess_type, '1') AS assess_type,
-                       tc.emp_id AS teacher_id, tc.emp_id, tc.class_ids
+                       tc.emp_id AS teacher_id, tc.emp_id, tc.class_ids, tc.tc_status
                 FROM sel_lesson_class lc
                 JOIN aca_teaching_class tc ON lc.tc_id = tc.tc_id
                 JOIN aca_course c ON tc.course_id = c.course_id
@@ -1418,10 +1465,16 @@ public class ScoreService {
         if (list.isEmpty()) {
             throw BizException.notFound("课堂号不存在：" + lessonNo);
         }
-        Map<String, Object> head = new LinkedHashMap<>(list.get(0));
+        List<Map<String, Object>> activeList = list.stream()
+                .filter(r -> "4".equals(str(r.get("tc_status"))))
+                .toList();
+        if (activeList.isEmpty()) {
+            throw BizException.conflict("CLASS_STOPPED", "该课堂对应教学班已停开，无需录入成绩，且不计入教师教学工作量");
+        }
+        Map<String, Object> head = new LinkedHashMap<>(activeList.get(0));
         List<String> ids = new ArrayList<>();
         List<String> teachers = new ArrayList<>();
-        for (Map<String, Object> r : list) {
+        for (Map<String, Object> r : activeList) {
             ids.add(String.valueOf(r.get("tc_id")));
             teachers.add(String.valueOf(r.get("emp_id")).trim());
         }

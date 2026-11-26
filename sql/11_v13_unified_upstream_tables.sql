@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS aca_teaching_class (
   hours             DECIMAL(18,2) NOT NULL DEFAULT 48.00 COMMENT '学时',
   multiclass_prefer VARCHAR(20)   NOT NULL DEFAULT '2' COMMENT '连排偏好',
   no_open_reason    VARCHAR(100)  NULL     COMMENT '不开课原因',
-  open_lower        INT           NULL     DEFAULT 10 COMMENT '开课下限',
+  open_lower        INT           NULL     DEFAULT 6 COMMENT '开课下限',
   prefer_slot       VARCHAR(20)   NULL     COMMENT '教师偏好节次',
   source            VARCHAR(20)   NOT NULL DEFAULT '1' COMMENT '数据来源',
   student_num       INT           NOT NULL DEFAULT 0 COMMENT '班级人数',

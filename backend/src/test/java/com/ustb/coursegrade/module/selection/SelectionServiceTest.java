@@ -40,7 +40,9 @@ class SelectionServiceTest {
             "CREATE TABLE aca_class(class_id VARCHAR(10) PRIMARY KEY,class_name VARCHAR(50))",
             "CREATE TABLE std_student(student_id VARCHAR(20) PRIMARY KEY,person_id VARCHAR(20),class_id VARCHAR(10),major_id VARCHAR(6),org_id VARCHAR(6),grade VARCHAR(40),enrollment_year INT,student_type VARCHAR(2),student_status VARCHAR(2))",
             "CREATE TABLE aca_course(course_id VARCHAR(10) PRIMARY KEY,course_name VARCHAR(100),course_type VARCHAR(2),credit DECIMAL(5,1),org_id VARCHAR(6))",
-            "CREATE TABLE aca_teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),emp_id VARCHAR(10),class_ids VARCHAR(100),capacity INT,tc_type VARCHAR(20),tc_status VARCHAR(2),actual_num INT,selected_count INT DEFAULT 0)",
+            "CREATE TABLE hr_employee(emp_id VARCHAR(10) PRIMARY KEY,emp_name VARCHAR(50))",
+            "CREATE TABLE sys_dict_item(dict_id BIGINT AUTO_INCREMENT PRIMARY KEY,dict_type VARCHAR(40),item_code VARCHAR(100),item_name VARCHAR(200),item_status VARCHAR(2) DEFAULT '01')",
+            "CREATE TABLE aca_teaching_class(tc_id VARCHAR(20) PRIMARY KEY,term VARCHAR(11),course_id VARCHAR(10),emp_id VARCHAR(10),class_ids VARCHAR(100),capacity INT,tc_type VARCHAR(20),tc_status VARCHAR(2),actual_num INT,selected_count INT DEFAULT 0,hours DECIMAL(18,2) DEFAULT 48.00,open_lower INT DEFAULT 6,no_open_reason VARCHAR(100))",
             "CREATE TABLE sel_round_class(round_id INT,tc_id VARCHAR(20),PRIMARY KEY(round_id,tc_id))",
             "CREATE TABLE sel_select_limit(limit_id INT AUTO_INCREMENT PRIMARY KEY,tc_id VARCHAR(20),limit_type INT,limit_value VARCHAR(20))",
             "CREATE TABLE aca_schedule_result(sched_id VARCHAR(14) PRIMARY KEY,tc_id VARCHAR(20),week_range VARCHAR(20),week_day VARCHAR(20),start_slot INT,end_slot INT,room_id VARCHAR(12))",
@@ -48,6 +50,7 @@ class SelectionServiceTest {
             "CREATE TABLE sel_select_log(log_id BIGINT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(20),tc_id VARCHAR(20),round_id INT,action_type INT,operator_id VARCHAR(40),operated_at TIMESTAMP,remark VARCHAR(500),CHECK(action_type<>4 OR remark IS NOT NULL))",
             "CREATE TABLE sel_score(sc_id BIGINT,score_status INT,total_score DECIMAL(5,2),score_level VARCHAR(6))",
             "CREATE TABLE sel_teach_eval(sc_id BIGINT)",
+            "CREATE TABLE sel_tc_eval_result(tc_id VARCHAR(20) PRIMARY KEY,eval_num INT,avg_eval_score DECIMAL(5,2),calc_time TIMESTAMP)",
             "CREATE TABLE grad_scheme_assignment(assignment_id VARCHAR(50) PRIMARY KEY,student_id VARCHAR(20),scheme_id VARCHAR(50),direction_id VARCHAR(20),valid_from DATE,valid_to DATE)",
             "CREATE TABLE grad_scheme_course(scheme_course_id VARCHAR(50) PRIMARY KEY,scheme_id VARCHAR(50),course_id VARCHAR(10),direction_id VARCHAR(20))",
             "CREATE TABLE v_exchange_student(temp_student_no VARCHAR(20),student_name VARCHAR(50),term_ref VARCHAR(11),college_ref VARCHAR(4),major_ref VARCHAR(6),start_on DATE,end_on DATE,status_code VARCHAR(20))"
@@ -61,8 +64,10 @@ class SelectionServiceTest {
             jdbc.update("INSERT INTO std_student VALUES(?,?,'CLS241','M1','ORG001','2024',2024,'01','01')", id, "P_"+id);
         }
         for(String id:List.of("C001","C002","C003"))jdbc.update("INSERT INTO aca_course VALUES(?,?,'11',3,'ORG001')",id,id);
+        jdbc.update("INSERT INTO hr_employee VALUES('E1','王老师'),('OTHER','李老师')");
+        jdbc.update("INSERT INTO sys_dict_item(dict_type,item_code,item_name,item_status) VALUES('system_param','min_open_students','6','01')");
         for(String id:List.of("A","B","D")){
-            jdbc.update("INSERT INTO aca_teaching_class VALUES(?,?,?,'E1','信管241',1,'2','4',0,0)",id,TERM,id.equals("A")?"C001":id.equals("B")?"C002":"C003");
+            jdbc.update("INSERT INTO aca_teaching_class(tc_id,term,course_id,emp_id,class_ids,capacity,tc_type,tc_status,actual_num,selected_count) VALUES(?,?,?,'E1','信管241',1,'2','4',0,0)",id,TERM,id.equals("A")?"C001":id.equals("B")?"C002":"C003");
             jdbc.update("INSERT INTO aca_schedule_result VALUES(?,?,?,'1',1,2,'教室1')","SCH_"+id,id,id.equals("A")?"1-8":id.equals("B")?"9-16":"1-16");
             for(int round:List.of(1,2))jdbc.update("INSERT INTO sel_round_class VALUES(?,?)",round,id);
         }
@@ -193,11 +198,59 @@ class SelectionServiceTest {
         try{List<Future<Boolean>> jobs=new ArrayList<>();for(String id:List.of("S1","S2"))jobs.add(pool.submit(()->{asStudent(id);try{start.await();service.enroll(application("A"));return true;}catch(BizException e){return false;}finally{UserContext.clear();}}));start.countDown();int winners=0;for(var f:jobs)if(f.get(15,TimeUnit.SECONDS))winners++;assertEquals(1,winners);assertEquals(1,count("SELECT actual_num FROM aca_teaching_class WHERE tc_id='A'"));}finally{pool.shutdownNow();}
     }
     @Test void timetableOnlyIncludesSelectedWeeks(){service.enroll(application("A"));assertEquals(1,((List<?>)service.timetable(TERM,1).get("blocks")).size());assertEquals(0,((List<?>)service.timetable(TERM,9).get("blocks")).size());}
-    @Test void stopPreviewNeverWrites(){office();jdbc.update("UPDATE aca_teaching_class SET tc_status='2' WHERE tc_id='A'");assertEquals(false,service.stopPreview(TERM).get("write_enabled"));assertEquals(0,count("SELECT COUNT(*) FROM sel_select_log"));}
+    @Test void stopPreviewFlagsUnderMinClassesAndNeverWrites(){
+        service.enroll(application("A"));
+        office();
+        var preview = service.stopPreview(TERM);
+        assertEquals(true, preview.get("write_enabled"));
+        assertEquals(6, preview.get("min_open_students"));
+        assertEquals(3, preview.get("under_min_count"));
+        assertEquals(1, count("SELECT COUNT(*) FROM sel_select_log"));
+        assertEquals("4", jdbc.queryForObject("SELECT tc_status FROM aca_teaching_class WHERE tc_id='A'", String.class));
+    }
+    @Test void stopClassesCancelsUnderMinClassCleansStudentsAndBlocksReachMin(){
+        jdbc.update("UPDATE aca_teaching_class SET capacity=10 WHERE tc_id IN ('A','B')");
+        for(String sid : List.of("S1","S2")){ asStudent(sid); service.enroll(application("A")); }
+        jdbc.update("INSERT INTO sel_tc_eval_result VALUES('A',0,NULL,CURRENT_TIMESTAMP)");
+        // B 班凑足 6 人，不应允许按人数不足停开
+        for(String sid : List.of("S4","S5","S6","S7","S8","S9")){
+            jdbc.update("INSERT INTO sys_person VALUES(?,?)", "P_"+sid, sid);
+            jdbc.update("INSERT INTO std_student VALUES(?,?,'CLS241','M1','ORG001','2024',2024,'01','01')", sid, "P_"+sid);
+            asStudent(sid);
+            service.enroll(application("B"));
+        }
+        office();
+        // B 班满 6 人，不在预警清单中且停开被拒绝
+        var previewBefore = service.stopPreview(TERM);
+        var previewIds = rows(previewBefore.get("items")).stream().map(r -> r.get("tc_id")).toList();
+        assertTrue(previewIds.contains("A"));
+        assertFalse(previewIds.contains("B"));
+        assertThrows(BizException.class, () -> service.stopClasses(new SelectionService.StopRequest(List.of("B"), null)));
+
+        // A 班仅 2 人（< 6 人），确认停开后置为不开课、清退 2 名学生、记日志并清除评教汇总
+        var stopped = service.stopClasses(new SelectionService.StopRequest(List.of("A"), "选课人数不足6人停开"));
+        assertEquals(1, stopped.get("stopped_count"));
+        assertEquals(2, stopped.get("cancelled_students"));
+        assertEquals(false, stopped.get("workload_counted"));
+        assertEquals("2", jdbc.queryForObject("SELECT tc_status FROM aca_teaching_class WHERE tc_id='A'", String.class));
+        assertEquals("选课人数不足6人停开", jdbc.queryForObject("SELECT no_open_reason FROM aca_teaching_class WHERE tc_id='A'", String.class));
+        assertEquals(0, count("SELECT actual_num FROM aca_teaching_class WHERE tc_id='A'"));
+        assertEquals(0, count("SELECT COUNT(*) FROM sel_sc WHERE tc_id='A' AND select_status IN (0,1)"));
+        assertEquals(2, count("SELECT COUNT(*) FROM sel_sc WHERE tc_id='A' AND select_status=3 AND drop_time IS NOT NULL"));
+        assertEquals(2, count("SELECT COUNT(*) FROM sel_select_log WHERE tc_id='A' AND action_type=4"));
+        assertEquals(0, count("SELECT COUNT(*) FROM sel_tc_eval_result WHERE tc_id='A'"));
+    }
+    @Test void stopClassesProtectsClassWithExistingScores(){
+        var r = service.enroll(application("A"));
+        jdbc.update("INSERT INTO sel_score(sc_id,score_status) VALUES(?,1)", r.get("sc_id"));
+        office();
+        assertThrows(BizException.class, () -> service.stopClasses(new SelectionService.StopRequest(List.of("A"), null)));
+        assertEquals("4", jdbc.queryForObject("SELECT tc_status FROM aca_teaching_class WHERE tc_id='A'", String.class));
+    }
     @Test void malformedWeeksAreNotTreatedAsNoConflict(){assertThrows(BizException.class,()->SelectionRules.weeks("待定"));assertEquals(Set.of(1,3,5,8,10),SelectionRules.weeks("1-5单,8-10双"));}
     @Test void retakeConflictSetsExemptionButRequiresFailureHistory(){
         assertThrows(BizException.class,()->service.enroll(new SelectionService.Application(1,"A",2,null,null)));
-        jdbc.update("INSERT INTO aca_teaching_class VALUES('P','2025-2026-1','C001','E1','信管241',10,'2','4',0,0)");
+        jdbc.update("INSERT INTO aca_teaching_class(tc_id,term,course_id,emp_id,class_ids,capacity,tc_type,tc_status,actual_num,selected_count) VALUES('P','2025-2026-1','C001','E1','信管241',10,'2','4',0,0)");
         jdbc.update("INSERT INTO sel_sc(student_id,tc_id,round_id,study_type,is_exempt_attend,stu_level,stat_stage,priority,select_status,select_time) VALUES('S1','P',1,1,0,'本科',1,NULL,3,CURRENT_TIMESTAMP)");
         jdbc.update("INSERT INTO sel_score SELECT sc_id,3,50,NULL FROM sel_sc WHERE tc_id='P'");
         service.enroll(application("D"));

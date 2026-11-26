@@ -27,12 +27,20 @@ public class ScoreController {
         this.scoreService = scoreService;
     }
 
-    /** 3.1 我的课堂（本学期在前、往届在后） */
+    /** 3.1 我的课堂（本学期在前、往届在后，自动排除已停开教学班） */
     @GetMapping("/my-classes")
     public ApiResponse<List<Map<String, Object>>> myClasses(
             @RequestParam(required = false) String term,
             @RequestParam(required = false) String keyword) {
         return ApiResponse.ok(scoreService.myClasses(term, keyword));
+    }
+
+    /** 3.1 已停开课程只读清单（不录入成绩、不计入教师工作量） */
+    @GetMapping("/stopped-classes")
+    public ApiResponse<List<Map<String, Object>>> stoppedClasses(
+            @RequestParam(required = false) String term,
+            @RequestParam(required = false) String keyword) {
+        return ApiResponse.ok(scoreService.stoppedClasses(term, keyword));
     }
 
     /** 3.1 课堂名单与已录成绩 */

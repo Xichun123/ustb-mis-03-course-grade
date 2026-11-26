@@ -4,6 +4,9 @@ export const scoreApi = {
   myClasses(params) {
     return request.get('/score/my-classes', { params })
   },
+  stoppedClasses(params) {
+    return request.get('/score/stopped-classes', { params })
+  },
   getRoster(lessonNo) {
     return request.get(`/score/classes/${lessonNo}`)
   },

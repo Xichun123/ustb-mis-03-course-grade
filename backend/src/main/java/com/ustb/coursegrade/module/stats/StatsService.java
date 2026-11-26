@@ -227,7 +227,7 @@ public class StatsService {
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 LEFT JOIN hr_employee emp ON emp.emp_id = tc.emp_id
                 LEFT JOIN sel_teach_eval te ON sc.sc_id = te.sc_id
-                WHERE sc.student_id = ? AND tc.term = ? AND sc.select_status = 1
+                WHERE sc.student_id = ? AND tc.term = ? AND sc.select_status = 1 AND tc.tc_status = '4'
                 ORDER BY evaluated ASC, sc.sc_id ASC
                 """, studentId, currentTerm);
 
@@ -278,7 +278,7 @@ public class StatsService {
 
         // 锁定目标 sc 行并重读归属、状态与学期
         List<Map<String, Object>> scRows = jdbc.queryForList("""
-                SELECT sc.sc_id, sc.student_id, sc.tc_id, sc.select_status, tc.term
+                SELECT sc.sc_id, sc.student_id, sc.tc_id, sc.select_status, tc.term, tc.tc_status
                 FROM sel_sc sc
                 JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
                 WHERE sc.sc_id = ? FOR UPDATE
@@ -289,6 +289,9 @@ public class StatsService {
         Map<String, Object> scRow = scRows.get(0);
         if (!studentId.equals(String.valueOf(scRow.get("student_id")).trim())) {
             throw BizException.forbidden("仅可对本人的选课记录提交评教");
+        }
+        if (!"4".equals(String.valueOf(scRow.get("tc_status")).trim())) {
+            throw BizException.conflict("CLASS_STOPPED", "该教学班已停开，无需评教且不计入教师教学工作量");
         }
         if (((Number) scRow.get("select_status")).intValue() != 1) {
             throw BizException.unprocessable("INVALID_SC_STATUS", "仅已选中（有效选课）的课程允许提交评教");
@@ -1707,7 +1710,7 @@ public class StatsService {
                 LEFT JOIN sel_lesson_class lc ON tc.tc_id = lc.tc_id
                 LEFT JOIN hr_employee emp ON emp.emp_id = tc.emp_id
                 LEFT JOIN sel_tc_eval_result r ON tc.tc_id = r.tc_id
-                WHERE tc.term = ?
+                WHERE tc.term = ? AND tc.tc_status = '4'
                 """);
         List<Object> params = new ArrayList<>();
         params.add(targetTerm);
@@ -1807,6 +1810,17 @@ public class StatsService {
 
         List<String> targetTcIds;
         if (!requestedTcIds.isEmpty()) {
+            for (String reqTc : requestedTcIds) {
+                List<String> st = jdbc.queryForList(
+                        "SELECT tc_status FROM aca_teaching_class WHERE tc_id = ?", String.class, reqTc);
+                if (st.isEmpty()) {
+                    throw BizException.notFound("教学班【" + reqTc + "】不存在");
+                }
+                if (!"4".equals(st.get(0) == null ? "" : st.get(0).trim())) {
+                    throw BizException.conflict("CLASS_STOPPED",
+                            "教学班【" + reqTc + "】已停开，不参与评教汇总且不计入教师教学工作量");
+                }
+            }
             targetTcIds = requestedTcIds;
         } else {
             targetTcIds = jdbc.queryForList(

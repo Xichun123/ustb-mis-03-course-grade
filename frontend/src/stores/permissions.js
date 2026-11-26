@@ -34,7 +34,7 @@ export const MODULE_CONFIG = [
   {
     path: '/selection',
     title: '选课管理',
-    desc: '教学班名单调整、截止筛选与停开预览',
+    desc: '教学班名单调整、截止筛选与停开处理',
     icon: 'Calendar',
     group: 1,
     bg: 'rgba(22, 163, 74, 0.10)',

@@ -63,10 +63,10 @@
           <el-tab-pane label="已选" name="results">
             <div class="toolbar"><el-input v-model="resultKeyword" placeholder="课程名称或教学班号" clearable style="width:260px" /><el-select v-model="statusFilter" clearable placeholder="全部状态" style="width:150px"><el-option v-for="(s,i) in statuses" :key="i" :label="s" :value="i" /></el-select><el-button @click="active='timetable';perform(loadTimetable)">查看课表</el-button></div>
             <el-table :data="filteredResults" border empty-text="没有匹配的选课记录">
-              <el-table-column type="expand"><template #default="{row}"><div class="class-detail"><div v-for="(s,i) in row.schedule" :key="i">{{slotText(s)}}</div><span v-if="!row.schedule.length">排课资料待确认</span></div></template></el-table-column>
+              <el-table-column type="expand"><template #default="{row}"><div class="class-detail"><div v-for="(s,i) in row.schedule" :key="i">{{slotText(s)}}</div><span v-if="!row.schedule.length">排课资料待确认</span><div v-if="row.no_open_reason" class="muted" style="margin-top:6px">停开说明：{{ row.no_open_reason }}</div></div></template></el-table-column>
               <el-table-column prop="course_name" label="课程名称" min-width="200" /><el-table-column prop="tc_id" label="教学班" min-width="150" /><el-table-column prop="credit" label="学分" width="80" />
               <el-table-column label="修读类别" width="95"><template #default="{row}">{{studyText(row.study_type)}}</template></el-table-column>
-              <el-table-column label="状态" width="110"><template #default="{row}"><el-tag :type="statusType(row.select_status)">{{statusText(row.select_status)}}</el-tag></template></el-table-column>
+              <el-table-column label="状态" width="115"><template #default="{row}"><el-tag :type="resultStatusType(row)">{{resultStatusText(row)}}</el-tag></template></el-table-column>
               <el-table-column label="免听" width="85"><template #default="{row}">{{row.is_exempt_attend===1?'冲突免听':'正常'}}</template></el-table-column>
               <el-table-column label="操作" width="110"><template #default="{row}"><el-button link type="danger" :disabled="!row.withdraw_round_id" @click="withdraw(row)">退选</el-button></template></el-table-column>
             </el-table>
@@ -127,12 +127,54 @@
           </el-tab-pane>
         </template>
         <el-tab-pane v-if="isStaff" label="上课名单与调整" name="roster">
-          <div class="toolbar"><el-select v-model="tcId" filterable placeholder="选择教学班" style="width:380px" @change="() => perform(loadRoster)"><el-option v-for="c in teachingClasses" :key="c.tc_id" :value="c.tc_id" :label="`${c.tc_id} · ${c.course_name}`" /></el-select><el-input v-model="rosterKeyword" placeholder="学号或姓名" clearable style="width:200px" @keyup.enter="perform(loadRoster)" /><el-button @click="perform(loadRoster)">查询</el-button><el-button @click="printRoster" :disabled="!roster.teaching_class">打印名单</el-button><el-button type="primary" @click="openAdjustment()" :disabled="!tcId">补加学生</el-button></div>
+          <div class="toolbar"><el-select v-model="tcId" filterable placeholder="选择教学班" style="width:400px" @change="() => perform(loadRoster)"><el-option v-for="c in teachingClasses" :key="c.tc_id" :value="c.tc_id" :label="`${c.tc_id} · ${c.course_name}${c.tc_status !== '4' ? '（已停开）' : ''}`" /></el-select><el-input v-model="rosterKeyword" placeholder="学号或姓名" clearable style="width:200px" @keyup.enter="perform(loadRoster)" /><el-button @click="perform(loadRoster)">查询</el-button><el-button @click="printRoster" :disabled="!roster.teaching_class">打印名单</el-button><el-button type="primary" @click="openAdjustment()" :disabled="!tcId || isCurrentRosterStopped">补加学生</el-button></div>
+          <el-alert v-if="isCurrentRosterStopped" title="该教学班已停开：无需录入成绩，且不计入教师教学工作量。" :description="roster.teaching_class?.no_open_reason ? `停开原因：${roster.teaching_class.no_open_reason}` : ''" type="warning" show-icon :closable="false" class="notice" />
           <div v-if="roster.teaching_class" class="roster-summary">{{roster.teaching_class.course_name}} · {{tcId}} · 有效人数 {{roster.effective_count}} / 容量 {{roster.teaching_class.capacity}}<p>{{roster.teaching_class.schedule.map(slotText).join('；')}}</p></div>
-          <el-table :data="roster.items || []" border empty-text="当前条件下没有有效选课学生"><el-table-column type="index" label="序号" width="65" /><el-table-column prop="student_id" label="学号" min-width="150" /><el-table-column prop="student_name" label="姓名" min-width="120" /><el-table-column prop="class_name" label="行政班" min-width="150" /><el-table-column label="选课类别" width="110"><template #default="{row}">{{studyText(row.study_type)}}</template></el-table-column><el-table-column label="免听标记" width="110"><template #default="{row}">{{row.is_exempt_attend===1?'冲突免听':'正常跟班'}}</template></el-table-column><el-table-column label="操作" width="100"><template #default="{row}"><el-button link type="danger" @click="openAdjustment(row)">移出名单</el-button></template></el-table-column></el-table>
+          <el-table :data="roster.items || []" border empty-text="当前条件下没有有效选课学生"><el-table-column type="index" label="序号" width="65" /><el-table-column prop="student_id" label="学号" min-width="150" /><el-table-column prop="student_name" label="姓名" min-width="120" /><el-table-column prop="class_name" label="行政班" min-width="150" /><el-table-column label="选课类别" width="110"><template #default="{row}">{{studyText(row.study_type)}}</template></el-table-column><el-table-column label="免听标记" width="110"><template #default="{row}">{{row.is_exempt_attend===1?'冲突免听':'正常跟班'}}</template></el-table-column><el-table-column label="操作" width="100"><template #default="{row}"><el-button link type="danger" :disabled="isCurrentRosterStopped" @click="openAdjustment(row)">移出名单</el-button></template></el-table-column></el-table>
         </el-tab-pane>
         <el-tab-pane v-if="isOffice" label="截止筛选" name="screen"><el-alert title="按志愿优先级依次录取，同档超额随机筛选。" type="info" :closable="false" class="notice" /><p v-if="selectedRound">{{selectedRound.round_name}} · 截止 {{formatTime(selectedRound.end_time)}}</p><el-button type="primary" :disabled="!canScreen" @click="screen">执行本轮截止筛选</el-button><p v-if="screenResult">{{screenResult}}</p></el-tab-pane>
-        <el-tab-pane v-if="isOffice" label="停开预览" name="stop"><el-alert title="当前展示停开及待停开教学班的受影响学生统计。" type="warning" :closable="false" class="notice" /><el-table :data="stop.items || []" border><el-table-column prop="tc_id" label="教学班" /><el-table-column prop="course_name" label="课程名称" /><el-table-column prop="tc_status" label="教学班状态" /><el-table-column prop="affected_count" label="受影响申请数" /></el-table></el-tab-pane>
+        <el-tab-pane v-if="isOffice" label="停开处理" name="stop">
+          <el-alert :title="stop.reason || `当前最低开班人数为 ${stop.min_open_students || 6} 人；选课人数不足的教学班确认停开后将清退学生选课、关闭成绩录入通道，且不计入教师教学工作量。`" type="warning" show-icon :closable="false" class="notice" />
+          <div class="toolbar">
+            <el-tag type="warning">人数不足（低于 {{ stop.min_open_students || 6 }} 人）：{{ stop.under_min_count || 0 }} 个</el-tag>
+            <el-tag type="info">已停开：{{ stop.stopped_count || 0 }} 个</el-tag>
+            <el-button @click="() => perform(refresh)">刷新列表</el-button>
+          </div>
+          <el-table :data="stop.items || []" border empty-text="当前学期暂无人数不足或已停开的教学班">
+            <el-table-column prop="tc_id" label="教学班" width="135" />
+            <el-table-column prop="course_name" label="课程名称" min-width="150" />
+            <el-table-column prop="teacher_name" label="任课教师" width="100" />
+            <el-table-column label="学时" width="75"><template #default="{ row }">{{ row.hours ?? '—' }}</template></el-table-column>
+            <el-table-column label="有效人数 / 最低标准" width="150">
+              <template #default="{ row }">
+                <el-tag :type="row.stop_category === 'UNDER_MIN' ? 'danger' : 'info'" size="small">
+                  {{ row.active_count ?? 0 }} / {{ row.min_open_students || 6 }} 人
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="affected_count" label="受影响学生" width="100" />
+            <el-table-column label="状态" width="165">
+              <template #default="{ row }">
+                <el-tag :type="stopCategoryTagType(row.stop_category)" size="small">{{ row.status_label }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="停开原因与工作量说明" min-width="230">
+              <template #default="{ row }">
+                <div v-if="row.no_open_reason">{{ row.no_open_reason }}</div>
+                <div class="muted">{{ row.workload_note }}</div>
+                <div v-if="row.block_reason" class="stop-block-note">{{ row.block_reason }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="125" fixed="right">
+              <template #default="{ row }">
+                <el-button v-if="row.can_stop" type="danger" link :loading="busy" @click="openStopDialog(row)">
+                  {{ row.stop_category === 'STOPPED_PENDING_CLEANUP' ? '清退并完结' : '确认停开' }}
+                </el-button>
+                <span v-else class="muted">{{ row.stop_category === 'STOPPED' ? '不计入工作量' : '受保护' }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
       </el-tabs>
     </template>
     <el-dialog v-model="applyVisible" title="选课申请" width="620px" :close-on-click-modal="false">
@@ -162,6 +204,27 @@
       <template #footer><el-button @click="applyVisible=false">取消</el-button><el-button :loading="busy" @click="precheck">先校验</el-button><el-button type="primary" :loading="busy" @click="enroll">确认提交</el-button></template>
     </el-dialog>
     <el-dialog v-model="adjustVisible" :title="adjustment.operation==='add'?'补加学生':'移出名单'" width="520px" :close-on-click-modal="false"><el-form label-width="90px"><el-form-item label="学号"><el-input v-model="adjustment.studentId" maxlength="20" :disabled="adjustment.operation==='remove'" /></el-form-item><el-form-item v-if="adjustment.operation==='add'" label="修读类别"><el-select v-model="adjustment.studyType"><el-option v-for="(s,i) in ['初修','重修','辅修']" :key="s" :label="s" :value="i+1" /></el-select></el-form-item><el-form-item label="调整原因" required><el-input v-model="adjustment.reason" type="textarea" maxlength="200" show-word-limit :rows="3" /></el-form-item></el-form><template #footer><el-button @click="adjustVisible=false">取消</el-button><el-button type="primary" :loading="busy" @click="submitAdjustment">确认调整</el-button></template></el-dialog>
+    <el-dialog v-model="stopDialogVisible" title="确认停开教学班" width="540px" :close-on-click-modal="false">
+      <template v-if="stopTarget">
+        <el-alert
+          type="warning"
+          show-icon
+          :closable="false"
+          class="notice"
+          :title="`确认停开 ${stopTarget.course_name}（${stopTarget.tc_id}）？`"
+          :description="`当前有效人数 ${stopTarget.active_count ?? 0} 人（低于最低开班人数 ${stopTarget.min_open_students || 6} 人），将清退 ${stopTarget.affected_count ?? 0} 条选课记录；停开后任课教师无需录入成绩，且该课程不计入教师教学工作量。`"
+        />
+        <el-form label-width="90px">
+          <el-form-item label="停开原因">
+            <el-input v-model="stopReason" type="textarea" maxlength="100" show-word-limit :rows="3" placeholder="请输入停开原因（留空则默认按人数不足停开）" />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="stopDialogVisible = false">取消</el-button>
+        <el-button type="danger" :loading="busy" @click="confirmStopClass">确认停开</el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="scheduleVisible" title="课程详情" width="480px">
       <el-descriptions v-if="selectedBlock" :column="1" border size="small">
         <el-descriptions-item label="课程名称">{{ selectedBlock.course_name }}</el-descriptions-item>
@@ -221,17 +284,22 @@ const courseType = ref('')
 const resultRows = ref([]), resultKeyword = ref(''), statusFilter = ref(null), week = ref(1), timetableMode = ref('week'), timetable = ref({ blocks: [] })
 const teachingClasses = ref([]), tcId = ref(''), rosterKeyword = ref(''), roster = ref({}), stop = ref({}), screenResult = ref('')
 const applyVisible = ref(false), target = ref(null), application = ref({}), checkResult = ref(''), adjustVisible = ref(false), adjustment = ref({}), printData = ref(null)
+const stopDialogVisible = ref(false), stopTarget = ref(null), stopReason = ref('')
 const scheduleVisible = ref(false), scheduleDetail = ref([]), selectedBlock = ref(null)
 const statuses = ['待筛选','已选中','未选中','已退选'], days = ['一','二','三','四','五','六','日']
 const isStudent = computed(() => context.value.user.role === 'STUDENT')
 const isOffice = computed(() => context.value.user.role === 'ACADEMIC_OFFICE')
 const isStaff = computed(() => isOffice.value || context.value.user.role === 'TEACHER')
+const isCurrentRosterStopped = computed(() => Boolean(roster.value.teaching_class && roster.value.teaching_class.tc_status !== '4'))
 const termRounds = computed(() => context.value.rounds.filter(r => r.term === term.value))
 const selectedRound = computed(() => termRounds.value.find(r => r.round_id === roundId.value))
 const canScreen = computed(() => selectedRound.value?.select_mode === 2 && Date.parse(selectedRound.value.end_time) <= Date.parse(context.value.server_time))
 const filteredResults = computed(() => resultRows.value.filter(r => (statusFilter.value == null || r.select_status === statusFilter.value) && `${r.course_name} ${r.tc_id}`.toLowerCase().includes(resultKeyword.value.toLowerCase())))
 const statusText = s => s == null ? '未选课' : (statuses[s] || '状态待确认')
 const statusType = s => ({0:'warning',1:'success',2:'info',3:'info'}[s] || 'info')
+const resultStatusText = row => (row.select_status === 3 && ['2', '5'].includes(String(row.tc_status || ''))) ? '课程停开' : statusText(row.select_status)
+const resultStatusType = row => (row.select_status === 3 && ['2', '5'].includes(String(row.tc_status || ''))) ? 'danger' : statusType(row.select_status)
+const stopCategoryTagType = cat => ({ UNDER_MIN: 'warning', STOPPED_PENDING_CLEANUP: 'danger', STOPPED: 'info' }[cat] || 'info')
 const studyText = s => ({1:'初修',2:'重修',3:'辅修'}[s] || '待确认')
 const formatTime = t => String(t || '').replace('T',' ')
 const slotText = s => `${s.week_range}周 · 周${days[Number(s.week_day)-1] || '?'} · ${s.start_slot}—${s.end_slot}节 · ${s.room_id}`
@@ -330,6 +398,8 @@ function showSchedule(block){selectedBlock.value=block;const found=resultRows.va
 function openAdjustment(row){adjustment.value={studentId:row?.student_id || '',operation:row?'remove':'add',studyType:1,reason:''};adjustVisible.value=true}
 function submitAdjustment(){perform(async()=>{if(!adjustment.value.reason?.trim())throw new Error('请填写调整原因');try{const r=await api.adjust(tcId.value,adjustment.value);ElMessage.success(r.data.message);adjustVisible.value=false}catch(e){if(!e.response){adjustVisible.value=false;error.value='调整结果待核实，已刷新名单，请核对后再办理。'}else throw e}await loadRoster()})}
 function screen(){perform(async()=>{await ElMessageBox.confirm('确认执行本轮截止筛选？将按实际余量和志愿重新校验所有待筛选申请。','截止筛选',{type:'warning'});const r=await api.screen(roundId.value);screenResult.value=`${r.data.message}；本次录取 ${r.data.accepted} 人，未选中 ${r.data.rejected} 人。`})}
+function openStopDialog(row){stopTarget.value=row;stopReason.value=row.no_open_reason || `选课人数不足${row.min_open_students || 6}人停开`;stopDialogVisible.value=true}
+function confirmStopClass(){if(!stopTarget.value)return;perform(async()=>{const r=await api.stopClasses({tcIds:[stopTarget.value.tc_id],reason:stopReason.value});ElMessage.success(r.message || r.data?.message || '已完成停开处理');stopDialogVisible.value=false;stopTarget.value=null;await refresh()})}
 function printRoster(){perform(async()=>{printData.value=(await api.roster(tcId.value,'')).data;await nextTick();window.print()})}
 async function bootContext() {
   context.value = (await api.context()).data
@@ -376,6 +446,7 @@ onMounted(() => perform(bootContext))
 :global(html[data-theme='dark']) .course-card-badge{background:rgba(245,158,11,0.22);color:#fbbf24}
 .roster-summary{padding:14px 16px;background:var(--app-card-muted-bg);border:1px solid var(--app-border);border-radius:10px;margin-bottom:16px;color:var(--app-text-primary);font-size:14px}
 .roster-summary p{font-size:12px;color:var(--app-text-secondary);margin-bottom:0}
+.stop-block-note{font-size:12px;color:#c45656;margin-top:2px}
 .print-sheet{display:none}
 @media(max-width:1000px){.summary{gap:15px;flex-wrap:wrap}}
 @media print {

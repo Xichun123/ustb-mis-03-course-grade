@@ -344,8 +344,9 @@ INSERT INTO sys_dict_type (dict_type, type_name, is_system, dict_status, remark)
 ON DUPLICATE KEY UPDATE type_name = VALUES(type_name);
 
 INSERT INTO sys_dict_item (dict_type, item_code, item_name, sort_no, version, effective_from, item_status) VALUES
-  ('system_param',   'current_term',    '2026-2027-1', 1, '当前默认学年学期',        '2026-01-01', '01'),
-  ('system_param',   'usual_ratio_min', '30',          2, '平时成绩最低占比(%)',     '2026-01-01', '01'),
+  ('system_param',   'current_term',      '2026-2027-1', 1, '当前默认学年学期',          '2026-01-01', '01'),
+  ('system_param',   'usual_ratio_min',   '30',          2, '平时成绩最低占比(%)',       '2026-01-01', '01'),
+  ('system_param',   'min_open_students', '6',           3, '最低开班人数(低于可停开)',   '2026-01-01', '01'),
   ('STUDENT_TYPE',   '01',              '本科',        1, '2026',                    '2026-01-01', '01'),
   ('STUDENT_TYPE',   '02',              '硕士',        2, '2026',                    '2026-01-01', '01'),
   ('STUDENT_TYPE',   '03',              '博士',        3, '2026',                    '2026-01-01', '01'),

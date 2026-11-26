@@ -35,6 +35,37 @@
           </el-table-column>
         </el-table>
 
+        <div v-if="stoppedClassList.length" class="stopped-section">
+          <el-alert
+            type="info"
+            show-icon
+            :closable="false"
+            style="margin: 14px 0 10px"
+            :title="`已停开课程（共 ${stoppedClassList.length} 门）：以下教学班因选课人数不足或教务安排已停开，无需录入成绩，且不计入教师教学工作量。`"
+          />
+          <el-table :data="stoppedClassList" border size="small">
+            <el-table-column prop="tc_id" label="教学班号" width="135" />
+            <el-table-column prop="term" label="学期" width="120" />
+            <el-table-column prop="course_name" label="课程名称" min-width="150" />
+            <el-table-column label="学时" width="75">
+              <template #default="{ row }">{{ row.hours ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column label="停开状态" width="105">
+              <template #default="{ row }">
+                <el-tag type="info" size="small">{{ row.tc_status === '5' ? '已取消' : '不开课' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="停开原因" min-width="180">
+              <template #default="{ row }">{{ row.no_open_reason || '课程已停开' }}</template>
+            </el-table-column>
+            <el-table-column label="工作量与录分" width="210">
+              <template #default>
+                <el-tag type="info" size="small">不录成绩 · 不计入工作量</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
         <template v-if="currentClass">
           <el-divider content-position="left">
             {{ currentClass.lesson_no }} {{ currentClass.course_name }}（{{ currentClass.term }}）
@@ -505,6 +536,7 @@ const isAdmin = computed(() => role.value === 'SYS_ADMIN')
 const activeTab = ref(isTeacher.value ? 'entry' : isCollege.value ? 'audit' : isOffice.value ? 'publish' : 'entry')
 const classQuery = reactive({ term: '', keyword: '' })
 const classList = ref([])
+const stoppedClassList = ref([])
 const loadingClasses = ref(false)
 const currentClass = ref(null)
 const roster = reactive({ students: [], ratio_min: 30, verify_code: null, default_score_type: 1, has_active_correction: false })
@@ -515,8 +547,16 @@ const templateLoading = ref(false)
 async function loadClasses() {
   loadingClasses.value = true
   try {
-    const res = await scoreApi.myClasses({ term: classQuery.term || undefined, keyword: classQuery.keyword || undefined })
-    classList.value = res.data || []
+    const params = { term: classQuery.term || undefined, keyword: classQuery.keyword || undefined }
+    const [activeRes, stoppedRes] = await Promise.all([
+      scoreApi.myClasses(params),
+      scoreApi.stoppedClasses(params)
+    ])
+    classList.value = activeRes.data || []
+    stoppedClassList.value = stoppedRes.data || []
+    if (currentClass.value && !classList.value.some((c) => c.lesson_no === currentClass.value.lesson_no)) {
+      currentClass.value = null
+    }
   } finally {
     loadingClasses.value = false
   }

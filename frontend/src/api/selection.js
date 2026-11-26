@@ -12,5 +12,6 @@ export const selectionApi = {
   roster: (id, keyword) => request.get(`/selection/teaching-classes/${encodeURIComponent(id)}/roster`, { params: { keyword } }),
   adjust: (id, payload) => request.post(`/selection/teaching-classes/${encodeURIComponent(id)}/adjustments`, payload),
   screen: id => request.post(`/selection/rounds/${id}/screen`, null, { timeout: 60000 }),
-  stopPreview: term => request.get('/selection/stop-preview', { params: { term } })
+  stopPreview: term => request.get('/selection/stop-preview', { params: { term } }),
+  stopClasses: payload => request.post('/selection/stop-classes', payload)
 }
