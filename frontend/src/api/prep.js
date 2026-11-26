@@ -7,8 +7,10 @@ export const prepApi = {
   getLimits(tcId) {
     return request.get(`/prep/teaching-classes/${tcId}/limits`)
   },
-  replaceLimits(tcId, limits) {
-    return request.put(`/prep/teaching-classes/${tcId}/limits`, { limits })
+  replaceLimits(tcId, limits, specialRequirement) {
+    const body = { limits }
+    if (specialRequirement !== undefined) body.special_requirement = specialRequirement
+    return request.put(`/prep/teaching-classes/${tcId}/limits`, body)
   },
   listRounds(params) {
     return request.get('/prep/selection-rounds', { params })

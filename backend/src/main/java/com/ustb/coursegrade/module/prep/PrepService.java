@@ -87,6 +87,9 @@ public class PrepService {
                        tc.emp_id AS teacher_id, tc.emp_id, tc.class_ids, tc.capacity, tc.actual_num,
                        tc.tc_type, tc.tc_status,
                        (SELECT COUNT(*) FROM sel_select_limit sl WHERE sl.tc_id = tc.tc_id) AS limit_count,
+                       (SELECT di.item_name FROM sys_dict_item di
+                         WHERE di.dict_type = 'tc_special_requirement' AND di.item_code = tc.tc_id
+                           AND di.item_status IN ('01', '1') LIMIT 1) AS special_requirement,
                        (SELECT lc.lesson_no FROM sel_lesson_class lc WHERE lc.tc_id = tc.tc_id LIMIT 1) AS lesson_no
                 FROM aca_teaching_class tc
                 JOIN aca_course c ON tc.course_id = c.course_id
@@ -130,18 +133,30 @@ public class PrepService {
                 || Objects.equals(user.collegeId(), String.valueOf(tc.get("open_college")));
         boolean editable = collegeMatch && (lockedRounds == null || lockedRounds == 0);
 
+        String specialRequirement = loadSpecialRequirement(tcId);
+        List<String> preCourses = loadPreCourseLabels(String.valueOf(tc.get("course_id")));
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("teaching_class", tc);
         result.put("limits", limits);
+        result.put("special_requirement", specialRequirement);
+        result.put("pre_courses", preCourses);
         result.put("editable", editable);
         result.put("lock_reason", editable ? null :
                 (!collegeMatch ? "仅开课学院教学秘书或教务处可维护该班限选条件" : "该教学班已关联待审/已审/进行中选课轮次，限选条件已锁定"));
         return result;
     }
 
-    /** 1.2 整体替换某教学班的限选条件（同类型 OR、不同类型 AND，防重复并校验锁定） */
+    /** 1.2 整体替换某教学班的限选条件（保留两参兼容重载） */
     @Transactional
     public List<Map<String, Object>> replaceLimits(String tcId, List<Map<String, Object>> rawLimits) {
+        return replaceLimits(tcId, rawLimits, false, null);
+    }
+
+    /** 1.2 整体替换某教学班的限选条件与特殊要求说明（同类型 OR、不同类型 AND，防重复并校验锁定） */
+    @Transactional
+    public List<Map<String, Object>> replaceLimits(
+            String tcId, List<Map<String, Object>> rawLimits, boolean updateSpecialRequirement, String rawSpecialRequirement) {
         CurrentUser user = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY,
                 RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
 
@@ -189,13 +204,70 @@ public class PrepService {
             }
         }
 
+        String cleanSpecial = null;
+        if (updateSpecialRequirement) {
+            cleanSpecial = rawSpecialRequirement == null ? "" : rawSpecialRequirement.trim();
+            if (cleanSpecial.length() > 200) {
+                throw BizException.unprocessable("SPECIAL_REQ_TOO_LONG", "特殊要求说明不能超过 200 字符");
+            }
+        }
+
         jdbc.update("DELETE FROM sel_select_limit WHERE tc_id = ?", tcId);
         if (!batchArgs.isEmpty()) {
             jdbc.batchUpdate("INSERT INTO sel_select_limit (tc_id, limit_type, limit_value) VALUES (?, ?, ?)", batchArgs);
         }
+        if (updateSpecialRequirement) {
+            saveSpecialRequirement(tcId, cleanSpecial);
+        }
         return jdbc.queryForList(
                 "SELECT limit_id, tc_id, limit_type, limit_value FROM sel_select_limit WHERE tc_id = ? ORDER BY limit_type, limit_value",
                 tcId);
+    }
+
+    private String loadSpecialRequirement(String tcId) {
+        List<String> rows = jdbc.queryForList("""
+                SELECT item_name FROM sys_dict_item
+                 WHERE dict_type = 'tc_special_requirement' AND item_code = ? AND item_status IN ('01', '1')
+                 ORDER BY dict_id LIMIT 1
+                """, String.class, tcId);
+        return rows.isEmpty() || rows.get(0) == null ? "" : rows.get(0).trim();
+    }
+
+    private void saveSpecialRequirement(String tcId, String text) {
+        jdbc.update("DELETE FROM sys_dict_item WHERE dict_type = 'tc_special_requirement' AND item_code = ?", tcId);
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        Integer typeExists = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sys_dict_type WHERE dict_type = 'tc_special_requirement'", Integer.class);
+        if (typeExists == null || typeExists == 0) {
+            jdbc.update("""
+                    INSERT INTO sys_dict_type(dict_type, type_name, is_system, dict_status, remark)
+                    VALUES('tc_special_requirement', '教学班选课特殊要求', 0, '01', '按教学班号记录四六级成绩等特殊选课要求说明')
+                    """);
+        }
+        jdbc.update("""
+                INSERT INTO sys_dict_item(dict_type, item_code, item_name, sort_no, version, effective_from, item_status)
+                VALUES('tc_special_requirement', ?, ?, 0, '教学班特殊要求', CURRENT_DATE, '01')
+                """, tcId, text);
+    }
+
+    private List<String> loadPreCourseLabels(String courseId) {
+        List<String> rawList = jdbc.queryForList(
+                "SELECT pre_course_id FROM aca_course_id WHERE course_id = ?", String.class, courseId);
+        if (rawList.isEmpty() || rawList.get(0) == null || rawList.get(0).isBlank()) {
+            return List.of();
+        }
+        List<String> codes = Arrays.stream(rawList.get(0).split("[,，;；\s]+"))
+                .map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
+        if (codes.isEmpty()) return List.of();
+        String placeholders = String.join(",", Collections.nCopies(codes.size(), "?"));
+        Map<String, String> names = new HashMap<>();
+        jdbc.queryForList("SELECT course_id, course_name FROM aca_course WHERE course_id IN (" + placeholders + ")", codes.toArray())
+                .forEach(r -> names.put(String.valueOf(r.get("course_id")).trim(), String.valueOf(r.get("course_name")).trim()));
+        return codes.stream()
+                .map(c -> names.containsKey(c) ? names.get(c) + "（" + c + "）" : c)
+                .toList();
     }
 
     /** 1.3/1.5 查询选课轮次列表（学生只看已发布/进行中/已结束，管理人员按权限查看全部） */

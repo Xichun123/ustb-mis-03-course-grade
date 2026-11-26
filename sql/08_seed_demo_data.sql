@@ -340,7 +340,8 @@ INSERT INTO sys_dict_type (dict_type, type_name, is_system, dict_status, remark)
   ('system_param',   '选课与成绩系统运行参数', 1, '01', '当前学期、平时成绩最低占比等核心配置'),
   ('STUDENT_TYPE',   '学生类别',               1, '01', '01本科 02硕士 03博士 04交流生'),
   ('STUDENT_STATUS', '学籍状态',               1, '01', '01在籍'),
-  ('COURSE_TYPE',    '课程性质',               1, '01', '11校级必修 12院级必修 13专业必修 14专业选修 15通识 16实践')
+  ('COURSE_TYPE',            '课程性质',           1, '01', '11校级必修 12院级必修 13专业必修 14专业选修 15通识 16实践'),
+  ('tc_special_requirement', '教学班选课特殊要求', 0, '01', '按教学班号记录四六级成绩等特殊选课要求说明')
 ON DUPLICATE KEY UPDATE type_name = VALUES(type_name);
 
 INSERT INTO sys_dict_item (dict_type, item_code, item_name, sort_no, version, effective_from, item_status) VALUES

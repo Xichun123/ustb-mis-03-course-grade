@@ -32,8 +32,9 @@ const rows = computed(() => {
   if (colleges.length) rows.push({ label: '学院', value: colleges.map(getCollegeName).join('或') })
   if (levels.length) rows.push({ label: '培养层次', value: levels.join('或') })
   if (audience.class_names) rows.push({ label: '班级', value: audience.class_names.join('、') || '待确认' })
+  if (audience.pre_courses?.length) rows.push({ label: '先修课程', value: audience.pre_courses.join('、') })
   if (audience.special_requirement || props.detailed) {
-    rows.push({ label: '特殊要求', value: audience.special_requirement || '未公布' })
+    rows.push({ label: '特殊要求', value: audience.special_requirement || '无' })
   }
   return rows
 })

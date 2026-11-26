@@ -36,7 +36,12 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="limit_count" label="限选条数" width="90" />
+          <el-table-column label="限选条件" min-width="140">
+            <template #default="{ row }">
+              <span>{{ row.limit_count || 0 }} 条</span>
+              <el-tag v-if="row.special_requirement" size="small" type="warning" style="margin-left: 6px">含特殊要求</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="120">
             <template #default="{ row }">
               <el-button type="primary" link @click="openLimitDialog(row.tc_id)">
@@ -120,6 +125,14 @@
         :closable="false"
         style="margin-bottom: 12px"
       />
+      <el-alert
+        v-if="limitDetail?.pre_courses?.length"
+        type="info"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 12px"
+        :title="`校内先修课程要求：${limitDetail.pre_courses.join('、')}（学生须先修读并通过，系统选课时自动校验）`"
+      />
       <template v-if="limitEditable">
         <div v-for="(item, idx) in editLimits" :key="idx" class="limit-row">
           <el-select v-model="item.limit_type" style="width: 160px">
@@ -134,6 +147,18 @@
         <el-button @click="editLimits.push({ limit_type: 1, limit_value: '' })">
           + 添加一条限选条件
         </el-button>
+        <div style="margin-top: 16px">
+          <div class="special-req-label">特殊要求说明（如大学英语四六级成绩等，选填）</div>
+          <el-input
+            v-model="editSpecialRequirement"
+            type="textarea"
+            :rows="2"
+            maxlength="200"
+            show-word-limit
+            placeholder="例如：大学英语六级成绩 >= 425 分，或四级成绩 >= 500 分（留空表示无特殊要求）"
+          />
+          <div class="special-req-hint">说明：设置后将在学生选课界面公示，学生须勾选确认本人符合要求方可提交，开课后由学院或任课教师核验。</div>
+        </div>
       </template>
       <template v-else>
         <div v-if="editLimits.length" class="limit-readonly-list">
@@ -143,6 +168,10 @@
           </div>
         </div>
         <div v-else class="round-classes-empty">暂无限选条件</div>
+        <div v-if="editSpecialRequirement" class="limit-readonly-item" style="margin-top: 10px">
+          <el-tag size="small" type="warning" effect="light">特殊要求</el-tag>
+          <span class="limit-readonly-val">{{ editSpecialRequirement }}</span>
+        </div>
       </template>
       <template #footer>
         <el-button @click="limitVisible = false">关闭</el-button>
@@ -436,6 +465,7 @@ const roundQuery = reactive({ term: '', round_status: null })
 const limitVisible = ref(false)
 const limitDetail = ref(null)
 const editLimits = ref([])
+const editSpecialRequirement = ref('')
 
 const roundDialogVisible = ref(false)
 const roundReadOnly = ref(false)
@@ -482,12 +512,13 @@ async function openLimitDialog(tcId) {
   const res = await prepApi.getLimits(tcId)
   limitDetail.value = res.data
   editLimits.value = (res.data.limits || []).map(l => ({ limit_type: l.limit_type, limit_value: l.limit_value }))
+  editSpecialRequirement.value = res.data.special_requirement || ''
   limitVisible.value = true
 }
 
 async function saveLimits() {
-  await prepApi.replaceLimits(limitDetail.value.teaching_class.tc_id, editLimits.value)
-  ElMessage.success('限选条件已保存')
+  await prepApi.replaceLimits(limitDetail.value.teaching_class.tc_id, editLimits.value, editSpecialRequirement.value)
+  ElMessage.success('限选条件与特殊要求已保存')
   limitVisible.value = false
   loadClasses()
 }
@@ -593,6 +624,17 @@ onMounted(() => {
   font-size: 13.5px;
   font-weight: 500;
   color: var(--app-text-primary);
+}
+.special-req-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+  margin-bottom: 6px;
+}
+.special-req-hint {
+  font-size: 12px;
+  color: var(--app-text-secondary);
+  margin-top: 6px;
 }
 
 .round-dialog-header {

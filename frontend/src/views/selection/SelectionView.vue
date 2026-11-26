@@ -199,6 +199,19 @@
             </el-select>
           </el-form-item>
         </el-form>
+        <div v-if="target.audience?.special_requirement" class="special-confirm-box">
+          <el-alert
+            type="warning"
+            show-icon
+            :closable="false"
+            :title="`本教学班特殊要求：${target.audience.special_requirement}`"
+            description="此类校外考试或能力要求无法由校内成绩库自动核验，请先确认本人符合条件，开课后由学院或任课教师核验。"
+            style="margin-bottom: 10px"
+          />
+          <el-checkbox v-model="application.specialRequirementConfirmed" @change="checkResult = ''">
+            我已仔细阅读并确认本人符合上述特殊要求
+          </el-checkbox>
+        </div>
         <el-alert v-if="checkResult" :title="checkResult" type="info" :closable="false" />
       </template>
       <template #footer><el-button @click="applyVisible=false">取消</el-button><el-button :loading="busy" @click="precheck">先校验</el-button><el-button type="primary" :loading="busy" @click="enroll">确认提交</el-button></template>
@@ -390,9 +403,9 @@ function changeTerm(){chooseRound();coursePage.value=1;summary.value={};perform(
 function changeRound(){coursePage.value=1;perform(refresh)}
 function searchCourses(){coursePage.value=1;perform(loadCourses)}
 function resetCourses(){keyword.value='';courseType.value='';searchCourses()}
-function openApply(tc){target.value=tc;application.value={roundId:roundId.value,tcId:tc.tc_id,studyType:1,priority:selectedRound.value.select_mode===2?1:null,expectedVersion:tc.version || null};checkResult.value='';applyVisible.value=true}
+function openApply(tc){target.value=tc;application.value={roundId:roundId.value,tcId:tc.tc_id,studyType:1,priority:selectedRound.value.select_mode===2?1:null,expectedVersion:tc.version || null,specialRequirementConfirmed:false};checkResult.value='';applyVisible.value=true}
 function precheck(){perform(async()=>{try{checkResult.value=(await api.check(application.value)).data.message}catch(e){checkResult.value=e?.response?.data?.message || '校验未完成，请稍后重试';throw e}})}
-function enroll(){perform(async()=>{try{const r=await api.enroll(application.value);ElMessage.success(r.data.message);applyVisible.value=false;await loadCourses()}catch(e){if(!e.response){await loadResults();await loadCourses();applyVisible.value=false;error.value='提交未获得明确回执，已重新读取选课记录，请核对结果后再办理。';active.value='results';return}throw e}})}
+function enroll(){perform(async()=>{if(target.value?.audience?.special_requirement && !application.value.specialRequirementConfirmed){ElMessage.warning('请先勾选确认本人符合本教学班的特殊要求');return}try{const r=await api.enroll(application.value);ElMessage.success(r.data.message);applyVisible.value=false;await loadCourses()}catch(e){if(!e.response){await loadResults();await loadCourses();applyVisible.value=false;error.value='提交未获得明确回执，已重新读取选课记录，请核对结果后再办理。';active.value='results';return}throw e}})}
 function withdraw(row){perform(async()=>{await ElMessageBox.confirm(`确认退选 ${row.course_name}（${row.tc_id}）？`,'退选确认',{type:'warning'});try{const r=await api.withdraw(row.sc_id,{roundId:row.withdraw_round_id,expectedVersion:row.version,confirmed:true});ElMessage.success(r.data.message)}catch(e){if(!e.response){error.value='退选结果待核实，正在重新读取选课记录。'}else throw e}await loadResults()})}
 function showSchedule(block){selectedBlock.value=block;const found=resultRows.value.find(r=>r.tc_id===block.tc_id);perform(async()=>{if(!found)await loadResults();scheduleDetail.value=resultRows.value.find(r=>r.tc_id===block.tc_id)?.schedule || [];scheduleVisible.value=true})}
 function openAdjustment(row){adjustment.value={studentId:row?.student_id || '',operation:row?'remove':'add',studyType:1,reason:''};adjustVisible.value=true}
@@ -447,6 +460,7 @@ onMounted(() => perform(bootContext))
 .roster-summary{padding:14px 16px;background:var(--app-card-muted-bg);border:1px solid var(--app-border);border-radius:10px;margin-bottom:16px;color:var(--app-text-primary);font-size:14px}
 .roster-summary p{font-size:12px;color:var(--app-text-secondary);margin-bottom:0}
 .stop-block-note{font-size:12px;color:#c45656;margin-top:2px}
+.special-confirm-box{margin:10px 0 12px;padding:12px 14px;border-radius:10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.28)}
 .print-sheet{display:none}
 @media(max-width:1000px){.summary{gap:15px;flex-wrap:wrap}}
 @media print {

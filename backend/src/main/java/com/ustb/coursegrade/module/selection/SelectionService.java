@@ -32,7 +32,9 @@ public class SelectionService {
         this.catalog = catalog;
     }
     private LocalDateTime now(){return LocalDateTime.now(clock);}
-    public record Application(Integer roundId,String tcId,Integer studyType,Integer priority,String expectedVersion){}
+    public record Application(Integer roundId,String tcId,Integer studyType,Integer priority,String expectedVersion,@com.fasterxml.jackson.annotation.JsonAlias("special_requirement_confirmed") Boolean specialRequirementConfirmed){
+        public Application(Integer roundId,String tcId,Integer studyType,Integer priority,String expectedVersion){this(roundId,tcId,studyType,priority,expectedVersion,null);}
+    }
     public record Withdrawal(Integer roundId,String expectedVersion,Boolean confirmed){}
     public static final int DEFAULT_MIN_OPEN_STUDENTS = 6;
     public record Adjustment(String studentId,String operation,Integer studyType,String reason){}
@@ -70,17 +72,21 @@ public class SelectionService {
         int start = Math.min((page - 1) * size, groups.size());
         var pageGroups = groups.subList(start, Math.min(start + size, groups.size()));
         var classIds = pageGroups.stream().flatMap(List::stream).map(tc -> text(tc, "tc_id")).toList();
+        var courseIds = pageGroups.stream().map(g -> text(g.get(0), "course_id")).distinct().toList();
         var limitsByClass = courseLimits(classIds);
+        var specialByClass = specialRequirementsByClass(classIds);
+        var preCoursesByCourse = preCourseLabelsByCourse(courseIds);
         List<Map<String, Object>> items = new ArrayList<>();
         for (var group : pageGroups) {
             for (var tc : group) {
                 String id = text(tc, "tc_id");
+                String cid = text(tc, "course_id");
                 tc.put("actual_num", count(id));
                 tc.put("schedule", schedule(id));
                 tc.put("version", version(tc));
                 tc.put("sc_id", stringId(tc.get("sc_id")));
                 tc.put("preferences", jdbc.queryForList("SELECT priority,COUNT(*) AS applicants FROM sel_sc WHERE round_id=? AND tc_id=? AND select_status IN (0,1) GROUP BY priority ORDER BY priority", roundId, id));
-                tc.put("audience", audience(tc, limitsByClass.getOrDefault(id, Map.of())));
+                tc.put("audience", audience(tc, limitsByClass.getOrDefault(id, Map.of()), specialByClass.get(id), preCoursesByCourse.getOrDefault(cid, List.of())));
             }
             var first = group.get(0);
             Map<String, Object> course = new LinkedHashMap<>();
@@ -111,7 +117,118 @@ public class SelectionService {
         return byClass;
     }
 
-    private Map<String, Object> audience(Map<String, Object> tc, Map<Integer, List<String>> limits) {
+    private Map<String, String> specialRequirementsByClass(List<String> classIds) {
+        Map<String, String> result = new HashMap<>();
+        if (classIds.isEmpty()) return result;
+        for (String id : classIds) {
+            String cfg = catalog.specialRequirements().get(id);
+            if (cfg != null && !cfg.isBlank()) result.put(id, cfg.strip());
+        }
+        try {
+            String placeholders = String.join(",", Collections.nCopies(classIds.size(), "?"));
+            String sql = "SELECT item_code, item_name FROM sys_dict_item WHERE dict_type='tc_special_requirement' AND item_status IN ('01','1') AND item_code IN (" + placeholders + ") ORDER BY dict_id";
+            for (var row : jdbc.queryForList(sql, classIds.toArray())) {
+                String tcId = text(row, "item_code");
+                String val = text(row, "item_name");
+                if (!val.isEmpty()) result.put(tcId, val);
+            }
+        } catch (Exception ignored) {}
+        return result;
+    }
+
+    private String specialRequirementFor(String tcId) {
+        try {
+            List<String> vals = jdbc.queryForList(
+                    "SELECT item_name FROM sys_dict_item WHERE dict_type='tc_special_requirement' AND item_code=? AND item_status IN ('01','1') ORDER BY dict_id LIMIT 1",
+                    String.class, tcId);
+            if (!vals.isEmpty() && vals.get(0) != null && !vals.get(0).isBlank()) {
+                return vals.get(0).trim();
+            }
+        } catch (Exception ignored) {}
+        String cfg = catalog.specialRequirements().get(tcId);
+        return (cfg != null && !cfg.isBlank()) ? cfg.strip() : "";
+    }
+
+    private Map<String, List<String>> preCourseLabelsByCourse(List<String> courseIds) {
+        Map<String, List<String>> result = new HashMap<>();
+        if (courseIds.isEmpty()) return result;
+        try {
+            String placeholders = String.join(",", Collections.nCopies(courseIds.size(), "?"));
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT course_id, pre_course_id FROM aca_course_id WHERE course_id IN (" + placeholders + ") AND pre_course_id IS NOT NULL",
+                    courseIds.toArray());
+            Set<String> allPreCodes = new LinkedHashSet<>();
+            Map<String, List<String>> rawCodes = new HashMap<>();
+            for (var r : rows) {
+                String pre = text(r, "pre_course_id");
+                if (pre.isEmpty()) continue;
+                List<String> codes = Arrays.stream(pre.split("[,，;；\s]+"))
+                        .map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
+                if (!codes.isEmpty()) {
+                    rawCodes.put(text(r, "course_id"), codes);
+                    allPreCodes.addAll(codes);
+                }
+            }
+            if (allPreCodes.isEmpty()) return result;
+            Map<String, String> courseNames = new HashMap<>();
+            String prePlaceholders = String.join(",", Collections.nCopies(allPreCodes.size(), "?"));
+            jdbc.queryForList("SELECT course_id, course_name FROM aca_course WHERE course_id IN (" + prePlaceholders + ")", allPreCodes.toArray())
+                    .forEach(r -> courseNames.put(text(r, "course_id"), text(r, "course_name")));
+            for (var entry : rawCodes.entrySet()) {
+                result.put(entry.getKey(), entry.getValue().stream()
+                        .map(code -> courseNames.containsKey(code) ? courseNames.get(code) + "（" + code + "）" : code)
+                        .toList());
+            }
+        } catch (Exception ignored) {}
+        return result;
+    }
+
+    private void checkPreCourses(String studentId, String courseId) {
+        List<String> preRaw;
+        try {
+            preRaw = jdbc.queryForList("SELECT pre_course_id FROM aca_course_id WHERE course_id=?", String.class, courseId);
+        } catch (Exception ignored) {
+            return;
+        }
+        if (preRaw.isEmpty() || preRaw.get(0) == null || preRaw.get(0).isBlank()) return;
+        List<String> preCodes = Arrays.stream(preRaw.get(0).split("[,，;；\s]+"))
+                .map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
+        if (preCodes.isEmpty()) return;
+
+        List<String> missingLabels = new ArrayList<>();
+        for (String preCode : preCodes) {
+            int passedSchool = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM sel_score s
+                    JOIN sel_sc sc ON sc.sc_id = s.sc_id
+                    JOIN aca_teaching_class tc ON tc.tc_id = sc.tc_id
+                    WHERE sc.student_id = ? AND tc.course_id = ? AND s.score_status = 3
+                      AND ((s.total_score IS NOT NULL AND s.total_score >= 60)
+                           OR s.score_level IN ('优','良','中','及格','合格'))
+                    """, Integer.class, studentId, preCode);
+            int passedExchange = 0;
+            if (passedSchool == 0) {
+                try {
+                    passedExchange = jdbc.queryForObject("""
+                            SELECT COUNT(*) FROM sel_exchange_score_convert e
+                            WHERE e.student_id = ? AND e.course_id = ? AND e.audit_status = 2
+                              AND ((e.converted_score IS NOT NULL AND e.converted_score >= 60)
+                                   OR e.converted_level IN ('优','良','中','及格','合格'))
+                            """, Integer.class, studentId, preCode);
+                } catch (Exception ignored) {}
+            }
+            if (passedSchool == 0 && passedExchange == 0) {
+                List<String> names = jdbc.queryForList("SELECT course_name FROM aca_course WHERE course_id=?", String.class, preCode);
+                String label = (!names.isEmpty() && names.get(0) != null && !names.get(0).isBlank())
+                        ? "《" + names.get(0).trim() + "》（" + preCode + "）" : preCode;
+                missingLabels.add(label);
+            }
+        }
+        if (!missingLabels.isEmpty()) {
+            throw invalid("不满足先修课程要求，须先修读并通过：" + String.join("、", missingLabels));
+        }
+    }
+
+    private Map<String, Object> audience(Map<String, Object> tc, Map<Integer, List<String>> limits, String special, List<String> preCourses) {
         Map<String, Object> audience = new LinkedHashMap<>();
         audience.put("grades", limits.getOrDefault(1, List.of()));
         audience.put("majors", limits.getOrDefault(2, List.of()));
@@ -122,7 +239,7 @@ public class SelectionService {
                     .map(String::trim).filter(name -> !name.isEmpty()).distinct().sorted().toList();
             audience.put("class_names", names);
         }
-        String special = catalog.specialRequirements().get(text(tc, "tc_id"));
+        if (preCourses != null && !preCourses.isEmpty()) audience.put("pre_courses", preCourses);
         if (special != null && !special.isBlank()) audience.put("special_requirement", special.strip());
         return audience;
     }
@@ -152,7 +269,24 @@ public class SelectionService {
     public Map<String,Object> check(Application r){
         var u=UserContext.requireRole(RoleEnum.STUDENT);validateApplication(r);var round=visibleRound(r.roundId());
         int exempt=validate(r,round,student(u.studentId(),text(round,"term"),false),teachingClass(r.tcId(),false),false);
-        return Map.of("passed",true,"is_exempt_attend",exempt,"message",exempt==1?"校验通过：重修冲突按免听办理":"校验通过，提交时会再次核验");
+        String special=specialRequirementFor(r.tcId());
+        Map<String,Object> resp=new LinkedHashMap<>();
+        resp.put("passed",true);
+        resp.put("is_exempt_attend",exempt);
+        if(!special.isEmpty()){
+            resp.put("special_requirement",special);
+            resp.put("requires_special_confirmation",!Boolean.TRUE.equals(r.specialRequirementConfirmed()));
+        }
+        String msg;
+        if(!special.isEmpty() && !Boolean.TRUE.equals(r.specialRequirementConfirmed())){
+            msg="基础选课条件校验通过；提交前请勾选确认符合本班特殊要求："+special;
+        }else if(exempt==1){
+            msg="校验通过：重修冲突按免听办理";
+        }else{
+            msg="校验通过，提交时会再次核验";
+        }
+        resp.put("message",msg);
+        return resp;
     }
     @Transactional(isolation=Isolation.READ_COMMITTED)
     public Map<String,Object> enroll(Application r){
@@ -164,10 +298,19 @@ public class SelectionService {
         }
         if(old!=null){expect(old,r.expectedVersion());protect(old);}else if(r.expectedVersion()!=null && !r.expectedVersion().isBlank())throw conflict("原申请已变化，请刷新");
         int exempt=validate(r,round,s,tc,false),status=number(round.get("select_mode"))==1?1:0;
+        String special=specialRequirementFor(r.tcId());
+        if(!special.isEmpty() && !Boolean.TRUE.equals(r.specialRequirementConfirmed())){
+            throw invalid("本教学班设有特殊要求（"+special+"），请勾选确认本人已符合要求后再提交选课");
+        }
         int stage=number(s.get("level"))==2 || number(tc.get("course_level"))==2?2:1;
         if(old==null)jdbc.update("INSERT INTO sel_sc(student_id,tc_id,round_id,study_type,is_exempt_attend,stu_level,stat_stage,priority,select_status,select_time,drop_time) VALUES(?,?,?,?,?,?,?,?,?,?,NULL)",u.studentId(),r.tcId(),r.roundId(),r.studyType(),exempt,s.get("degree_level"),stage,r.priority(),status,now());
         else jdbc.update("UPDATE sel_sc SET round_id=?,study_type=?,is_exempt_attend=?,stu_level=?,stat_stage=?,priority=?,select_status=?,select_time=?,drop_time=NULL WHERE sc_id=?",r.roundId(),r.studyType(),exempt,s.get("degree_level"),stage,r.priority(),status,now(),old.get("sc_id"));
-        log(u.studentId(),r.tcId(),r.roundId(),1,u.studentId(),exempt==1?"重修冲突免听":null);recount(r.tcId());
+        String remark=null;
+        if(exempt==1 && !special.isEmpty())remark="重修冲突免听；已确认符合特殊要求："+special;
+        else if(exempt==1)remark="重修冲突免听";
+        else if(!special.isEmpty())remark="已确认符合特殊要求："+special;
+        if(remark!=null && remark.length()>200)remark=remark.substring(0,200);
+        log(u.studentId(),r.tcId(),r.roundId(),1,u.studentId(),remark);recount(r.tcId());
         return receipt(relation(u.studentId(),r.tcId(),false),status==1?"选课成功":"志愿已登记，等待截止筛选");
     }
     @Transactional(isolation=Isolation.READ_COMMITTED)
@@ -422,6 +565,7 @@ public class SelectionService {
         }
         if("1".equals(text(tc,"tc_type")) && !retake){String names=text(tc,"class_ids");if(names.isBlank() || s.get("class_name")==null)throw pending("必修班面向班级资料缺失");if(!Arrays.stream(names.split("[,，]",-1)).map(String::trim).toList().contains(text(s,"class_name")))throw invalid("不在必修班面向班级范围内");}
         if(r.studyType()==3 && !"3".equals(text(tc,"tc_type")))throw invalid("辅修须选择已认定的双学位教学班");
+        if(!retake)checkPreCourses(id,text(tc,"course_id"));
         if(level==2){var schemes=jdbc.queryForList("SELECT * FROM grad_scheme_assignment WHERE student_id=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>=?)",id,now().toLocalDate(),now().toLocalDate());if(schemes.size()!=1)throw pending("研究生有效培养方案缺失或不唯一");var scheme=schemes.get(0);if(jdbc.queryForObject("SELECT COUNT(*) FROM grad_scheme_course WHERE scheme_id=? AND course_id=? AND (direction_id IS NULL OR direction_id=?)",Integer.class,scheme.get("scheme_id"),tc.get("course_id"),scheme.get("direction_id"))==0)throw invalid("课程不在有效培养方案及研究方向内");}
         if(jdbc.queryForObject("SELECT COUNT(*) FROM sel_sc sc JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.term=? AND tc.course_id=? AND sc.tc_id<>? AND sc.select_status IN (0,1)",Integer.class,id,round.get("term"),tc.get("course_id"),tcId)>0)throw invalid("同学期不能重复选修同课的不同教学班");
         if(retake && jdbc.queryForObject("SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON sc.sc_id=s.sc_id JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.course_id=? AND s.score_status=3 AND (s.total_score<60 OR s.score_level IN ('不及格','不合格'))",Integer.class,id,tc.get("course_id"))==0)throw invalid("没有该课程已发布的不及格记录，无法认定重修资格");

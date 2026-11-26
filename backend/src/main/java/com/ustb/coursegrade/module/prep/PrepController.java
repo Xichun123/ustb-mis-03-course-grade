@@ -45,7 +45,9 @@ public class PrepController {
             @PathVariable String tcId,
             @RequestBody Map<String, Object> body) {
         List<Map<String, Object>> limits = (List<Map<String, Object>>) body.getOrDefault("limits", List.of());
-        return ApiResponse.ok("限选条件已更新", prepService.replaceLimits(tcId, limits));
+        boolean hasSpecial = body.containsKey("special_requirement");
+        String special = body.get("special_requirement") == null ? "" : String.valueOf(body.get("special_requirement"));
+        return ApiResponse.ok("限选条件已更新", prepService.replaceLimits(tcId, limits, hasSpecial, special));
     }
 
     @GetMapping("/selection-rounds")
