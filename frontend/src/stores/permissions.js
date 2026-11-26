@@ -72,7 +72,7 @@ export const MODULE_CONFIG = [
   {
     path: '/stats',
     title: '成绩查询与统计',
-    desc: '学业统计、成绩单打印、统计报表与评教汇总',
+    desc: '学业完成情况、学业统计、成绩单打印、统计报表与评教汇总',
     icon: 'DataAnalysis',
     group: 2,
     bg: 'rgba(124, 58, 237, 0.10)',
@@ -81,7 +81,7 @@ export const MODULE_CONFIG = [
     roleOverrides: {
       STUDENT: {
         title: '评教与成绩',
-        desc: '完成课程教学评价、查分与打印成绩单'
+        desc: '完成课程评价、查分、查看分类学分进度与打印成绩单'
       },
       TEACHER: {
         title: '成绩报表与评教',

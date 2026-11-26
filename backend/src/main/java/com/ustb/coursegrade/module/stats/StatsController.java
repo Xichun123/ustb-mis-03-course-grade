@@ -79,6 +79,12 @@ public class StatsController {
         return ApiResponse.ok(statsService.listAcademicStats(term, major_id, grade, keyword));
     }
 
+    @GetMapping("/academic-progress")
+    public ApiResponse<Map<String, Object>> academicProgress(
+            @RequestParam(required = false) String student_id) {
+        return ApiResponse.ok(statsService.getAcademicProgress(student_id));
+    }
+
     @PostMapping("/academic-stats/recompute")
     public ApiResponse<Map<String, Object>> recomputeAcademicStats(
             @RequestBody(required = false) Map<String, Object> body) {

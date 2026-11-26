@@ -210,6 +210,226 @@
         </template>
       </el-tab-pane>
 
+      <!-- ==================== 4.3 扩展：学业完成情况（分类别学分与毕业达标预判） ==================== -->
+      <el-tab-pane v-if="canViewProgress" label="学业完成情况" name="progress">
+        <div class="toolbar">
+          <template v-if="!isStudent">
+            <el-select
+              v-model="progressStudentId"
+              filterable
+              placeholder="选择要查看的学生"
+              style="width: 310px"
+              @change="loadAcademicProgress"
+            >
+              <el-option
+                v-for="s in progressStudentOptions"
+                :key="s.student_id"
+                :label="`${s.student_id} ${s.student_name || ''}（${s.degree_level || ''} · ${s.class_name || ''}）`"
+                :value="s.student_id"
+              />
+            </el-select>
+          </template>
+          <el-button type="primary" :loading="loadingProgress" @click="loadAcademicProgress">
+            {{ isStudent ? '刷新学业完成情况' : '查看学业完成情况' }}
+          </el-button>
+        </div>
+
+        <el-card v-if="progressGateBlocked" shadow="never" class="gate-block-card">
+          <el-result
+            icon="warning"
+            title="当前学期尚未完成评教，已拦截学业完成情况查询"
+            :sub-title="progressGateMessage"
+          >
+            <template #extra>
+              <el-button type="primary" @click="activeTab = 'eval'; loadPendingEvals()">
+                立即前往完成评教
+              </el-button>
+            </template>
+          </el-result>
+        </el-card>
+
+        <template v-else-if="progressData">
+          <el-alert
+            :type="progressBannerType"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 14px"
+            :title="progressData.graduation_check.summary_text"
+            :description="progressData.graduation_check.boundary_note"
+          />
+
+          <div v-if="progressData.graduation_check.blocking_reasons?.length" class="progress-block-box">
+            <div class="sub-heading">当前未达标项提醒</div>
+            <ul class="reason-list">
+              <li v-for="(reason, idx) in progressData.graduation_check.blocking_reasons" :key="idx">
+                {{ reason }}
+              </li>
+            </ul>
+          </div>
+
+          <div class="kpi-row">
+            <el-card shadow="never" class="kpi-card">
+              <div class="kpi-label">毕业总学分进度（及格方获学分）</div>
+              <div class="kpi-val text-primary">
+                {{ progressData.graduation_check.earned_credit }}
+                <span class="kpi-denom">
+                  / {{ progressData.graduation_check.graduation_min_credit ?? '未设' }} 学分
+                </span>
+              </div>
+              <el-progress
+                v-if="progressData.graduation_check.total_progress_percent != null"
+                :percentage="progressData.graduation_check.total_progress_percent"
+                :status="progressData.graduation_check.credit_satisfied ? 'success' : ''"
+                :stroke-width="8"
+                style="margin-top: 8px"
+              />
+              <div class="kpi-sub" v-if="progressData.graduation_check.total_shortfall_credit != null">
+                尚缺 {{ progressData.graduation_check.total_shortfall_credit }} 学分
+              </div>
+            </el-card>
+            <el-card shadow="never" class="kpi-card">
+              <div class="kpi-label">培养方案必修课通过情况</div>
+              <div class="kpi-val" :class="progressData.graduation_check.unpassed_required_courses?.length ? 'text-danger' : 'text-success'">
+                {{ progressData.graduation_check.required_plan_passed_count }} / {{ progressData.graduation_check.required_plan_total_count }} 门
+              </div>
+              <div class="kpi-sub">
+                {{ progressData.plan_source_note || '按本专业培养方案核对' }}
+              </div>
+            </el-card>
+            <el-card shadow="never" class="kpi-card">
+              <div class="kpi-label">在修待出分 / 未通过学分</div>
+              <div class="kpi-val">
+                {{ progressData.graduation_check.in_progress_credit }} /
+                <span class="text-danger">{{ progressData.graduation_check.failed_credit }}</span>
+              </div>
+              <div class="kpi-sub">
+                在修 {{ progressData.graduation_check.in_progress_course_count }} 门 · 未通过 {{ progressData.graduation_check.failed_course_count }} 门
+              </div>
+            </el-card>
+            <el-card shadow="never" class="kpi-card">
+              <div class="kpi-label">毕业申请学分条件预判</div>
+              <div class="kpi-val">
+                <el-tag :type="progressStatusTagType" size="large">
+                  {{ progressStatusLabel }}
+                </el-tag>
+              </div>
+              <div class="kpi-sub">
+                {{ progressData.student?.major_name || getMajorName(progressData.student?.major_id) }} · {{ progressData.student?.degree_level }}
+              </div>
+            </el-card>
+          </div>
+
+          <el-alert
+            v-if="Number(progressData.minor_summary?.earned_credit || 0) > 0 || Number(progressData.minor_summary?.failed_credit || 0) > 0"
+            type="info"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 14px"
+            :title="`辅修 / 双学位单独统计：已获 ${progressData.minor_summary.earned_credit} 学分（${progressData.minor_summary.passed_count} 门），未通过 ${progressData.minor_summary.failed_credit} 学分；不计入主修毕业学分。`"
+          />
+
+          <div class="sub-heading">三大类别学分汇总</div>
+          <el-table :data="progressData.group_summaries || []" border size="small" style="margin-bottom: 16px">
+            <el-table-column prop="group_label" label="课程大类" min-width="220" />
+            <el-table-column prop="plan_credit" label="方案列出学分" width="120" />
+            <el-table-column label="已获得学分（及格）" width="150">
+              <template #default="{ row }"><b class="text-success">{{ row.earned_credit }}</b></template>
+            </el-table-column>
+            <el-table-column prop="in_progress_credit" label="在修待出分" width="110" />
+            <el-table-column label="未通过学分" width="110">
+              <template #default="{ row }">
+                <span :class="Number(row.failed_credit) > 0 ? 'text-danger' : ''">{{ row.failed_credit }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="shortfall_credit" label="方案尚缺学分" width="120" />
+            <el-table-column label="方案完成度" min-width="160">
+              <template #default="{ row }">
+                <el-progress v-if="row.completion_rate != null" :percentage="row.completion_rate" :stroke-width="8" />
+                <span v-else class="muted">按选修模块累计</span>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div class="sub-heading">六类课程性质学分明细</div>
+          <el-table :data="progressData.categories || []" border stripe v-loading="loadingProgress" style="margin-bottom: 16px">
+            <el-table-column prop="course_type" label="性质编码" width="90" />
+            <el-table-column prop="course_type_label" label="课程性质" width="120" />
+            <el-table-column prop="plan_credit" label="方案应修学分" width="120" />
+            <el-table-column label="已获学分（及格）" width="135">
+              <template #default="{ row }">
+                <b class="text-success">{{ row.earned_credit }}</b>
+                <span class="muted">（{{ row.passed_count }} 门）</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="在修待出分" width="125">
+              <template #default="{ row }">
+                {{ row.in_progress_credit }}
+                <span class="muted">（{{ row.in_progress_count }} 门）</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="未通过学分" width="125">
+              <template #default="{ row }">
+                <span :class="Number(row.failed_credit) > 0 ? 'text-danger' : ''">{{ row.failed_credit }}</span>
+                <span class="muted">（{{ row.failed_count }} 门）</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="shortfall_credit" label="方案尚缺" width="100" />
+            <el-table-column label="完成进度" min-width="150">
+              <template #default="{ row }">
+                <el-progress v-if="row.completion_rate != null" :percentage="row.completion_rate" :stroke-width="8" />
+                <span v-else class="muted">方案未单独列出课程</span>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div class="sub-heading">培养方案课程完成对照（共 {{ progressData.plan_courses?.length || 0 }} 门）</div>
+          <el-table :data="progressData.plan_courses || []" border size="small" empty-text="当前专业暂未配置培养方案课程清单" style="margin-bottom: 16px">
+            <el-table-column prop="course_id" label="课程号" width="110" />
+            <el-table-column prop="course_name" label="课程名称" min-width="165" />
+            <el-table-column prop="plan_category_label" label="方案类别" width="110" />
+            <el-table-column label="必修要求" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.is_required ? 'danger' : 'info'" size="small">{{ row.is_required ? '必修' : '选修/其他' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="credit" label="学分" width="75" />
+            <el-table-column label="完成状态" width="130">
+              <template #default="{ row }">
+                <el-tag :type="planCourseTagType(row.completion_status)" size="small">
+                  {{ planCourseStatusText(row.completion_status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="best_score" label="最高成绩" width="90" />
+            <el-table-column prop="grade_point" label="绩点" width="75" />
+            <el-table-column prop="term" label="修读学期" width="120" />
+            <el-table-column prop="record_source" label="来源说明" width="110" />
+          </el-table>
+
+          <template v-if="progressData.extra_courses?.length">
+            <div class="sub-heading">方案外已修 / 在修主修课程（共 {{ progressData.extra_courses.length }} 门，及格同样计入对应分类学分）</div>
+            <el-table :data="progressData.extra_courses" border size="small">
+              <el-table-column prop="course_id" label="课程号" width="110" />
+              <el-table-column prop="course_name" label="课程名称" min-width="165" />
+              <el-table-column prop="course_type_label" label="课程性质" width="110" />
+              <el-table-column prop="credit" label="学分" width="75" />
+              <el-table-column label="完成状态" width="130">
+                <template #default="{ row }">
+                  <el-tag :type="planCourseTagType(row.completion_status)" size="small">
+                    {{ planCourseStatusText(row.completion_status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="best_score" label="最高成绩" width="90" />
+              <el-table-column prop="grade_point" label="绩点" width="75" />
+              <el-table-column prop="term" label="修读学期" width="120" />
+              <el-table-column prop="record_source" label="来源说明" width="110" />
+            </el-table>
+          </template>
+        </template>
+        <el-empty v-else-if="!loadingProgress" description="请选择学生查看学业完成情况" />
+      </el-tab-pane>
+
       <!-- ==================== 4.3 学业统计台账与重算（教务/学院/管理员） ==================== -->
       <el-tab-pane v-if="canViewAcademicStats" label="学业统计台账" name="academic">
         <div class="toolbar">
@@ -271,9 +491,10 @@
               <span v-if="!row.minor_score_count && !row.exchange_score_count" class="muted">常规主修</span>
             </template>
           </el-table-column>
-          <el-table-column v-if="canRecomputeAcademic" label="操作" width="95" fixed="right">
+          <el-table-column label="操作" width="150" fixed="right">
             <template #default="{ row }">
-              <el-button type="primary" link @click="handleRecomputeAcademic(row.student_id)">重算</el-button>
+              <el-button type="primary" link @click="openStudentProgress(row.student_id)">完成情况</el-button>
+              <el-button v-if="canRecomputeAcademic" type="warning" link @click="handleRecomputeAcademic(row.student_id)">重算</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -704,6 +925,7 @@ const isStaff = computed(() => role.value && role.value !== 'STUDENT')
 const canViewAcademicStats = computed(() =>
   ['COLLEGE_SECRETARY', 'ACADEMIC_OFFICE', 'ACADEMIC_DIRECTOR', 'GRADUATE_SCHOOL', 'SYS_ADMIN'].includes(role.value)
 )
+const canViewProgress = computed(() => isStudent.value || canViewAcademicStats.value)
 const canRecomputeAcademic = computed(() =>
   ['ACADEMIC_OFFICE', 'ACADEMIC_DIRECTOR', 'GRADUATE_SCHOOL', 'SYS_ADMIN'].includes(role.value)
 )
@@ -729,6 +951,35 @@ const gradeResult = ref(null)
 const loadingGrades = ref(false)
 const gradeGateBlocked = ref(false)
 const gradeGateMessage = ref('')
+
+// 4.3 扩展：学业完成情况
+const progressStudentId = ref('')
+const progressData = ref(null)
+const loadingProgress = ref(false)
+const progressGateBlocked = ref(false)
+const progressGateMessage = ref('')
+const progressStudentOptions = computed(() => {
+  if (transcriptStudents.value.length) return transcriptStudents.value
+  return academicData.value?.items || []
+})
+const progressBannerType = computed(() => {
+  const status = progressData.value?.graduation_check?.status
+  if (status === 'ELIGIBLE') return 'success'
+  if (status === 'NOT_ELIGIBLE') return 'warning'
+  return 'info'
+})
+const progressStatusTagType = computed(() => {
+  const status = progressData.value?.graduation_check?.status
+  if (status === 'ELIGIBLE') return 'success'
+  if (status === 'NOT_ELIGIBLE') return 'warning'
+  return 'info'
+})
+const progressStatusLabel = computed(() => {
+  const status = progressData.value?.graduation_check?.status
+  if (status === 'ELIGIBLE') return '学分达标 · 可申请毕业'
+  if (status === 'NOT_ELIGIBLE') return '暂未达标 · 不可申请毕业'
+  return '仅作修读参考'
+})
 
 // 4.3 学业统计
 const academicQuery = reactive({ term: '2026-2027-1', major_id: '', keyword: '' })
@@ -810,8 +1061,9 @@ async function confirmSubmitEval() {
     ElMessage.success(res.message || '评教提交成功')
     evalDialogVisible.value = false
     await loadPendingEvals()
-    if (gradeGateBlocked.value && evalData.value?.all_completed) {
-      loadMyGrades()
+    if (evalData.value?.all_completed) {
+      if (gradeGateBlocked.value) loadMyGrades()
+      if (progressGateBlocked.value) loadAcademicProgress()
     }
   } finally {
     submittingEval.value = false
@@ -845,6 +1097,57 @@ async function loadMyGrades() {
   }
 }
 
+// ==================== 4.3 扩展：学业完成情况操作 ====================
+function planCourseStatusText(status) {
+  return ({
+    PASSED: '已通过 · 获学分',
+    FAILED: '不及格 · 待重修',
+    IN_PROGRESS: '在修 · 待出分',
+    NOT_TAKEN: '尚未修读'
+  })[status] || status
+}
+
+function planCourseTagType(status) {
+  return ({
+    PASSED: 'success',
+    FAILED: 'danger',
+    IN_PROGRESS: 'warning',
+    NOT_TAKEN: 'info'
+  })[status] || 'info'
+}
+
+async function loadAcademicProgress() {
+  if (!canViewProgress.value) return
+  if (!isStudent.value && !progressStudentId.value) {
+    progressData.value = null
+    return
+  }
+  loadingProgress.value = true
+  progressGateBlocked.value = false
+  try {
+    const res = await statsApi.getAcademicProgress(
+      isStudent.value ? {} : { student_id: progressStudentId.value }
+    )
+    progressData.value = res.data
+  } catch (err) {
+    const code = err?.response?.data?.code
+    if (code === 'EVAL_REQUIRED') {
+      progressData.value = null
+      progressGateBlocked.value = true
+      progressGateMessage.value = err?.response?.data?.message || '请先完成当前学期评教'
+      await loadPendingEvals()
+    }
+  } finally {
+    loadingProgress.value = false
+  }
+}
+
+async function openStudentProgress(studentId) {
+  progressStudentId.value = studentId
+  activeTab.value = 'progress'
+  await loadAcademicProgress()
+}
+
 // ==================== 4.3 操作 ====================
 async function loadAcademicStats() {
   if (!canViewAcademicStats.value) return
@@ -856,6 +1159,9 @@ async function loadAcademicStats() {
       keyword: academicQuery.keyword || undefined
     })
     academicData.value = res.data
+    if (!isStudent.value && !progressStudentId.value && res.data?.items?.length) {
+      progressStudentId.value = res.data.items[0].student_id
+    }
   } finally {
     loadingAcademic.value = false
   }
@@ -1002,14 +1308,17 @@ async function openOfficeEvalDetails() {
   }
 }
 
-let initializedRole = null
-async function initByRole(curRole) {
-  if (!curRole || curRole === initializedRole) return
-  initializedRole = curRole
+let initializedKey = null
+async function initByRole(curKey) {
+  if (!curKey || curKey === initializedKey) return
+  initializedKey = curKey
+  progressData.value = null
+  progressStudentId.value = ''
+  progressGateBlocked.value = false
   if (isStudent.value) {
     activeTab.value = 'eval'
     await loadPendingEvals()
-    await loadMyGrades()
+    await Promise.all([loadMyGrades(), loadAcademicProgress()])
   } else if (canViewAcademicStats.value) {
     activeTab.value = 'academic'
     await Promise.all([
@@ -1018,6 +1327,12 @@ async function initByRole(curRole) {
       loadReportOptions().then(() => loadGradeReport()),
       loadEvalSummaries()
     ])
+    if (progressStudentOptions.value.length && !progressStudentId.value) {
+      progressStudentId.value = progressStudentOptions.value[0].student_id
+    }
+    if (progressStudentId.value) {
+      await loadAcademicProgress()
+    }
   } else if (isStaff.value) {
     activeTab.value = 'reports'
     await loadReportOptions()
@@ -1025,7 +1340,7 @@ async function initByRole(curRole) {
   }
 }
 
-watch(role, (val) => {
+watch(() => userState.currentKey || role.value, (val) => {
   initByRole(val)
 }, { immediate: true })
 </script>
@@ -1061,6 +1376,18 @@ watch(role, (val) => {
   font-size: 12px;
   color: var(--app-text-tertiary);
   margin-top: 4px;
+}
+.kpi-denom {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--app-text-secondary);
+}
+.progress-block-box {
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(245, 108, 108, 0.06);
+  border: 1px solid rgba(245, 108, 108, 0.25);
 }
 .text-primary { color: var(--brand-primary); }
 .text-success { color: var(--el-color-success); }

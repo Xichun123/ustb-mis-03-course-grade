@@ -618,6 +618,598 @@ public class StatsService {
         return resp;
     }
 
+    /** 4.3 扩展：学生学业完成情况（按六类课程统计已获/在修/未通过学分，对照培养方案与毕业最低学分做达标预判） */
+    public Map<String, Object> getAcademicProgress(String requestedStudentId) {
+        CurrentUser user = UserContext.requireRole(
+                RoleEnum.STUDENT, RoleEnum.COLLEGE_SECRETARY,
+                RoleEnum.ACADEMIC_OFFICE, RoleEnum.ACADEMIC_DIRECTOR,
+                RoleEnum.GRADUATE_SCHOOL, RoleEnum.SYS_ADMIN);
+
+        String targetStudentId;
+        String currentTerm = getCurrentTerm();
+        if (user.role() == RoleEnum.STUDENT) {
+            if (user.studentId() == null || user.studentId().isBlank()) {
+                throw BizException.forbidden("当前登录账号缺少学号绑定");
+            }
+            if (requestedStudentId != null && !requestedStudentId.isBlank()
+                    && !user.studentId().equals(requestedStudentId.trim())) {
+                throw BizException.forbidden("学生仅可查询本人的学业完成情况");
+            }
+            targetStudentId = user.studentId();
+            Map<String, Object> gate = buildEvaluationGateInfo(targetStudentId, currentTerm);
+            if (!Boolean.TRUE.equals(gate.get("all_completed"))) {
+                throw new BizException(
+                        org.springframework.http.HttpStatus.FORBIDDEN,
+                        "EVAL_REQUIRED",
+                        "当前学期（" + currentTerm + "）尚有 " + gate.get("pending_count") + " 门课程未完成评教，请先完成评教后再查看学业完成情况"
+                );
+            }
+        } else {
+            if (requestedStudentId == null || requestedStudentId.isBlank()) {
+                throw BizException.unprocessable("MISSING_STUDENT_ID", "请先选择需要查看学业完成情况的学生");
+            }
+            targetStudentId = requestedStudentId.trim();
+        }
+
+        Map<String, Object> profile = loadStudentProfile(targetStudentId);
+        if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
+            String stuCollege = profile.get("college_id") == null ? "" : String.valueOf(profile.get("college_id")).trim();
+            if (!user.collegeId().equals(stuCollege)) {
+                throw BizException.forbidden("学院教学秘书仅可查看本学院学生的学业完成情况");
+            }
+        }
+
+        boolean incomingExchange = Boolean.TRUE.equals(profile.get("is_incoming_exchange"));
+        String degreeLevel = profile.get("degree_level") == null ? "本科" : String.valueOf(profile.get("degree_level")).trim();
+        int statStage = incomingExchange ? 1 : mapDegreeLevelToStage(degreeLevel);
+        String majorId = profile.get("major_id") == null ? null : String.valueOf(profile.get("major_id")).trim();
+        String grade = profile.get("grade") == null ? null : String.valueOf(profile.get("grade")).trim();
+
+        String majorName = null;
+        BigDecimal graduationMinCredit = null;
+        if (!incomingExchange && majorId != null && !majorId.isBlank()) {
+            List<Map<String, Object>> majorRows = jdbc.queryForList(
+                    "SELECT major_id, major_name, min_credit, duration, degree_name FROM aca_major WHERE major_id = ?",
+                    majorId);
+            if (!majorRows.isEmpty()) {
+                Map<String, Object> m = majorRows.get(0);
+                majorName = m.get("major_name") == null ? null : String.valueOf(m.get("major_name"));
+                graduationMinCredit = toBigDecimal(m.get("min_credit"));
+                profile.put("major_name", majorName);
+                profile.put("degree_name", m.get("degree_name"));
+            }
+        }
+
+        // 1) 主修已发布校内成绩 + 已审批通过外校交流认定成绩（与 4.3 recomputeSingleStudentWithoutRank 完全同源）
+        List<Map<String, Object>> allMajorCandidates = jdbc.queryForList("""
+                SELECT 'SCHOOL' AS record_source, tc.term, tc.course_id, c.course_name, c.course_type, c.credit,
+                       s.score_type, s.total_score, s.score_level, s.grade_point,
+                       s.exam_type, s.published_at AS publish_time, s.score_id AS sort_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type <> 3
+                  AND s.score_status = 3
+                UNION ALL
+                SELECT 'EXCHANGE' AS record_source, e.term, e.course_id, c.course_name, c.course_type, c.credit,
+                       e.score_type, e.converted_score AS total_score, e.converted_level AS score_level,
+                       e.grade_point, 1 AS exam_type, e.school_audit_time AS publish_time,
+                       (e.convert_id + 1000000000) AS sort_id
+                FROM sel_exchange_score_convert e
+                JOIN aca_course c ON e.course_id = c.course_id
+                WHERE e.student_id = ? AND e.stat_stage = ?
+                  AND e.audit_status = 2
+                """, targetStudentId, statStage, targetStudentId, statStage);
+
+        Map<String, Map<String, Object>> bestByCourse = new LinkedHashMap<>();
+        for (Map<String, Object> r : allMajorCandidates) {
+            BigDecimal credit = toBigDecimal(r.get("credit"));
+            if (credit == null) credit = BigDecimal.ZERO;
+            int scoreType = ((Number) r.get("score_type")).intValue();
+            BigDecimal totalScore = toBigDecimal(r.get("total_score"));
+            String scoreLevel = r.get("score_level") == null ? null : String.valueOf(r.get("score_level"));
+            BigDecimal gp = toBigDecimal(r.get("grade_point"));
+            BigDecimal equiv = resolveEquivalentScore(scoreType, totalScore, scoreLevel);
+            if (gp == null) gp = BigDecimal.ZERO;
+            boolean passed = isPassed(scoreType, totalScore, scoreLevel, gp);
+
+            Map<String, Object> enriched = new LinkedHashMap<>(r);
+            enriched.put("_credit", credit);
+            enriched.put("_gp", gp);
+            enriched.put("_equiv", equiv);
+            enriched.put("_passed", passed);
+            enriched.put("display_score", scoreType == 1
+                    ? (totalScore == null ? "—" : totalScore.stripTrailingZeros().toPlainString())
+                    : (scoreLevel == null ? "—" : scoreLevel));
+
+            String courseId = String.valueOf(r.get("course_id")).trim();
+            bestByCourse.merge(courseId, enriched, this::pickHigherRecord);
+        }
+
+        // 2) 在修（待出分）课程：有效选课且教学班正常开课、尚未发布本条成绩、且该课程尚未通过
+        List<Map<String, Object>> inProgressRows = jdbc.queryForList("""
+                SELECT sc.tc_id, tc.term, tc.course_id, c.course_name, c.course_type, c.credit
+                FROM sel_sc sc
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                WHERE sc.student_id = ? AND sc.select_status = 1 AND sc.stat_stage = ? AND sc.study_type <> 3
+                  AND tc.tc_status = '4'
+                  AND NOT EXISTS (SELECT 1 FROM sel_score s WHERE s.sc_id = sc.sc_id AND s.score_status = 3)
+                ORDER BY tc.term DESC, tc.course_id ASC
+                """, targetStudentId, statStage);
+        Map<String, Map<String, Object>> inProgressByCourse = new LinkedHashMap<>();
+        for (Map<String, Object> r : inProgressRows) {
+            String cid = String.valueOf(r.get("course_id")).trim();
+            Map<String, Object> best = bestByCourse.get(cid);
+            if (best != null && Boolean.TRUE.equals(best.get("_passed"))) {
+                continue;
+            }
+            inProgressByCourse.putIfAbsent(cid, r);
+        }
+
+        // 3) 辅修 / 双学位单独统计（明确不计入主修毕业学分）
+        List<Map<String, Object>> minorRows = jdbc.queryForList("""
+                SELECT tc.term, tc.course_id, c.course_name, c.course_type, c.credit,
+                       s.score_type, s.total_score, s.score_level, s.grade_point,
+                       s.exam_type, s.published_at AS publish_time, s.score_id AS sort_id
+                FROM sel_score s
+                JOIN sel_sc sc ON s.sc_id = sc.sc_id
+                JOIN aca_teaching_class tc ON sc.tc_id = tc.tc_id
+                JOIN aca_course c ON tc.course_id = c.course_id
+                WHERE sc.student_id = ? AND sc.stat_stage = ? AND sc.study_type = 3
+                  AND s.score_status = 3
+                """, targetStudentId, statStage);
+        Map<String, Map<String, Object>> bestMinorByCourse = new LinkedHashMap<>();
+        for (Map<String, Object> r : minorRows) {
+            BigDecimal credit = toBigDecimal(r.get("credit"));
+            if (credit == null) credit = BigDecimal.ZERO;
+            int scoreType = ((Number) r.get("score_type")).intValue();
+            BigDecimal totalScore = toBigDecimal(r.get("total_score"));
+            String scoreLevel = r.get("score_level") == null ? null : String.valueOf(r.get("score_level"));
+            BigDecimal gp = toBigDecimal(r.get("grade_point"));
+            BigDecimal equiv = resolveEquivalentScore(scoreType, totalScore, scoreLevel);
+            if (gp == null) gp = BigDecimal.ZERO;
+            Map<String, Object> enriched = new LinkedHashMap<>(r);
+            enriched.put("_credit", credit);
+            enriched.put("_gp", gp);
+            enriched.put("_equiv", equiv);
+            enriched.put("_passed", isPassed(scoreType, totalScore, scoreLevel, gp));
+            bestMinorByCourse.merge(String.valueOf(r.get("course_id")).trim(), enriched, this::pickHigherRecord);
+        }
+        BigDecimal minorEarned = BigDecimal.ZERO;
+        BigDecimal minorFailed = BigDecimal.ZERO;
+        int minorPassedCount = 0;
+        for (Map<String, Object> bm : bestMinorByCourse.values()) {
+            BigDecimal c = (BigDecimal) bm.get("_credit");
+            if (Boolean.TRUE.equals(bm.get("_passed"))) {
+                minorEarned = minorEarned.add(c);
+                minorPassedCount++;
+            } else {
+                minorFailed = minorFailed.add(c);
+            }
+        }
+
+        // 4) 加载培养方案课程清单（本科读 aca_program_course，研究生读 grad_scheme_assignment + grad_scheme_course）
+        List<Map<String, Object>> planDefs = new ArrayList<>();
+        String planSourceNote = "";
+        if (!incomingExchange && statStage == 1 && majorId != null && !majorId.isBlank()) {
+            String planGrade = grade;
+            if (planGrade != null && !planGrade.isBlank()) {
+                planDefs = jdbc.queryForList("""
+                        SELECT pc.course_id, c.course_name,
+                               COALESCE(NULLIF(TRIM(pc.course_type), ''), c.course_type) AS course_type,
+                               COALESCE(pc.credit, c.credit) AS credit,
+                               pc.open_semester AS suggest_term
+                        FROM aca_program_course pc
+                        JOIN aca_course c ON pc.course_id = c.course_id
+                        WHERE pc.major_id = ? AND pc.grade = ? AND pc.program_type = '1'
+                        ORDER BY pc.open_semester ASC, pc.course_type ASC, pc.course_id ASC
+                        """, majorId, planGrade);
+            }
+            if (planDefs.isEmpty()) {
+                List<String> fallbackGrades = jdbc.queryForList(
+                        "SELECT DISTINCT grade FROM aca_program_course WHERE major_id = ? AND program_type = '1' ORDER BY grade DESC LIMIT 1",
+                        String.class, majorId);
+                if (!fallbackGrades.isEmpty()) {
+                    planGrade = fallbackGrades.get(0);
+                    planDefs = jdbc.queryForList("""
+                            SELECT pc.course_id, c.course_name,
+                                   COALESCE(NULLIF(TRIM(pc.course_type), ''), c.course_type) AS course_type,
+                                   COALESCE(pc.credit, c.credit) AS credit,
+                                   pc.open_semester AS suggest_term
+                            FROM aca_program_course pc
+                            JOIN aca_course c ON pc.course_id = c.course_id
+                            WHERE pc.major_id = ? AND pc.grade = ? AND pc.program_type = '1'
+                            ORDER BY pc.open_semester ASC, pc.course_type ASC, pc.course_id ASC
+                            """, majorId, planGrade);
+                    planSourceNote = "已参照本专业 " + planGrade + " 级培养方案课程清单进行对照";
+                }
+            } else {
+                planSourceNote = "已按 " + planGrade + " 级主修培养方案课程清单进行对照";
+            }
+            for (Map<String, Object> pd : planDefs) {
+                String ctype = normalizeCourseType(pd.get("course_type"));
+                boolean req = Set.of("11", "12", "13").contains(ctype);
+                pd.put("course_type", ctype);
+                pd.put("is_required", req);
+                pd.put("plan_category_label", courseTypeLabel(ctype));
+            }
+        } else if (!incomingExchange && statStage == 2) {
+            List<Map<String, Object>> assigns = jdbc.queryForList("""
+                    SELECT scheme_id, direction_id
+                    FROM grad_scheme_assignment
+                    WHERE student_id = ? AND valid_from <= CURRENT_DATE AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
+                    ORDER BY valid_from DESC LIMIT 1
+                    """, targetStudentId);
+            if (!assigns.isEmpty()) {
+                String schemeId = String.valueOf(assigns.get(0).get("scheme_id"));
+                Object dirObj = assigns.get(0).get("direction_id");
+                String dirId = dirObj == null ? null : String.valueOf(dirObj);
+                if (dirId == null || dirId.isBlank()) {
+                    planDefs = jdbc.queryForList("""
+                            SELECT gsc.course_id, c.course_name, c.course_type, c.credit,
+                                   gsc.course_category, gsc.suggest_term
+                            FROM grad_scheme_course gsc
+                            JOIN aca_course c ON gsc.course_id = c.course_id
+                            WHERE gsc.scheme_id = ? AND gsc.direction_id IS NULL
+                            ORDER BY gsc.course_category ASC, gsc.suggest_term ASC, gsc.course_id ASC
+                            """, schemeId);
+                } else {
+                    planDefs = jdbc.queryForList("""
+                            SELECT gsc.course_id, c.course_name, c.course_type, c.credit,
+                                   gsc.course_category, gsc.suggest_term
+                            FROM grad_scheme_course gsc
+                            JOIN aca_course c ON gsc.course_id = c.course_id
+                            WHERE gsc.scheme_id = ? AND (gsc.direction_id IS NULL OR gsc.direction_id = ?)
+                            ORDER BY gsc.course_category ASC, gsc.suggest_term ASC, gsc.course_id ASC
+                            """, schemeId, dirId);
+                }
+                planSourceNote = "已按研究生培养方案（" + schemeId + (dirId != null && !dirId.isBlank() ? " · 方向 " + dirId : "") + "）进行对照";
+                for (Map<String, Object> pd : planDefs) {
+                    int cat = pd.get("course_category") == null ? 3 : ((Number) pd.get("course_category")).intValue();
+                    String ctype = normalizeCourseType(pd.get("course_type"));
+                    pd.put("course_type", ctype);
+                    pd.put("is_required", cat == 1 || cat == 2);
+                    pd.put("plan_category_label", cat == 1 ? "年度必修" : (cat == 2 ? "方向必修" : "方向选修"));
+                }
+            }
+        } else if (incomingExchange) {
+            planSourceNote = "来校交换生不适用本校毕业学分审核，以下仅展示交流期间已修课程的分类学分统计";
+        }
+
+        // 5) 初始化六类标准课程性质桶（11–16）
+        List<String> standardCodes = List.of("11", "12", "13", "14", "15", "16");
+        Map<String, Map<String, Object>> categoryBuckets = new LinkedHashMap<>();
+        for (String code : standardCodes) {
+            categoryBuckets.put(code, newCategoryBucket(code, courseTypeLabel(code), categoryGroupOf(code)));
+        }
+
+        Map<String, Map<String, Object>> planCourseMap = new LinkedHashMap<>();
+        for (Map<String, Object> pd : planDefs) {
+            String cid = String.valueOf(pd.get("course_id")).trim();
+            String ctype = normalizeCourseType(pd.get("course_type"));
+            BigDecimal credit = toBigDecimal(pd.get("credit"));
+            if (credit == null) credit = BigDecimal.ZERO;
+            planCourseMap.put(cid, pd);
+            Map<String, Object> bucket = categoryBuckets.computeIfAbsent(
+                    ctype, k -> newCategoryBucket(k, courseTypeLabel(k), categoryGroupOf(k)));
+            bucket.put("_plan", ((BigDecimal) bucket.get("_plan")).add(credit));
+            bucket.put("plan_course_count", ((Number) bucket.get("plan_course_count")).intValue() + 1);
+        }
+
+        // 汇总已发布成绩（及格获学分 / 不及格未获学分）
+        BigDecimal totalEarned = BigDecimal.ZERO;
+        BigDecimal totalFailed = BigDecimal.ZERO;
+        int totalPassedCount = 0;
+        int totalFailedCount = 0;
+        for (Map.Entry<String, Map<String, Object>> entry : bestByCourse.entrySet()) {
+            String cid = entry.getKey();
+            Map<String, Object> best = entry.getValue();
+            Map<String, Object> planDef = planCourseMap.get(cid);
+            String ctype = planDef != null
+                    ? normalizeCourseType(planDef.get("course_type"))
+                    : normalizeCourseType(best.get("course_type"));
+            BigDecimal credit = (BigDecimal) best.get("_credit");
+            boolean passed = Boolean.TRUE.equals(best.get("_passed"));
+            Map<String, Object> bucket = categoryBuckets.computeIfAbsent(
+                    ctype, k -> newCategoryBucket(k, courseTypeLabel(k), categoryGroupOf(k)));
+            if (passed) {
+                bucket.put("_earned", ((BigDecimal) bucket.get("_earned")).add(credit));
+                bucket.put("passed_count", ((Number) bucket.get("passed_count")).intValue() + 1);
+                totalEarned = totalEarned.add(credit);
+                totalPassedCount++;
+            } else {
+                bucket.put("_failed", ((BigDecimal) bucket.get("_failed")).add(credit));
+                bucket.put("failed_count", ((Number) bucket.get("failed_count")).intValue() + 1);
+                totalFailed = totalFailed.add(credit);
+                totalFailedCount++;
+            }
+        }
+
+        // 汇总在修待出分学分
+        BigDecimal totalInProgress = BigDecimal.ZERO;
+        int totalInProgressCount = 0;
+        for (Map.Entry<String, Map<String, Object>> entry : inProgressByCourse.entrySet()) {
+            String cid = entry.getKey();
+            Map<String, Object> ip = entry.getValue();
+            Map<String, Object> planDef = planCourseMap.get(cid);
+            String ctype = planDef != null
+                    ? normalizeCourseType(planDef.get("course_type"))
+                    : normalizeCourseType(ip.get("course_type"));
+            BigDecimal credit = toBigDecimal(ip.get("credit"));
+            if (credit == null) credit = BigDecimal.ZERO;
+            Map<String, Object> bucket = categoryBuckets.computeIfAbsent(
+                    ctype, k -> newCategoryBucket(k, courseTypeLabel(k), categoryGroupOf(k)));
+            bucket.put("_in_progress", ((BigDecimal) bucket.get("_in_progress")).add(credit));
+            bucket.put("in_progress_count", ((Number) bucket.get("in_progress_count")).intValue() + 1);
+            totalInProgress = totalInProgress.add(credit);
+            totalInProgressCount++;
+        }
+
+        // 输出格式化分类列表与三大分组汇总（必修类 / 选修类 / 实践环节）
+        List<Map<String, Object>> categories = new ArrayList<>();
+        BigDecimal reqPlan = BigDecimal.ZERO, reqEarned = BigDecimal.ZERO, reqInProg = BigDecimal.ZERO, reqFailed = BigDecimal.ZERO;
+        BigDecimal elecPlan = BigDecimal.ZERO, elecEarned = BigDecimal.ZERO, elecInProg = BigDecimal.ZERO, elecFailed = BigDecimal.ZERO;
+        BigDecimal pracPlan = BigDecimal.ZERO, pracEarned = BigDecimal.ZERO, pracInProg = BigDecimal.ZERO, pracFailed = BigDecimal.ZERO;
+        BigDecimal totalPlanListed = BigDecimal.ZERO;
+
+        for (Map<String, Object> b : categoryBuckets.values()) {
+            BigDecimal planC = (BigDecimal) b.remove("_plan");
+            BigDecimal earnedC = (BigDecimal) b.remove("_earned");
+            BigDecimal inProgC = (BigDecimal) b.remove("_in_progress");
+            BigDecimal failedC = (BigDecimal) b.remove("_failed");
+            BigDecimal shortfallC = planC.compareTo(earnedC) > 0 ? planC.subtract(earnedC) : BigDecimal.ZERO;
+            Double rate = planC.compareTo(BigDecimal.ZERO) > 0
+                    ? Math.min(100.0, earnedC.multiply(BigDecimal.valueOf(100)).divide(planC, 1, RoundingMode.HALF_UP).doubleValue())
+                    : null;
+
+            b.put("plan_credit", fmtCredit(planC));
+            b.put("earned_credit", fmtCredit(earnedC));
+            b.put("in_progress_credit", fmtCredit(inProgC));
+            b.put("failed_credit", fmtCredit(failedC));
+            b.put("shortfall_credit", fmtCredit(shortfallC));
+            b.put("completion_rate", rate);
+            categories.add(b);
+
+            totalPlanListed = totalPlanListed.add(planC);
+            String grp = String.valueOf(b.get("category_group"));
+            if ("REQUIRED".equals(grp)) {
+                reqPlan = reqPlan.add(planC); reqEarned = reqEarned.add(earnedC); reqInProg = reqInProg.add(inProgC); reqFailed = reqFailed.add(failedC);
+            } else if ("ELECTIVE".equals(grp)) {
+                elecPlan = elecPlan.add(planC); elecEarned = elecEarned.add(earnedC); elecInProg = elecInProg.add(inProgC); elecFailed = elecFailed.add(failedC);
+            } else {
+                pracPlan = pracPlan.add(planC); pracEarned = pracEarned.add(earnedC); pracInProg = pracInProg.add(inProgC); pracFailed = pracFailed.add(failedC);
+            }
+        }
+
+        List<Map<String, Object>> groupSummaries = List.of(
+                buildGroupSummary("REQUIRED", "必修类合计（校级/院级/专业必修）", reqPlan, reqEarned, reqInProg, reqFailed),
+                buildGroupSummary("ELECTIVE", "选修类合计（专业选修/通识选修）", elecPlan, elecEarned, elecInProg, elecFailed),
+                buildGroupSummary("PRACTICE", "实践环节合计", pracPlan, pracEarned, pracInProg, pracFailed)
+        );
+
+        // 6) 构建培养方案课程对照明细 + 计划外已修课程明细
+        List<Map<String, Object>> planCourses = new ArrayList<>();
+        int requiredPlanTotal = 0;
+        int requiredPlanPassed = 0;
+        List<String> unpassedRequiredNames = new ArrayList<>();
+
+        for (Map<String, Object> pd : planDefs) {
+            String cid = String.valueOf(pd.get("course_id")).trim();
+            boolean isReq = Boolean.TRUE.equals(pd.get("is_required"));
+            Map<String, Object> best = bestByCourse.get(cid);
+            Map<String, Object> inProg = inProgressByCourse.get(cid);
+
+            String completionStatus;
+            String bestScore = "—";
+            String gpText = "—";
+            String termText = "—";
+            String sourceText = "—";
+            if (best != null && Boolean.TRUE.equals(best.get("_passed"))) {
+                completionStatus = "PASSED";
+                bestScore = String.valueOf(best.get("display_score"));
+                gpText = ((BigDecimal) best.get("_gp")).setScale(2, RoundingMode.HALF_UP).toPlainString();
+                termText = String.valueOf(best.get("term"));
+                sourceText = "EXCHANGE".equals(best.get("record_source")) ? "外校认定" : "校内修读";
+            } else if (best != null) {
+                completionStatus = "FAILED";
+                bestScore = String.valueOf(best.get("display_score"));
+                gpText = ((BigDecimal) best.get("_gp")).setScale(2, RoundingMode.HALF_UP).toPlainString();
+                termText = String.valueOf(best.get("term"));
+                sourceText = inProg != null ? "重修在修中" : "不及格待重修";
+            } else if (inProg != null) {
+                completionStatus = "IN_PROGRESS";
+                termText = String.valueOf(inProg.get("term"));
+                sourceText = "在修待出分";
+            } else {
+                completionStatus = "NOT_TAKEN";
+            }
+
+            if (isReq) {
+                requiredPlanTotal++;
+                if ("PASSED".equals(completionStatus)) {
+                    requiredPlanPassed++;
+                } else {
+                    unpassedRequiredNames.add(String.valueOf(pd.get("course_name")));
+                }
+            }
+
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("course_id", cid);
+            row.put("course_name", pd.get("course_name"));
+            row.put("course_type", pd.get("course_type"));
+            row.put("course_type_label", courseTypeLabel(String.valueOf(pd.get("course_type"))));
+            row.put("plan_category_label", pd.get("plan_category_label"));
+            row.put("credit", fmtCredit(toBigDecimal(pd.get("credit"))));
+            row.put("is_required", isReq);
+            row.put("suggest_term", pd.get("suggest_term"));
+            row.put("completion_status", completionStatus);
+            row.put("best_score", bestScore);
+            row.put("grade_point", gpText);
+            row.put("term", termText);
+            row.put("record_source", sourceText);
+            planCourses.add(row);
+        }
+
+        List<Map<String, Object>> extraCourses = new ArrayList<>();
+        Set<String> extraIds = new LinkedHashSet<>();
+        extraIds.addAll(bestByCourse.keySet());
+        extraIds.addAll(inProgressByCourse.keySet());
+        for (String cid : extraIds) {
+            if (planCourseMap.containsKey(cid)) continue;
+            Map<String, Object> best = bestByCourse.get(cid);
+            Map<String, Object> inProg = inProgressByCourse.get(cid);
+            Map<String, Object> src = best != null ? best : inProg;
+            String ctype = normalizeCourseType(src.get("course_type"));
+            String status = (best != null && Boolean.TRUE.equals(best.get("_passed")))
+                    ? "PASSED" : (best != null ? "FAILED" : "IN_PROGRESS");
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("course_id", cid);
+            row.put("course_name", src.get("course_name"));
+            row.put("course_type", ctype);
+            row.put("course_type_label", courseTypeLabel(ctype));
+            row.put("credit", fmtCredit(toBigDecimal(src.get("credit"))));
+            row.put("completion_status", status);
+            row.put("best_score", best != null ? best.get("display_score") : "—");
+            row.put("grade_point", best != null ? ((BigDecimal) best.get("_gp")).setScale(2, RoundingMode.HALF_UP).toPlainString() : "—");
+            row.put("term", src.get("term"));
+            row.put("record_source", best != null
+                    ? ("EXCHANGE".equals(best.get("record_source")) ? "外校认定" : "校内修读")
+                    : "在修待出分");
+            extraCourses.add(row);
+        }
+
+        // 7) 毕业学分达标预判
+        Map<String, Object> gradCheck = new LinkedHashMap<>();
+        gradCheck.put("graduation_min_credit", graduationMinCredit == null ? null : fmtCredit(graduationMinCredit));
+        gradCheck.put("earned_credit", fmtCredit(totalEarned));
+        gradCheck.put("in_progress_credit", fmtCredit(totalInProgress));
+        gradCheck.put("failed_credit", fmtCredit(totalFailed));
+        gradCheck.put("passed_course_count", totalPassedCount);
+        gradCheck.put("in_progress_course_count", totalInProgressCount);
+        gradCheck.put("failed_course_count", totalFailedCount);
+        gradCheck.put("required_plan_total_count", requiredPlanTotal);
+        gradCheck.put("required_plan_passed_count", requiredPlanPassed);
+        gradCheck.put("unpassed_required_courses", unpassedRequiredNames);
+
+        List<String> blockingReasons = new ArrayList<>();
+        if (incomingExchange || graduationMinCredit == null) {
+            gradCheck.put("total_shortfall_credit", null);
+            gradCheck.put("total_progress_percent", null);
+            gradCheck.put("credit_satisfied", false);
+            gradCheck.put("status", "REFERENCE_ONLY");
+            gradCheck.put("summary_text", incomingExchange
+                    ? "来校交换生不适用本校毕业学分达标判定，仅提供分类学分修读记录。"
+                    : "当前专业尚未维护毕业最低学分标准，暂无法自动判定毕业学分达标情况。");
+        } else {
+            BigDecimal shortfall = graduationMinCredit.compareTo(totalEarned) > 0
+                    ? graduationMinCredit.subtract(totalEarned) : BigDecimal.ZERO;
+            double pct = graduationMinCredit.compareTo(BigDecimal.ZERO) > 0
+                    ? Math.min(100.0, totalEarned.multiply(BigDecimal.valueOf(100))
+                        .divide(graduationMinCredit, 1, RoundingMode.HALF_UP).doubleValue())
+                    : 100.0;
+            if (shortfall.compareTo(BigDecimal.ZERO) > 0) {
+                blockingReasons.add("已获主修总学分 " + fmtCredit(totalEarned) + " 学分，距离毕业最低要求（"
+                        + fmtCredit(graduationMinCredit) + " 学分）尚缺 " + fmtCredit(shortfall) + " 学分");
+            }
+            if (!unpassedRequiredNames.isEmpty()) {
+                blockingReasons.add("培养方案中尚有 " + unpassedRequiredNames.size() + " 门必修课未通过："
+                        + String.join("、", unpassedRequiredNames));
+            }
+            boolean satisfied = blockingReasons.isEmpty();
+            gradCheck.put("total_shortfall_credit", fmtCredit(shortfall));
+            gradCheck.put("total_progress_percent", pct);
+            gradCheck.put("credit_satisfied", satisfied);
+            gradCheck.put("status", satisfied ? "ELIGIBLE" : "NOT_ELIGIBLE");
+            gradCheck.put("summary_text", satisfied
+                    ? "已获主修总学分及培养方案必修课均已达标，满足毕业学分条件，可前往学籍管理（研究生管理）模块提交毕业申请。"
+                    : "当前尚未达到毕业学分要求，暂不可提交毕业申请，请按下方尚缺学分与未通过课程继续修读。");
+        }
+        gradCheck.put("blocking_reasons", blockingReasons);
+        gradCheck.put("boundary_note", "说明：本页严格按“及格才获得学分、同门课程多次考核仅计一次最高成绩、排除辅修”口径核算学业完成进度；正式毕业资格审核与发证由学籍管理（研究生由研究生管理）模块受理。");
+
+        // 附带最新 GPA 快照
+        List<Map<String, Object>> gpaRows = jdbc.queryForList(
+                "SELECT earned_credit, failed_credit, gpa, avg_score, major_rank, major_rank_total, updated_at AS update_time FROM sel_stu_gpa WHERE student_id = ?",
+                targetStudentId);
+        Map<String, Object> gpaSnapshot = gpaRows.isEmpty() ? null : new LinkedHashMap<>(gpaRows.get(0));
+
+        Map<String, Object> minorSummary = new LinkedHashMap<>();
+        minorSummary.put("earned_credit", fmtCredit(minorEarned));
+        minorSummary.put("failed_credit", fmtCredit(minorFailed));
+        minorSummary.put("passed_count", minorPassedCount);
+        minorSummary.put("note", "辅修/双学位学分单独统计，不计入主修毕业学分要求。");
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("student", profile);
+        resp.put("stat_stage", statStage);
+        resp.put("plan_source_note", planSourceNote);
+        resp.put("plan_listed_credit_total", fmtCredit(totalPlanListed));
+        resp.put("graduation_check", gradCheck);
+        resp.put("gpa_snapshot", gpaSnapshot);
+        resp.put("group_summaries", groupSummaries);
+        resp.put("categories", categories);
+        resp.put("plan_courses", planCourses);
+        resp.put("extra_courses", extraCourses);
+        resp.put("minor_summary", minorSummary);
+        resp.put("data_time", LocalDateTime.now().format(TS_FMT));
+        return resp;
+    }
+
+    private static String normalizeCourseType(Object raw) {
+        if (raw == null) return "OTHER";
+        String code = String.valueOf(raw).trim();
+        return code.isEmpty() ? "OTHER" : code;
+    }
+
+    private static String categoryGroupOf(String code) {
+        return switch (code) {
+            case "11", "12", "13" -> "REQUIRED";
+            case "14", "15" -> "ELECTIVE";
+            default -> "PRACTICE";
+        };
+    }
+
+    private static Map<String, Object> newCategoryBucket(String code, String label, String group) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("course_type", code);
+        m.put("course_type_label", label);
+        m.put("category_group", group);
+        m.put("_plan", BigDecimal.ZERO);
+        m.put("_earned", BigDecimal.ZERO);
+        m.put("_in_progress", BigDecimal.ZERO);
+        m.put("_failed", BigDecimal.ZERO);
+        m.put("plan_course_count", 0);
+        m.put("passed_count", 0);
+        m.put("in_progress_count", 0);
+        m.put("failed_count", 0);
+        return m;
+    }
+
+    private static Map<String, Object> buildGroupSummary(
+            String key, String label, BigDecimal plan, BigDecimal earned, BigDecimal inProg, BigDecimal failed) {
+        BigDecimal shortfall = plan.compareTo(earned) > 0 ? plan.subtract(earned) : BigDecimal.ZERO;
+        Double rate = plan.compareTo(BigDecimal.ZERO) > 0
+                ? Math.min(100.0, earned.multiply(BigDecimal.valueOf(100)).divide(plan, 1, RoundingMode.HALF_UP).doubleValue())
+                : null;
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("group_key", key);
+        m.put("group_label", label);
+        m.put("plan_credit", fmtCredit(plan));
+        m.put("earned_credit", fmtCredit(earned));
+        m.put("in_progress_credit", fmtCredit(inProg));
+        m.put("failed_credit", fmtCredit(failed));
+        m.put("shortfall_credit", fmtCredit(shortfall));
+        m.put("completion_rate", rate);
+        return m;
+    }
+
+    private static String fmtCredit(BigDecimal val) {
+        if (val == null) return "0.0";
+        return val.setScale(1, RoundingMode.HALF_UP).toPlainString();
+    }
+
     /** 教务处受控触发 4.3 学业统计重算（单人或全量），与 3.4/5.4 共用同一内部事务方法 */
     @Transactional
     public Map<String, Object> triggerRecomputeAcademicStats(String studentId) {

@@ -21,6 +21,9 @@ export const statsApi = {
   listAcademicStats(params) {
     return request.get('/stats/academic-stats', { params })
   },
+  getAcademicProgress(params) {
+    return request.get('/stats/academic-progress', { params })
+  },
   recomputeAcademicStats(payload = {}) {
     return request.post('/stats/academic-stats/recompute', payload)
   },
