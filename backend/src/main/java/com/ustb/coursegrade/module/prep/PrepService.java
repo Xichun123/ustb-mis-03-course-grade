@@ -25,26 +25,24 @@ import java.util.*;
 @Service
 public class PrepService {
 
+    // 第 2 组：0 待审核，1 已审核，2 已发布，3 已调课。
+    private static final String CONFIRMED_SCHEDULE = "sr.sched_status IN ('1', '2', '3')";
+    private static final String HAS_SCHEDULE = "EXISTS (SELECT 1 FROM aca_schedule_result sr"
+            + " WHERE sr.tc_id = tc.tc_id AND " + CONFIRMED_SCHEDULE + ")";
+
     private final JdbcTemplate jdbc;
 
     public PrepService(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
 
-    /** 1.1 开课计划导入（只读检索第 2 组已发布教学班及限选概览） */
+    /** 1.1 开课计划导入（直读第 2 组教学班/课程/排课结果及第 4 组任课教师，不复制冗余表） */
     public PageResult<Map<String, Object>> listTeachingClasses(
-            String term, String keyword, String collegeId, String tcStatus, int page, int pageSize) {
-        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.ACADEMIC_DIRECTOR,
-                RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
-
+            String term, String keyword, String collegeId, String tcStatus, Boolean scheduled, int page, int pageSize) {
         StringBuilder where = new StringBuilder(" WHERE 1=1 ");
         List<Object> params = new ArrayList<>();
-
-        CurrentUser user = UserContext.requireUser();
-        if (user.role() == RoleEnum.COLLEGE_SECRETARY && user.collegeId() != null) {
-            where.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
-            params.add(user.collegeId());
-        } else if (collegeId != null && !collegeId.isBlank()) {
+        applyTeachingClassScope(where, params);
+        if (collegeId != null && !collegeId.isBlank()) {
             where.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
             params.add(collegeId.trim());
         }
@@ -57,9 +55,13 @@ public class PrepService {
             where.append(" AND tc.tc_status = ? ");
             params.add(tcStatus.trim());
         }
+        if (scheduled != null) {
+            where.append(scheduled ? " AND " : " AND NOT ").append(HAS_SCHEDULE);
+        }
         if (keyword != null && !keyword.isBlank()) {
-            where.append(" AND (tc.tc_id LIKE ? OR c.course_id LIKE ? OR c.course_name LIKE ?) ");
+            where.append(" AND (tc.tc_id LIKE ? OR c.course_id LIKE ? OR c.course_name LIKE ? OR COALESCE(emp.emp_name, '') LIKE ?) ");
             String like = "%" + keyword.trim() + "%";
+            params.add(like);
             params.add(like);
             params.add(like);
             params.add(like);
@@ -70,13 +72,14 @@ public class PrepService {
                 FROM aca_teaching_class tc
                 JOIN aca_course c ON tc.course_id = c.course_id
                 LEFT JOIN org_organization org ON c.org_id = org.org_id
+                LEFT JOIN hr_employee emp ON tc.emp_id = emp.emp_id
                 """ + where;
         Long total = jdbc.queryForObject(countSql, Long.class, params.toArray());
         if (total == null) {
             total = 0L;
         }
 
-        int offset = Math.max(0, (page - 1) * pageSize);
+        long offset = Math.max(0L, (page - 1L) * pageSize);
         List<Object> dataParams = new ArrayList<>(params);
         dataParams.add(pageSize);
         dataParams.add(offset);
@@ -84,8 +87,12 @@ public class PrepService {
         String dataSql = """
                 SELECT tc.tc_id, tc.term, tc.course_id, c.course_name, c.course_type, c.credit,
                        COALESCE(org.college_id, c.org_id) AS open_college,
-                       tc.emp_id AS teacher_id, tc.emp_id, tc.class_ids, tc.capacity, tc.actual_num,
-                       tc.tc_type, tc.tc_status,
+                       org.org_name AS open_college_name,
+                       tc.emp_id AS teacher_id, tc.emp_id,
+                       COALESCE(emp.emp_name, tc.emp_id) AS teacher_name,
+                       tc.class_name, tc.class_ids, tc.capacity, tc.actual_num,
+                       tc.hours, tc.week_count, tc.teach_type, tc.tc_type, tc.tc_status,
+                       tc.open_lower, tc.no_open_reason, ci.assess_type,
                        (SELECT COUNT(*) FROM sel_select_limit sl WHERE sl.tc_id = tc.tc_id) AS limit_count,
                        (SELECT di.item_name FROM sys_dict_item di
                          WHERE di.dict_type = 'tc_special_requirement' AND di.item_code = tc.tc_id
@@ -94,10 +101,66 @@ public class PrepService {
                 FROM aca_teaching_class tc
                 JOIN aca_course c ON tc.course_id = c.course_id
                 LEFT JOIN org_organization org ON c.org_id = org.org_id
+                LEFT JOIN hr_employee emp ON tc.emp_id = emp.emp_id
+                LEFT JOIN aca_course_id ci ON c.course_id = ci.course_id
                 """ + where + " ORDER BY tc.term DESC, tc.tc_id ASC LIMIT ? OFFSET ?";
 
         List<Map<String, Object>> items = jdbc.queryForList(dataSql, dataParams.toArray());
+        attachSchedulesAndLabels(items);
         return new PageResult<>(items, total, page, pageSize);
+    }
+
+    /** 1.1 兼容旧签名 */
+    public PageResult<Map<String, Object>> listTeachingClasses(
+            String term, String keyword, String collegeId, String tcStatus, int page, int pageSize) {
+        return listTeachingClasses(term, keyword, collegeId, tcStatus, null, page, pageSize);
+    }
+
+    /** 1.1 实时统计所选学期的开课和排课情况 */
+    public Map<String, Object> getScheduleSyncSummary(String term) {
+        StringBuilder where = new StringBuilder(" WHERE 1=1 ");
+        List<Object> params = new ArrayList<>();
+        applyTeachingClassScope(where, params);
+        if (term != null && !term.isBlank()) {
+            where.append(" AND tc.term = ? ");
+            params.add(term.trim());
+        }
+        return jdbc.queryForMap("""
+                SELECT COUNT(*) AS total_classes,
+                       COUNT(CASE WHEN tc.tc_status = '4' THEN 1 END) AS published_classes,
+                       COUNT(CASE WHEN tc.tc_status = '4' AND %1$s THEN 1 END) AS scheduled_classes,
+                       COUNT(CASE WHEN tc.tc_status = '4' AND NOT %1$s THEN 1 END) AS unscheduled_published_classes,
+                       COUNT(CASE WHEN tc.tc_status IN ('2', '5') THEN 1 END) AS stopped_classes
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
+                """.formatted(HAS_SCHEDULE) + where, params.toArray());
+    }
+
+    /** 1.3 查询本学期所有已发布的轮次候选教学班 */
+    public List<Map<String, Object>> listRoundClassOptions(String term) {
+        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
+        return jdbc.queryForList("""
+                SELECT tc.tc_id, c.course_name, COALESCE(emp.emp_name, tc.emp_id) AS teacher_name,
+                       CASE WHEN %s THEN 1 ELSE 0 END AS has_schedule
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN hr_employee emp ON tc.emp_id = emp.emp_id
+                WHERE tc.term = ? AND tc.tc_status = '4'
+                ORDER BY tc.tc_id
+                """.formatted(HAS_SCHEDULE), term.trim());
+    }
+
+    private static void applyTeachingClassScope(StringBuilder where, List<Object> params) {
+        CurrentUser user = UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.ACADEMIC_DIRECTOR,
+                RoleEnum.COLLEGE_SECRETARY, RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
+        if (user.role() == RoleEnum.COLLEGE_SECRETARY) {
+            where.append(" AND COALESCE(org.college_id, c.org_id) = ? ");
+            params.add(user.collegeId());
+        } else if (user.role() == RoleEnum.TEACHER) {
+            where.append(" AND tc.emp_id = ? ");
+            params.add(user.empId());
+        }
     }
 
     /** 1.2 查看某教学班现有限选条件及是否允许编辑 */
@@ -326,13 +389,17 @@ public class PrepService {
             throw BizException.forbidden("学生仅可查看已发布、进行中或已结束的选课轮次");
         }
         List<Map<String, Object>> classes = jdbc.queryForList("""
-                SELECT rc.tc_id, tc.term, tc.course_id, c.course_name, c.credit,
-                       tc.emp_id AS teacher_id, tc.emp_id, tc.capacity, tc.actual_num, tc.tc_type, tc.tc_status
+                SELECT rc.tc_id, tc.term, tc.course_id, c.course_name, c.course_type, c.credit,
+                       tc.hours, tc.emp_id AS teacher_id, tc.emp_id,
+                       COALESCE(emp.emp_name, tc.emp_id) AS teacher_name,
+                       tc.capacity, tc.actual_num, tc.tc_type, tc.tc_status
                 FROM sel_round_class rc
                 JOIN aca_teaching_class tc ON rc.tc_id = tc.tc_id
                 JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN hr_employee emp ON tc.emp_id = emp.emp_id
                 WHERE rc.round_id = ? ORDER BY rc.tc_id
                 """, roundId);
+        attachSchedulesAndLabels(classes);
         round.put("classes", classes);
         return round;
     }
@@ -526,6 +593,69 @@ public class PrepService {
             }
             jdbc.update("INSERT INTO sel_round_class (round_id, tc_id) VALUES (?, ?)", roundId, tcId);
         }
+    }
+
+    private void attachSchedulesAndLabels(List<Map<String, Object>> items) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        List<String> tcIds = items.stream()
+                .map(r -> r.get("tc_id") == null ? "" : String.valueOf(r.get("tc_id")).trim())
+                .filter(s -> !s.isEmpty()).distinct().toList();
+        Map<String, List<Map<String, Object>>> schedMap = new HashMap<>();
+        if (!tcIds.isEmpty()) {
+            String placeholders = String.join(",", Collections.nCopies(tcIds.size(), "?"));
+            jdbc.queryForList("""
+                    SELECT tc_id, week_range, week_day, start_slot, end_slot, room_id, sched_status
+                    FROM aca_schedule_result sr
+                    WHERE tc_id IN (%s) AND %s
+                    ORDER BY tc_id, week_day, start_slot, week_range, sched_id
+                    """.formatted(placeholders, CONFIRMED_SCHEDULE), tcIds.toArray())
+                    .forEach(r -> schedMap.computeIfAbsent(String.valueOf(r.get("tc_id")).trim(), k -> new ArrayList<>()).add(r));
+        }
+        for (Map<String, Object> row : items) {
+            String tcId = row.get("tc_id") == null ? "" : String.valueOf(row.get("tc_id")).trim();
+            List<Map<String, Object>> schedules = schedMap.getOrDefault(tcId, List.of());
+            row.put("schedules", schedules);
+            row.put("has_schedule", !schedules.isEmpty());
+            row.put("schedule_summary", formatSchedules(schedules));
+            row.put("course_type_label", courseTypeLabel(row.get("course_type")));
+        }
+    }
+
+    private static String formatSchedules(List<Map<String, Object>> schedules) {
+        if (schedules == null || schedules.isEmpty()) {
+            return "";
+        }
+        String[] days = {"一", "二", "三", "四", "五", "六", "日"};
+        List<String> parts = new ArrayList<>();
+        for (Map<String, Object> s : schedules) {
+            String wr = s.get("week_range") == null ? "" : String.valueOf(s.get("week_range")).trim();
+            String wdRaw = s.get("week_day") == null ? "" : String.valueOf(s.get("week_day")).trim();
+            String dayLabel = wdRaw;
+            try {
+                int idx = Integer.parseInt(wdRaw) - 1;
+                if (idx >= 0 && idx < days.length) dayLabel = "周" + days[idx];
+            } catch (NumberFormatException ignored) {}
+            Object st = s.get("start_slot");
+            Object ed = s.get("end_slot");
+            String room = s.get("room_id") == null ? "" : String.valueOf(s.get("room_id")).trim();
+            parts.add(wr + "周 " + dayLabel + " " + st + "-" + ed + "节 " + room);
+        }
+        return String.join("；", parts);
+    }
+
+    private static String courseTypeLabel(Object raw) {
+        String code = raw == null ? "" : String.valueOf(raw).trim();
+        return switch (code) {
+            case "11" -> "校级必修";
+            case "12" -> "院级必修";
+            case "13" -> "专业必修";
+            case "14" -> "专业选修";
+            case "15" -> "通识选修";
+            case "16" -> "实践环节";
+            default -> "其他";
+        };
     }
 
     @SuppressWarnings("unchecked")

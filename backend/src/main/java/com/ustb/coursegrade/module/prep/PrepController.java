@@ -28,10 +28,22 @@ public class PrepController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String college_id,
             @RequestParam(required = false) String tc_status,
+            @RequestParam(required = false) Boolean scheduled,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int page_size) {
         return ApiResponse.ok(prepService.listTeachingClasses(
-                term, keyword, college_id, tc_status, page, Math.min(page_size, 100)));
+                term, keyword, college_id, tc_status, scheduled, Math.max(1, page), Math.max(1, Math.min(page_size, 100))));
+    }
+
+    @GetMapping("/schedule-sync-summary")
+    public ApiResponse<Map<String, Object>> scheduleSyncSummary(
+            @RequestParam(required = false) String term) {
+        return ApiResponse.ok(prepService.getScheduleSyncSummary(term));
+    }
+
+    @GetMapping("/round-class-options")
+    public ApiResponse<List<Map<String, Object>>> roundClassOptions(@RequestParam String term) {
+        return ApiResponse.ok(prepService.listRoundClassOptions(term));
     }
 
     @GetMapping("/teaching-classes/{tcId}/limits")

@@ -1,55 +1,108 @@
 <template>
   <div>
     <el-tabs v-model="activeTab" type="border-card">
-      <!-- Tab 1: 开课计划导入与限选条件设置（学生角色隐藏） -->
-      <el-tab-pane v-if="!isStudent" label="开课计划与限选设置" name="classes">
+      <el-tab-pane v-if="canViewClasses" :label="isTeacher ? '我的开课计划' : '开课计划与限选设置'" name="classes">
+        <div v-if="syncSummary" class="sync-banner">
+          <div class="sync-banner-left">
+            <span class="sync-banner-title">开课与排课概况（{{ classQuery.term || '全部学期' }}）</span>
+            <el-tag size="small" type="info">总教学班 {{ syncSummary.total_classes }}</el-tag>
+            <el-tag size="small" type="success">已发布且已排课 {{ syncSummary.scheduled_classes }}</el-tag>
+            <el-tag v-if="syncSummary.unscheduled_published_classes > 0" size="small" type="warning">
+              已发布但排课待确认 {{ syncSummary.unscheduled_published_classes }}
+            </el-tag>
+            <el-tag v-if="syncSummary.stopped_classes > 0" size="small" type="danger">
+              已停开/取消 {{ syncSummary.stopped_classes }}
+            </el-tag>
+          </div>
+          <span class="sync-banner-note">课程和排课来自第 2 组，任课教师来自第 4 组。</span>
+        </div>
+
         <div class="toolbar">
-          <el-select v-model="classQuery.term" placeholder="全部学期" clearable style="width: 170px">
+          <el-select v-model="classQuery.term" placeholder="全部学期" clearable style="width: 170px" @change="refreshClasses">
             <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
           </el-select>
-          <el-input v-model="classQuery.keyword" placeholder="教学班号 / 课程号 / 课程名" style="width: 240px" clearable />
-          <el-select v-model="classQuery.tc_status" placeholder="教学班状态" clearable style="width: 140px">
+          <el-input v-model="classQuery.keyword" placeholder="教学班号 / 课程名 / 任课教师" style="width: 240px"
+            clearable @keyup.enter="refreshClasses" @clear="refreshClasses" />
+          <el-select v-model="classQuery.tc_status" placeholder="教学班状态" clearable style="width: 130px">
             <el-option label="已发布" value="4" />
             <el-option label="不开课" value="2" />
             <el-option label="已取消" value="5" />
           </el-select>
-          <el-button type="primary" @click="loadClasses">查询</el-button>
+          <el-select v-model="classQuery.scheduled" placeholder="排课状态" clearable style="width: 130px">
+            <el-option label="已排课" :value="true" />
+            <el-option label="排课待确认" :value="false" />
+          </el-select>
+          <el-button type="primary" @click="refreshClasses">查询</el-button>
         </div>
 
         <el-table :data="classList" border stripe v-loading="loadingClasses">
-          <el-table-column prop="tc_id" label="教学班号" width="130" />
-          <el-table-column prop="term" label="学期" width="120" />
-          <el-table-column prop="course_name" label="课程名称" min-width="150" />
-          <el-table-column prop="credit" label="学分" width="70" />
-          <el-table-column label="开课学院" min-width="145">
-            <template #default="{ row }">{{ getCollegeName(row.open_college) }}</template>
+          <el-table-column label="教学班" min-width="140">
+            <template #default="{ row }">
+              <div>{{ row.tc_id }}</div>
+              <div v-if="row.class_name" class="cell-sub">{{ row.class_name }}</div>
+              <div class="cell-sub">{{ row.term }}</div>
+            </template>
           </el-table-column>
-          <el-table-column prop="lesson_no" label="合班课堂号" width="130" />
-          <el-table-column prop="class_ids" label="面向班级" min-width="130" />
-          <el-table-column label="容量/已选" width="105">
-            <template #default="{ row }">{{ row.actual_num ?? 0 }} / {{ row.capacity }}</template>
+          <el-table-column label="课程名称" min-width="165">
+            <template #default="{ row }">
+              <div>{{ row.course_name }}</div>
+              <div class="cell-sub">{{ row.course_type_label }} · {{ row.credit }} 学分 · {{ Number(row.hours) }} 学时</div>
+              <div v-if="classFormatLabel(row)" class="cell-sub">{{ classFormatLabel(row) }}</div>
+            </template>
           </el-table-column>
-          <el-table-column label="状态" width="90">
+          <el-table-column label="任课教师 / 开课学院" min-width="135">
+            <template #default="{ row }">
+              <div>{{ row.teacher_name || '待定' }}</div>
+              <div class="cell-sub">{{ row.open_college_name || getCollegeName(row.open_college) }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="排课安排（时间 / 教室）" min-width="210">
+            <template #default="{ row }">
+              <span v-if="row.has_schedule">{{ row.schedule_summary }}</span>
+              <el-tag v-else-if="row.tc_status === '4'" size="small" type="warning">排课待确认</el-tag>
+              <span v-else>—</span>
+              <div v-if="row.has_schedule && row.week_count" class="cell-sub">计划 {{ row.week_count }} 周</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="面向班级 / 课堂号" min-width="130">
+            <template #default="{ row }">
+              <div>{{ row.class_ids || '—' }}</div>
+              <div v-if="row.lesson_no" class="cell-sub">{{ row.lesson_no }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="已选 / 容量" width="105">
+            <template #default="{ row }">
+              <div>{{ row.actual_num ?? 0 }} / {{ row.capacity }}</div>
+              <div v-if="row.open_lower != null" class="cell-sub">开课下限 {{ row.open_lower }} 人</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" min-width="100">
             <template #default="{ row }">
               <el-tag :type="row.tc_status === '4' ? 'success' : 'info'" size="small">
                 {{ row.tc_status === '4' ? '已发布' : row.tc_status === '2' ? '不开课' : row.tc_status === '5' ? '已取消' : '其他' }}
               </el-tag>
+              <div v-if="row.no_open_reason && row.tc_status !== '4'" class="cell-sub">{{ row.no_open_reason }}</div>
             </template>
           </el-table-column>
-          <el-table-column label="限选条件" min-width="140">
+          <el-table-column label="限选条件" min-width="105" fixed="right">
             <template #default="{ row }">
-              <span>{{ row.limit_count || 0 }} 条</span>
-              <el-tag v-if="row.special_requirement" size="small" type="warning" style="margin-left: 6px">含特殊要求</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="120">
-            <template #default="{ row }">
-              <el-button type="primary" link @click="openLimitDialog(row.tc_id)">
+              <div>{{ row.limit_count || 0 }} 条</div>
+              <el-tag v-if="row.special_requirement" size="small" type="warning">含特殊要求</el-tag>
+              <el-button v-if="!isTeacher" type="primary" link class="limit-action" @click="openLimitDialog(row.tc_id)">
                 {{ canEditLimitRole ? '设置限选' : '查看限选' }}
               </el-button>
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-if="classTotal > classPageSize"
+          :current-page="classPage"
+          class="class-pagination"
+          layout="total, prev, pager, next"
+          :page-size="classPageSize"
+          :total="classTotal"
+          @update:current-page="changeClassPage"
+        />
       </el-tab-pane>
 
       <!-- Tab 2: 选课轮次设置、审批与发布 -->
@@ -264,10 +317,14 @@
             stripe
             max-height="220"
           >
-            <el-table-column prop="tc_id" label="教学班号" width="130" />
-            <el-table-column prop="course_name" label="课程名称" min-width="180" />
-            <el-table-column prop="credit" label="学分" width="80" align="center" />
-            <el-table-column label="已选 / 容量" width="115" align="center">
+            <el-table-column prop="tc_id" label="教学班号" width="120" />
+            <el-table-column prop="course_name" label="课程名称" min-width="145" />
+            <el-table-column prop="teacher_name" label="任课教师" width="90" />
+            <el-table-column prop="credit" label="学分" width="65" align="center" />
+            <el-table-column label="排课时间与教室" min-width="180">
+              <template #default="{ row }">{{ row.schedule_summary || '排课待确认' }}</template>
+            </el-table-column>
+            <el-table-column label="已选 / 容量" width="95" align="center">
               <template #default="{ row }">
                 {{ row.actual_num ?? 0 }} / {{ row.capacity }}
               </template>
@@ -289,6 +346,7 @@
                 allow-create
                 default-first-option
                 style="width: 100%"
+                @change="changeRoundTerm"
               >
                 <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
               </el-select>
@@ -376,11 +434,19 @@
           </el-col>
         </el-row>
         <el-form-item label="开放教学班">
-          <el-select v-model="roundForm.tc_ids" multiple filterable style="width: 100%" placeholder="选择已发布教学班">
+          <div class="import-schedule-bar">
+            <el-button size="small" type="primary" plain :disabled="!roundForm.term"
+              :loading="loadingRoundClassOptions" @click="importScheduledClassesForRound">
+              加入本学期已排课教学班
+            </el-button>
+            <span class="switch-hint">已选 {{ roundForm.tc_ids.length }} 个教学班</span>
+          </div>
+          <el-select v-model="roundForm.tc_ids" multiple filterable collapse-tags collapse-tags-tooltip
+            :max-collapse-tags="3" :loading="loadingRoundClassOptions" style="width: 100%" placeholder="选择已发布的教学班">
             <el-option
               v-for="tc in publishedClassOptions"
               :key="tc.tc_id"
-              :label="`${tc.tc_id} · ${tc.course_name} (${tc.term})`"
+              :label="`${tc.tc_id} · ${tc.course_name} · ${tc.teacher_name || '教师待定'}${tc.has_schedule ? '' : '（排课待确认）'}`"
               :value="tc.tc_id"
             />
           </el-select>
@@ -430,7 +496,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { prepApi } from '../../api/prep'
@@ -447,6 +513,8 @@ const LIMIT_TYPE_MAP = { 1: '限年级', 2: '限专业', 3: '限学院', 4: '限
 const router = useRouter()
 const role = computed(() => userState.currentUser?.role)
 const isStudent = computed(() => role.value === 'STUDENT')
+const isTeacher = computed(() => role.value === 'TEACHER')
+const canViewClasses = computed(() => ['ACADEMIC_OFFICE', 'ACADEMIC_DIRECTOR', 'COLLEGE_SECRETARY', 'TEACHER', 'SYS_ADMIN'].includes(role.value))
 const canManageRound = computed(() => ['ACADEMIC_OFFICE', 'SYS_ADMIN'].includes(role.value))
 const canApproveRound = computed(() => ['ACADEMIC_DIRECTOR', 'SYS_ADMIN'].includes(role.value))
 const canEditLimitRole = computed(() => ['COLLEGE_SECRETARY', 'ACADEMIC_OFFICE', 'SYS_ADMIN'].includes(role.value))
@@ -455,8 +523,15 @@ const limitEditable = computed(() => Boolean(canEditLimitRole.value && limitDeta
 const activeTab = ref('rounds')
 const loadingClasses = ref(false)
 const classList = ref([])
+const classPage = ref(1)
+const classPageSize = 20
+const classTotal = ref(0)
+const syncSummary = ref(null)
+const loadingRoundClassOptions = ref(false)
 const publishedClassOptions = ref([])
-const classQuery = reactive({ term: '2026-2027-1', keyword: '', tc_status: '' })
+const classQuery = reactive({ term: '2026-2027-1', keyword: '', tc_status: '', scheduled: '' })
+let classesRequest = 0
+let roundOptionsRequest = 0
 
 const loadingRounds = ref(false)
 const roundList = ref([])
@@ -487,15 +562,80 @@ function formatDateTime(val) {
   return String(val || '').replace('T', ' ').slice(0, 16) || '—'
 }
 
+function classFormatLabel(row) {
+  const teaching = { 1: '讲课', 2: '实验', 3: '上机', 4: '实践', 5: '研讨' }[Number(row.teach_type)]
+  const assessment = { 1: '考试', 2: '考查' }[Number(row.assess_type)]
+  return [teaching, assessment].filter(Boolean).join(' · ')
+}
+
+function changeClassPage(page) {
+  classPage.value = page
+  return loadClasses()
+}
+
+function refreshClasses() {
+  syncSummary.value = null
+  return changeClassPage(1)
+}
+
 async function loadClasses() {
+  const request = ++classesRequest
   loadingClasses.value = true
   try {
-    const res = await prepApi.listTeachingClasses(classQuery)
-    classList.value = res.data?.items || []
-    publishedClassOptions.value = classList.value.filter(i => i.tc_status === '4')
+    const params = {
+      term: classQuery.term || undefined,
+      keyword: classQuery.keyword || undefined,
+      tc_status: classQuery.tc_status || undefined,
+      scheduled: typeof classQuery.scheduled === 'boolean' ? classQuery.scheduled : undefined,
+      page: classPage.value,
+      page_size: classPageSize
+    }
+    const [res, sumRes] = await Promise.all([
+      prepApi.listTeachingClasses(params),
+      prepApi.getScheduleSyncSummary(classQuery.term || undefined)
+    ])
+    if (request === classesRequest) {
+      classList.value = res.data?.items || []
+      classTotal.value = res.data?.total || 0
+      syncSummary.value = sumRes.data || null
+    }
   } finally {
-    loadingClasses.value = false
+    if (request === classesRequest) loadingClasses.value = false
   }
+}
+
+async function loadRoundClassOptions(term) {
+  const request = ++roundOptionsRequest
+  loadingRoundClassOptions.value = Boolean(term)
+  if (!term) return
+  try {
+    const { data } = await prepApi.listRoundClassOptions(term)
+    if (request !== roundOptionsRequest || !roundDialogVisible.value) return
+    publishedClassOptions.value = (data || []).map(tc => ({ ...tc, has_schedule: Number(tc.has_schedule) === 1 }))
+    return publishedClassOptions.value
+  } finally {
+    if (request === roundOptionsRequest) loadingRoundClassOptions.value = false
+  }
+}
+
+function changeRoundTerm(term) {
+  roundForm.tc_ids = []
+  publishedClassOptions.value = []
+  return loadRoundClassOptions(term)
+}
+
+async function importScheduledClassesForRound() {
+  const options = await loadRoundClassOptions(roundForm.term)
+  if (!options) return
+  const scheduled = options.filter(tc => tc.has_schedule)
+  const alreadySelected = new Set(roundForm.tc_ids)
+  const added = scheduled.filter(tc => !alreadySelected.has(tc.tc_id)).map(tc => tc.tc_id)
+  if (!scheduled.length) {
+    ElMessage.warning('本学期暂无已发布且排课已确认的教学班')
+    return
+  }
+  roundForm.tc_ids = [...roundForm.tc_ids, ...added]
+  ElMessage.success(added.length ? `已加入 ${added.length} 个已排课教学班` : '已排课的教学班已全部选中')
 }
 
 async function loadRounds() {
@@ -524,6 +664,7 @@ async function saveLimits() {
 }
 
 async function openRoundDialog(roundId) {
+  publishedClassOptions.value = []
   if (!roundId) {
     roundDetail.value = null
     Object.assign(roundForm, {
@@ -533,6 +674,7 @@ async function openRoundDialog(roundId) {
     })
     roundReadOnly.value = false
     roundDialogVisible.value = true
+    await loadRoundClassOptions(roundForm.term)
     return
   }
   const res = await prepApi.getRound(roundId)
@@ -548,6 +690,7 @@ async function openRoundDialog(roundId) {
   })
   roundReadOnly.value = d.round_status !== 0 || !canManageRound.value
   roundDialogVisible.value = true
+  if (!roundReadOnly.value) await loadRoundClassOptions(roundForm.term)
 }
 
 function goToSelection() {
@@ -598,17 +741,24 @@ async function handlePublishRound(roundId) {
   loadRounds()
 }
 
-onMounted(() => {
-  activeTab.value = isStudent.value ? 'rounds' : 'classes'
-  if (!isStudent.value) {
-    loadClasses()
+watch(() => userState.currentUser, user => {
+  if (!user) return
+  activeTab.value = canViewClasses.value ? 'classes' : 'rounds'
+  classesRequest++
+  classList.value = []
+  classTotal.value = 0
+  syncSummary.value = null
+  if (canViewClasses.value) {
+    refreshClasses()
   }
   loadRounds()
-})
+}, { immediate: true })
 </script>
 
 <style scoped>
 .toolbar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.class-pagination { margin-top: 14px; justify-content: flex-end; }
+.limit-action { display: flex; margin-top: 4px; }
 .limit-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
 .limit-readonly-list { display: flex; flex-direction: column; gap: 8px; }
 .limit-readonly-item {
@@ -635,6 +785,45 @@ onMounted(() => {
   font-size: 12px;
   color: var(--app-text-secondary);
   margin-top: 6px;
+}
+.sync-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: var(--app-card-muted-bg);
+  border: 1px solid var(--app-border);
+}
+.sync-banner-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sync-banner-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+.sync-banner-note {
+  font-size: 12px;
+  color: var(--app-text-secondary);
+}
+.cell-sub {
+  font-size: 12px;
+  color: var(--app-text-secondary);
+  margin-top: 2px;
+}
+.import-schedule-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  width: 100%;
 }
 
 .round-dialog-header {

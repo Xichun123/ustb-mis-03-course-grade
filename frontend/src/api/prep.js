@@ -4,6 +4,12 @@ export const prepApi = {
   listTeachingClasses(params) {
     return request.get('/prep/teaching-classes', { params })
   },
+  getScheduleSyncSummary(term) {
+    return request.get('/prep/schedule-sync-summary', { params: { term } })
+  },
+  listRoundClassOptions(term) {
+    return request.get('/prep/round-class-options', { params: { term } })
+  },
   getLimits(tcId) {
     return request.get(`/prep/teaching-classes/${tcId}/limits`)
   },
