@@ -319,6 +319,24 @@ class SelectionServiceTest {
         assertEquals(1, SelectionRules.number(service.enroll(application("B")).get("select_status")));
     }
 
+    @Test void selectedRecordsSupplyTheSameWeeksAsTheWeeklyTimetable() {
+        service.enroll(application("A"));
+        jdbc.update("UPDATE aca_schedule_result SET week_range='1-5(单),8' WHERE tc_id='A'");
+        var records = service.resultsWithTeachingWeeks(TERM);
+        var slot = rows(rows(records.get("items")).get(0).get("schedule")).get(0);
+        assertEquals(Set.of(1, 3, 5, 8), slot.get("teaching_weeks"));
+        assertFalse(records.containsKey("timetable_error"));
+        assertTrue(rows(service.timetable(TERM, 2).get("blocks")).isEmpty());
+        assertEquals(1, rows(service.timetable(TERM, 8).get("blocks")).size());
+
+        for (String range : List.of("待定", "1-99999999999")) {
+            jdbc.update("UPDATE aca_schedule_result SET week_range=? WHERE tc_id='A'", range);
+            var invalid = service.resultsWithTeachingWeeks(TERM);
+            assertEquals("A", rows(invalid.get("items")).get(0).get("tc_id"));
+            assertEquals(assertThrows(BizException.class, () -> service.timetable(TERM, 1)).getMessage(), invalid.get("timetable_error"));
+        }
+    }
+
     @Test void pendingScheduleIsIgnoredAcrossCoursesCheckEnrollAndTimetable() {
         // 将 B 班排课置为 0（待审核），业务②应与业务①统一口径：视为排课待确认
         jdbc.update("UPDATE aca_schedule_result SET sched_status='0' WHERE tc_id='B'");

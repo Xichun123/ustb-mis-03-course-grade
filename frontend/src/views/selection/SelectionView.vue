@@ -1,6 +1,6 @@
 <template>
   <section class="selection-page" v-loading="busy">
-    <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="notice" />
+    <el-alert v-if="pageError" :title="pageError" type="error" show-icon :closable="false" class="notice" />
     <el-alert v-if="!isStudent && !isStaff" title="当前账号无权访问该模块。" type="info" :closable="false" />
     <template v-else>
       <div class="filters">
@@ -14,7 +14,7 @@
             </el-select>
           </template>
         </div>
-        <el-button @click="perform(refresh)">刷新</el-button>
+        <el-button :loading="isStudent && (catalog.state.loading || records.state.loading)" @click="refreshPage">刷新</el-button>
       </div>
       <div v-if="isStudent" class="summary">
         <span>本学期已选中 <strong>{{ summary.courses ?? '—' }}</strong> 门</span>
@@ -68,7 +68,7 @@
           :description="crossStatus.exchange_supervisor.course_plan || crossStatus.exchange_supervisor.accept_opinion"
         />
       </template>
-      <el-tabs v-model="active" type="border-card" @tab-change="() => perform(refresh)">
+      <el-tabs v-model="active" type="border-card">
         <template v-if="isStudent">
           <el-tab-pane label="课程查询与选课" name="courses">
             <el-alert v-if="selectedRound" :title="selectedRound.round_name" :description="`${formatTime(selectedRound.start_time)} 至 ${formatTime(selectedRound.end_time)}；${selectedRound.notice_content || '请按本轮规则办理'}`" :type="selectedRound.window_open?'info':'warning'" :closable="false" class="notice" />
@@ -80,7 +80,7 @@
               <el-button type="primary" @click="searchCourses">查询</el-button>
               <el-button @click="resetCourses">重置</el-button>
             </div>
-            <el-table :data="courses" row-key="course_id" border empty-text="当前条件下没有开放课程">
+            <el-table v-loading="catalog.state.loading && !catalog.state.data" :data="courses" row-key="course_id" border empty-text="当前条件下没有开放课程">
               <el-table-column type="expand"><template #default="{row}">
                 <div class="class-detail"><el-table :data="row.classes" size="small" border>
                   <el-table-column prop="tc_id" label="教学班号" min-width="140" />
@@ -154,11 +154,11 @@
               <el-table-column prop="credit" label="学分" width="75" />
               <el-table-column label="教学班" width="85"><template #default="{row}">{{row.classes.length}} 个</template></el-table-column>
             </el-table>
-            <el-pagination v-model:current-page="coursePage" :page-size="10" :total="courseTotal" layout="total, prev, pager, next" @current-change="() => perform(loadCourses)" />
+            <el-pagination v-if="catalog.state.data" :current-page="coursePage" :page-size="10" :total="courseTotal" layout="total, prev, pager, next" @update:current-page="changeCoursePage" />
           </el-tab-pane>
           <el-tab-pane label="已选" name="results">
-            <div class="toolbar"><el-input v-model="resultKeyword" placeholder="课程名称或教学班号" clearable style="width:260px" /><el-select v-model="statusFilter" clearable placeholder="全部状态" style="width:150px"><el-option v-for="(s,i) in statuses" :key="i" :label="s" :value="i" /></el-select><el-button @click="active='timetable';perform(loadTimetable)">查看课表</el-button></div>
-            <el-table :data="filteredResults" border empty-text="没有匹配的选课记录">
+            <div class="toolbar"><el-input v-model="resultKeyword" placeholder="课程名称或教学班号" clearable style="width:260px" /><el-select v-model="statusFilter" clearable placeholder="全部状态" style="width:150px"><el-option v-for="(s,i) in statuses" :key="i" :label="s" :value="i" /></el-select><el-button @click="active='timetable'">查看课表</el-button></div>
+            <el-table v-loading="records.state.loading && !records.state.data" :data="filteredResults" border empty-text="没有匹配的选课记录">
               <el-table-column type="expand"><template #default="{row}"><div class="class-detail"><div v-for="(s,i) in row.schedule" :key="i">{{slotText(s)}}</div><span v-if="!row.schedule.length">排课资料待确认</span><div v-if="row.no_open_reason" class="muted" style="margin-top:6px">停开说明：{{ row.no_open_reason }}</div></div></template></el-table-column>
               <el-table-column prop="course_name" label="课程名称" min-width="200" /><el-table-column prop="tc_id" label="教学班" min-width="150" /><el-table-column prop="credit" label="学分" width="80" />
               <el-table-column label="修读类别" width="95"><template #default="{row}">{{studyText(row.study_type)}}</template></el-table-column>
@@ -169,20 +169,20 @@
           </el-tab-pane>
           <el-tab-pane label="课表" name="timetable">
             <div class="toolbar timetable-toolbar">
-              <el-radio-group v-model="timetableMode" @change="onTimetableModeChange">
+              <el-radio-group v-model="timetableMode">
                 <el-radio-button value="week">周课表</el-radio-button>
                 <el-radio-button value="full">总课表</el-radio-button>
               </el-radio-group>
               <template v-if="timetableMode === 'week'">
-                <el-button :disabled="week <= 1" @click="week--; perform(loadTimetable)">上一周</el-button>
-                <el-select v-model="week" style="width: 120px" @change="() => perform(loadTimetable)">
+                <el-button :disabled="week <= 1" @click="week--">上一周</el-button>
+                <el-select v-model="week" style="width: 120px">
                   <el-option v-for="w in WEEK_OPTIONS" :key="w" :value="w" :label="`第${w}周`" />
                 </el-select>
-                <el-button :disabled="week >= 16" @click="week++; perform(loadTimetable)">下一周</el-button>
+                <el-button :disabled="week >= 16" @click="week++">下一周</el-button>
               </template>
             </div>
-            <el-alert v-if="timetableMode === 'week' && timetable.missing_schedule?.length" :title="`以下有效课程排课缺失：${timetable.missing_schedule.join('、')}`" type="warning" class="notice" :closable="false" />
-            <div class="ustb-schedule-wrap">
+            <el-alert v-if="timetableMode === 'week' && missingSchedule.length" :title="`以下有效课程排课缺失：${missingSchedule.join('、')}`" type="warning" class="notice" :closable="false" />
+            <div v-loading="records.state.loading && !records.state.data" class="ustb-schedule-wrap">
               <div class="ustb-schedule-grid">
                 <div class="schedule-header-cell">节次</div>
                 <div v-for="day in WEEKDAYS" :key="day" class="schedule-header-cell">{{ day }}</div>
@@ -392,6 +392,7 @@ import { selectionApi as api } from '../../api/selection'
 import { userState } from '../../stores/user'
 import { themeState } from '../../stores/theme'
 import SelectionAudience from './SelectionAudience.vue'
+import { useSelectionResource } from './useSelectionResource'
 
 const PERIOD_TIMES = [
   { label: '1-2节', time: '08:00-09:35' },
@@ -413,15 +414,31 @@ const COURSE_COLORS_DARK = [
 ]
 
 const context = ref({ rounds: [], terms: [], user: {} }), busy = ref(false), error = ref(''), active = ref('courses')
-const term = ref('2026-2027-1'), roundId = ref(null), keyword = ref(''), coursePage = ref(1), courses = ref([]), courseTotal = ref(0), summary = ref({})
+const term = ref('2026-2027-1'), roundId = ref(null), keyword = ref(''), coursePage = ref(1)
 const courseType = ref('')
-const resultRows = ref([]), resultKeyword = ref(''), statusFilter = ref(null), week = ref(1), timetableMode = ref('week'), timetable = ref({ blocks: [] })
+const appliedKeyword = ref('')
+const catalog = useSelectionResource()
+const records = useSelectionResource()
+const courses = computed(() => catalog.state.data?.items || [])
+const courseTotal = computed(() => catalog.state.data?.total || 0)
+const resultRows = computed(() => records.state.data?.items || [])
+const summary = computed(() => {
+  if (catalog.state.data?.summary && catalog.state.updatedAt > records.state.updatedAt) return catalog.state.data.summary
+  return records.state.data?.summary || catalog.state.data?.summary || {}
+})
+const resultKeyword = ref(''), statusFilter = ref(null), week = ref(1), timetableMode = ref('week')
 const teachingClasses = ref([]), tcId = ref(''), rosterKeyword = ref(''), roster = ref({}), stop = ref({}), screenResult = ref('')
 const applyVisible = ref(false), target = ref(null), application = ref({}), checkResult = ref(''), checkFinanceWarning = ref(''), adjustVisible = ref(false), adjustment = ref({}), printData = ref(null)
 const stopDialogVisible = ref(false), stopTarget = ref(null), stopReason = ref('')
 const scheduleVisible = ref(false), scheduleDetail = ref([]), selectedBlock = ref(null)
 const statuses = ['待筛选','已选中','未选中','已退选'], days = ['一','二','三','四','五','六','日']
 const isStudent = computed(() => context.value.user.role === 'STUDENT')
+const pageError = computed(() => {
+  if (error.value || !isStudent.value) return error.value
+  if (active.value === 'courses') return catalog.state.error
+  if (active.value === 'timetable' && timetableMode.value === 'week') return records.state.error || records.state.data?.timetable_error
+  return records.state.error
+})
 const crossStatus = computed(() => context.value.cross_group_status || null)
 const approvedMinorText = computed(() => (crossStatus.value?.minor_qualification?.records || []).filter(r => r.approved).map(r => `${r.category}·${r.target_major}`).join('、'))
 const isOffice = computed(() => context.value.user.role === 'ACADEMIC_OFFICE')
@@ -439,14 +456,15 @@ const stopCategoryTagType = cat => ({ UNDER_MIN: 'warning', STOPPED_PENDING_CLEA
 const studyText = s => ({1:'初修',2:'重修',3:'辅修'}[s] || '待确认')
 const formatTime = t => String(t || '').replace('T',' ')
 const slotText = s => `${s.week_range}周 · 周${days[Number(s.week_day)-1] || '?'} · ${s.start_slot}—${s.end_slot}节 · ${s.room_id}`
+const selectedRows = computed(() => resultRows.value.filter(row => row.select_status === 1))
+const missingSchedule = computed(() => selectedRows.value.filter(row => !row.schedule?.length).map(row => row.tc_id))
 const displayBlocks = computed(() => {
-  if (timetableMode.value === 'week') {
-    return timetable.value.blocks || []
-  }
+  const weekly = timetableMode.value === 'week'
+  if (weekly && records.state.data?.timetable_error) return []
   const blocks = []
-  for (const row of resultRows.value) {
-    if (row.select_status !== 1) continue
+  for (const row of selectedRows.value) {
     for (const slot of (row.schedule || [])) {
+      if (weekly && !slot.teaching_weeks.includes(week.value)) continue
       blocks.push({
         ...slot,
         course_name: row.course_name,
@@ -490,49 +508,104 @@ const scheduleGrid = computed(() => {
 })
 const canApply = tc => selectedRound.value?.window_open && ![0,1].includes(tc.select_status) && (selectedRound.value.select_mode === 2 || tc.actual_num < tc.capacity)
 async function perform(task) { if(busy.value) return; busy.value=true; error.value=''; try { await task() } catch(e) { if(e !== 'cancel' && e !== 'close') error.value=e?.response?.data?.message || e?.message || '操作失败，请刷新核实' } finally { busy.value=false } }
-async function loadCourses() {
+function loadCourses(force = false) {
   if (!roundId.value) {
-    courses.value = []
-    courseTotal.value = 0
+    catalog.clear()
     return
   }
-  const r = await api.courses({
+  const params = {
     roundId: roundId.value,
-    keyword: keyword.value,
+    keyword: appliedKeyword.value,
     courseType: courseType.value || undefined,
     page: coursePage.value,
     pageSize: 10
-  })
-  courses.value = r.data.items
-  courseTotal.value = r.data.total
-  summary.value = r.data.summary
-}
-async function loadResults(){const r=await api.results(term.value);resultRows.value=r.data.items;summary.value=r.data.summary}
-async function loadTimetable(){
-  if (timetableMode.value === 'full') {
-    await loadResults()
-    return
   }
-  const r = await api.timetable(term.value, week.value)
-  timetable.value = r.data
-  summary.value = r.data.summary
+  const key = JSON.stringify([term.value, params])
+  return catalog.load(key, () => api.courses(params), force)
 }
-function onTimetableModeChange() {
-  perform(loadTimetable)
+function loadResults(force = false) {
+  const semester = term.value
+  return records.load(semester, () => api.results(semester), force)
+}
+function loadStudentPage(force = false) {
+  return Promise.all([loadCourses(force), loadResults(force)])
+}
+function reloadAfterSelection() {
+  // A read started before a write can no longer supply either view.
+  catalog.clear()
+  records.clear()
+  return loadStudentPage()
+}
+function refreshPage() {
+  error.value = ''
+  if (isStudent.value) return loadStudentPage(true)
+  return perform(refresh)
 }
 async function loadRoster(){ if(!tcId.value){roster.value={};return} roster.value=(await api.roster(tcId.value,rosterKeyword.value)).data }
 async function loadClasses(){teachingClasses.value=(await api.teachingClasses(term.value)).data;if(!teachingClasses.value.some(c => c.tc_id===tcId.value))tcId.value=teachingClasses.value[0]?.tc_id || '';await loadRoster()}
-async function refresh(){if(active.value==='courses')await loadCourses();if(active.value==='results')await loadResults();if(active.value==='timetable')await loadTimetable();if(active.value==='roster')await loadClasses();if(active.value==='stop')stop.value=(await api.stopPreview(term.value)).data}
+async function refresh(){if(active.value==='roster')await loadClasses();if(active.value==='stop')stop.value=(await api.stopPreview(term.value)).data}
 function chooseRound(){roundId.value=(termRounds.value.find(r=>r.window_open)||termRounds.value[0])?.round_id || null}
-function changeTerm(){chooseRound();coursePage.value=1;summary.value={};perform(refresh)}
-function changeRound(){coursePage.value=1;perform(refresh)}
-function searchCourses(){coursePage.value=1;perform(loadCourses)}
+function changeTerm() {
+  chooseRound()
+  coursePage.value = 1
+  if (isStudent.value) return loadStudentPage()
+  return perform(refresh)
+}
+function changeRound() {
+  coursePage.value = 1
+  if (isStudent.value) return loadCourses()
+  return perform(refresh)
+}
+function changeCoursePage(page) {
+  coursePage.value = page
+  return loadCourses()
+}
+function searchCourses() {
+  appliedKeyword.value = keyword.value.trim()
+  coursePage.value = 1
+  return loadCourses(true)
+}
 function resetCourses(){keyword.value='';courseType.value='';searchCourses()}
 function openApply(tc){target.value=tc;application.value={roundId:roundId.value,tcId:tc.tc_id,studyType:1,priority:selectedRound.value.select_mode===2?1:null,expectedVersion:tc.version || null,specialRequirementConfirmed:false};checkResult.value='';checkFinanceWarning.value='';applyVisible.value=true}
 function precheck(){perform(async()=>{try{const d=(await api.check(application.value)).data;checkResult.value=d.message;checkFinanceWarning.value=d.finance_warning || ''}catch(e){checkResult.value=e?.response?.data?.message || '校验未完成，请稍后重试';throw e}})}
-function enroll(){perform(async()=>{if(target.value?.audience?.special_requirement && !application.value.specialRequirementConfirmed){ElMessage.warning('请先勾选确认本人符合本教学班的特殊要求');return}try{const r=await api.enroll(application.value);ElMessage.success(r.data.message);applyVisible.value=false;await loadCourses()}catch(e){if(!e.response){await loadResults();await loadCourses();applyVisible.value=false;error.value='提交未获得明确回执，已重新读取选课记录，请核对结果后再办理。';active.value='results';return}throw e}})}
-function withdraw(row){perform(async()=>{await ElMessageBox.confirm(`确认退选 ${row.course_name}（${row.tc_id}）？`,'退选确认',{type:'warning'});try{const r=await api.withdraw(row.sc_id,{roundId:row.withdraw_round_id,expectedVersion:row.version,confirmed:true});ElMessage.success(r.data.message)}catch(e){if(!e.response){error.value='退选结果待核实，正在重新读取选课记录。'}else throw e}await loadResults()})}
-function showSchedule(block){selectedBlock.value=block;const found=resultRows.value.find(r=>r.tc_id===block.tc_id);perform(async()=>{if(!found)await loadResults();scheduleDetail.value=resultRows.value.find(r=>r.tc_id===block.tc_id)?.schedule || [];scheduleVisible.value=true})}
+function enroll() {
+  perform(async () => {
+    if (target.value?.audience?.special_requirement && !application.value.specialRequirementConfirmed) {
+      ElMessage.warning('请先勾选确认本人符合本教学班的特殊要求')
+      return
+    }
+    try {
+      const r = await api.enroll(application.value)
+      ElMessage.success(r.data.message)
+    } catch (e) {
+      if (e.response) throw e
+      error.value = '提交未获得明确回执，请核对最新选课记录后再办理。'
+      active.value = 'results'
+    } finally {
+      await reloadAfterSelection()
+    }
+    applyVisible.value = false
+  })
+}
+function withdraw(row) {
+  perform(async () => {
+    await ElMessageBox.confirm(`确认退选 ${row.course_name}（${row.tc_id}）？`, '退选确认', { type: 'warning' })
+    try {
+      const r = await api.withdraw(row.sc_id, { roundId: row.withdraw_round_id, expectedVersion: row.version, confirmed: true })
+      ElMessage.success(r.data.message)
+    } catch (e) {
+      if (e.response) throw e
+      error.value = '退选结果待核实，请核对最新选课记录。'
+    } finally {
+      await reloadAfterSelection()
+    }
+  })
+}
+function showSchedule(block) {
+  selectedBlock.value = block
+  scheduleDetail.value = resultRows.value.find(row => row.tc_id === block.tc_id)?.schedule || []
+  scheduleVisible.value = true
+}
 function openAdjustment(row){adjustment.value={studentId:row?.student_id || '',operation:row?'remove':'add',studyType:1,reason:''};adjustVisible.value=true}
 function submitAdjustment(){perform(async()=>{if(!adjustment.value.reason?.trim())throw new Error('请填写调整原因');try{const r=await api.adjust(tcId.value,adjustment.value);ElMessage.success(r.data.message);adjustVisible.value=false}catch(e){if(!e.response){adjustVisible.value=false;error.value='调整结果待核实，已刷新名单，请核对后再办理。'}else throw e}await loadRoster()})}
 function screen(){perform(async()=>{await ElMessageBox.confirm('确认执行本轮截止筛选？将按实际余量和志愿重新校验所有待筛选申请。','截止筛选',{type:'warning'});const r=await api.screen(roundId.value);screenResult.value=`${r.data.message}；本次录取 ${r.data.accepted} 人，未选中 ${r.data.rejected} 人。`})}
@@ -540,13 +613,25 @@ function openStopDialog(row){stopTarget.value=row;stopReason.value=row.no_open_r
 function confirmStopClass(){if(!stopTarget.value)return;perform(async()=>{const r=await api.stopClasses({tcIds:[stopTarget.value.tc_id],reason:stopReason.value});ElMessage.success(r.message || r.data?.message || '已完成停开处理');stopDialogVisible.value=false;stopTarget.value=null;await refresh()})}
 function printRoster(){perform(async()=>{printData.value=(await api.roster(tcId.value,'')).data;await nextTick();window.print()})}
 async function bootContext() {
-  context.value = (await api.context()).data
+  const userKey = userState.currentKey
+  const response = await api.context()
+  if (userKey !== userState.currentKey) return
+  context.value = response.data
   term.value = context.value.rounds.find(r => r.window_open)?.term || context.value.terms[0] || term.value
   chooseRound()
   active.value = isStudent.value ? 'courses' : 'roster'
-  if (isStudent.value || isStaff.value) await refresh()
+  if (isStudent.value) loadStudentPage()
+  else if (isStaff.value) await refresh()
 }
-watch(() => userState.currentKey, () => perform(bootContext))
+watch(active, tab => {
+  if (isStudent.value) {
+    if (tab === 'courses') loadCourses()
+    else loadResults()
+  } else if (isStaff.value) perform(refresh)
+})
+watch([week, timetableMode], () => {
+  if (isStudent.value && active.value === 'timetable') loadResults()
+})
 onMounted(() => perform(bootContext))
 </script>
 

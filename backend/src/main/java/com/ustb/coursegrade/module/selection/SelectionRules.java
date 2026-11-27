@@ -15,17 +15,23 @@ public final class SelectionRules {
         for(String part:text.split(",",-1)) {
             Matcher m=Pattern.compile("(\\d+)(?:-(\\d+))?(?:[（(]?([单双])[）)]?)?").matcher(part);
             if(!m.matches())throw pending("无法识别排课周次："+source);
-            int start=Integer.parseInt(m.group(1)),end=m.group(2)==null?start:Integer.parseInt(m.group(2));
+            int start, end;
+            try {
+                start = Integer.parseInt(m.group(1));
+                end = m.group(2) == null ? start : Integer.parseInt(m.group(2));
+            } catch (NumberFormatException e) {
+                throw pending("排课周次范围无效");
+            }
             if(start<1 || end<start || end>60)throw pending("排课周次范围无效");
             for(int w=start;w<=end;w++)if(m.group(3)==null || (w%2==1)==m.group(3).equals("单"))result.add(w);
         }
         if(result.isEmpty())throw pending("排课周次为空");
         return result;
     }
-    public static void validateSchedule(Map<String,Object> row) {
+    public static Set<Integer> validateSchedule(Map<String,Object> row) {
         int d=number(row.get("week_day")),s=number(row.get("start_slot")),e=number(row.get("end_slot"));
         if(d<1 || d>7 || s<1 || e<s || e>30)throw pending("排课星期或节次无效");
-        weeks((String)row.get("week_range"));
+        return weeks((String)row.get("week_range"));
     }
     public static boolean overlaps(Map<String,Object> a,Map<String,Object> b) {
         validateSchedule(a);validateSchedule(b);

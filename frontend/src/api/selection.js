@@ -4,7 +4,6 @@ export const selectionApi = {
   context: () => request.get('/selection/context'),
   courses: params => request.get('/selection/courses', { params }),
   results: term => request.get('/selection/results', { params: { term } }),
-  timetable: (term, week) => request.get('/selection/timetable', { params: { term, week } }),
   check: payload => request.post('/selection/check', payload),
   enroll: payload => request.post('/selection/applications', payload),
   withdraw: (id, payload) => request.post(`/selection/records/${encodeURIComponent(id)}/withdraw`, payload),

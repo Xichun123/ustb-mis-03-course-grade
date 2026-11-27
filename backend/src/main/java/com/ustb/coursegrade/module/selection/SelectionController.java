@@ -30,7 +30,7 @@ public class SelectionController {
         }
         return ApiResponse.ok(service.courses(roundId,keyword.trim(),page,pageSize,filter));
     }
-    @GetMapping("/results") public ApiResponse<?> results(@RequestParam String term){return ApiResponse.ok(service.results(term(term)));}
+    @GetMapping("/results") public ApiResponse<?> results(@RequestParam String term){return ApiResponse.ok(service.resultsWithTeachingWeeks(term(term)));}
     @GetMapping("/timetable") public ApiResponse<?> timetable(@RequestParam String term,@RequestParam(defaultValue="1") int week){if(week<1 || week>16)throw BizException.unprocessable("BAD_WEEK","教学周须为1—16");return ApiResponse.ok(service.timetable(term(term),week));}
     @PostMapping("/check") public ApiResponse<?> check(@RequestBody SelectionService.Application request){return ApiResponse.ok(service.check(request));}
     @PostMapping("/applications") public ApiResponse<?> enroll(@RequestBody SelectionService.Application request){return ApiResponse.ok(service.enroll(request));}

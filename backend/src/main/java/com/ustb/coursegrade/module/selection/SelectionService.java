@@ -347,12 +347,28 @@ public class SelectionService {
             row.put("withdraw_round_id",dropRounds.isEmpty()?null:dropRounds.get(0));row.put("sc_id",stringId(row.get("sc_id")));}
         return Map.of("items",rows,"summary",summary(u.studentId(),term));
     }
+    public Map<String,Object> resultsWithTeachingWeeks(String term) {
+        var result = new LinkedHashMap<>(results(term));
+        @SuppressWarnings("unchecked") var rows = (List<Map<String,Object>>) result.get("items");
+        try {
+            for (var row : rows) {
+                if (number(row.get("select_status")) != 1) continue;
+                @SuppressWarnings("unchecked") var slots = (List<Map<String,Object>>) row.get("schedule");
+                for (var slot : slots) slot.put("teaching_weeks", validateSchedule(slot));
+            }
+        } catch (BizException e) {
+            // 周课表需要有效的排课数据；已选记录仍然允许查询和退选。
+            result.put("timetable_error", e.getMessage());
+        }
+        return result;
+    }
+
     public Map<String,Object> timetable(String term,int week){
         var result=results(term);@SuppressWarnings("unchecked") var rows=(List<Map<String,Object>>)result.get("items");
         List<Map<String,Object>> blocks=new ArrayList<>();List<String> missing=new ArrayList<>();
         for(var row:rows){if(number(row.get("select_status"))!=1)continue;
             @SuppressWarnings("unchecked") var slots=(List<Map<String,Object>>)row.get("schedule");if(slots.isEmpty())missing.add(text(row,"tc_id"));
-            for(var slot:slots){validateSchedule(slot);if(weeks(text(slot,"week_range")).contains(week)){var block=new LinkedHashMap<>(slot);for(String k:List.of("course_name","tc_id","is_exempt_attend","teacher_name","teacher_title"))block.put(k,row.get(k));blocks.add(block);}}
+            for(var slot:slots){if(validateSchedule(slot).contains(week)){var block=new LinkedHashMap<>(slot);for(String k:List.of("course_name","tc_id","is_exempt_attend","teacher_name","teacher_title"))block.put(k,row.get(k));blocks.add(block);}}
         }
         return Map.of("blocks",blocks,"missing_schedule",missing,"summary",result.get("summary"),"week",week);
     }
