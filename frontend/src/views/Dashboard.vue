@@ -7,7 +7,7 @@
           {{ greeting }}{{ shortName ? `，${shortName}` : '' }}
         </h1>
         <p class="welcome-sub">
-          {{ todayText }} · 2026-2027-1 学期
+          {{ todayText }} · {{ currentTerm }} 学期
         </p>
       </div>
     </div>
@@ -40,7 +40,7 @@
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">当前学期</span>
-                  <span class="meta-val">2026-2027-1</span>
+                  <span class="meta-val">{{ currentTerm }}</span>
                 </div>
                 <div v-if="userState.currentUser?.studentId" class="meta-item">
                   <span class="meta-label">所属单位</span>
@@ -117,6 +117,43 @@
       </div>
     </div>
 
+    <!-- 第二排半：全班跨组数据联动一览 -->
+    <div v-if="crossOverview" class="section-head" style="margin-top: 26px">
+      <div class="cross-head-left">
+        <h2 class="section-title">全班跨组数据联动一览</h2>
+        <span class="cross-head-badge">
+          已联动 {{ crossOverview.summary?.connected_business_groups || 8 }} 个业务组 ＋ 公共主数据 · 共 {{ crossOverview.summary?.active_upstream_tables || 0 }} 张共享表 · {{ crossOverview.summary?.total_upstream_records || 0 }} 条实时数据
+        </span>
+      </div>
+      <el-button type="primary" link :loading="loadingCross" @click="loadCrossOverview">刷新联动状态</el-button>
+    </div>
+    <div v-if="crossOverview" class="cross-grid">
+      <div
+        v-for="g in crossOverview.groups || []"
+        :key="g.group_no"
+        class="cross-card app-card-hover"
+      >
+        <div class="cross-card-top">
+          <div class="cross-card-title">
+            <span class="cross-group-no">{{ g.group_label }}</span>
+            <span class="cross-system-name">{{ g.system_name }}</span>
+          </div>
+          <el-tag
+            size="small"
+            :type="g.direction === '双向协同' ? 'success' : g.direction === '只读接入' ? 'primary' : 'info'"
+            effect="light"
+          >
+            {{ g.direction }}
+          </el-tag>
+        </div>
+        <p class="cross-card-desc">{{ g.scenarios }}</p>
+        <div class="cross-card-foot">
+          <span>共享表 <b>{{ g.active_table_count }}</b> / {{ g.table_count }} 张<template v-if="g.view_count > 0"> · 视图 {{ g.view_count }} 个</template></span>
+          <span>实时记录 <b>{{ g.total_records }}</b> 条</span>
+        </div>
+      </div>
+    </div>
+
     <!-- 第三排：教务通知公告 -->
     <div class="section-head" style="margin-top: 26px">
       <h2 class="section-title">选课通知公告</h2>
@@ -153,12 +190,17 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { prepApi } from '../api/prep'
+import { systemApi } from '../api/modules'
 import { userState } from '../stores/user'
 import { visibleModulesForRole } from '../stores/permissions'
+import { DEFAULT_TERM, loadDynamicTermOptions } from '../constants/terms'
 
 const router = useRouter()
 const rounds = ref([])
 const loading = ref(false)
+const currentTerm = ref(DEFAULT_TERM)
+const crossOverview = ref(null)
+const loadingCross = ref(false)
 
 const shortName = computed(() => {
   const full = userState.currentUser?.displayName || ''
@@ -240,10 +282,27 @@ function formatTime(t) {
   return String(t || '').replace('T', ' ').slice(0, 16)
 }
 
+async function loadCrossOverview() {
+  loadingCross.value = true
+  try {
+    const res = await systemApi.crossGroupOverview()
+    crossOverview.value = res?.data || null
+  } catch {
+    // ignore
+  } finally {
+    loadingCross.value = false
+  }
+}
+
 async function loadOverview() {
   loading.value = true
   try {
-    const roundsRes = await prepApi.listRounds({ term: '2026-2027-1' })
+    const termData = await loadDynamicTermOptions(systemApi)
+    currentTerm.value = termData.currentTerm || DEFAULT_TERM
+    const [roundsRes] = await Promise.all([
+      prepApi.listRounds({ term: currentTerm.value }),
+      loadCrossOverview()
+    ])
     rounds.value = roundsRes?.data || []
   } catch {
     // ignore
@@ -560,13 +619,92 @@ onMounted(loadOverview)
   line-height: 1.6;
 }
 
+/* 跨组联动概览 */
+.cross-head-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cross-head-badge {
+  font-size: 12px;
+  color: var(--brand-primary);
+  background: var(--app-menu-active-bg);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.cross-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.cross-card {
+  padding: 15px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--app-border);
+  background: var(--app-card-bg);
+  box-shadow: var(--app-shadow-sm);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cross-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cross-card-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.cross-group-no {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--brand-primary);
+  white-space: nowrap;
+}
+.cross-system-name {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--app-text-primary);
+}
+.cross-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--app-text-secondary);
+}
+.cross-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+  border-top: 1px dashed var(--app-border);
+  font-size: 12px;
+  color: var(--app-text-tertiary);
+}
+.cross-card-foot b {
+  color: var(--app-text-primary);
+  font-weight: 650;
+}
+
 @media (max-width: 1080px) {
   .entry-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cross-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 @media (max-width: 640px) {
   .entry-grid {
+    grid-template-columns: 1fr;
+  }
+  .cross-grid {
     grid-template-columns: 1fr;
   }
   .profile-layout {

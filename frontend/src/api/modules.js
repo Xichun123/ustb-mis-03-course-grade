@@ -15,5 +15,11 @@ export const systemApi = {
   },
   me() {
     return request.get('/auth/me')
+  },
+  listTerms() {
+    return request.get('/cross-group/terms')
+  },
+  crossGroupOverview() {
+    return request.get('/cross-group/overview')
   }
 }

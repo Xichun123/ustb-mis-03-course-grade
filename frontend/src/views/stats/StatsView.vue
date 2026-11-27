@@ -319,13 +319,58 @@
             </el-card>
           </div>
 
+          <el-descriptions
+            v-if="hasCrossProgressInfo"
+            title="跨组档案与培养方案联动"
+            :column="2"
+            border
+            size="small"
+            style="margin-bottom: 14px"
+          >
+            <el-descriptions-item v-if="progressData.registration_status" label="本学期学籍注册（第 1 组）">
+              <el-tag :type="progressData.registration_status.blocked ? 'danger' : (progressData.registration_status.has_record ? 'success' : 'info')" size="small">
+                {{ progressData.registration_status.status_label }}
+              </el-tag>
+              <span v-if="progressData.registration_status.abnormal_reason" class="text-danger" style="margin-left: 8px; font-size: 12px">
+                {{ progressData.registration_status.abnormal_reason }}
+              </span>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="progressData.finance_summary" label="财务缴费状态（第 5 组）">
+              <el-tag :type="progressData.finance_summary.has_arrears ? 'warning' : (progressData.finance_summary.has_records ? 'success' : 'info')" size="small">
+                {{ progressData.finance_summary.status_label }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="progressData.major_program" label="本科培养方案总纲（第 2 组）" :span="2">
+              <span>总学分要求 {{ progressData.major_program.total_credit }} 学分</span>
+              <span v-if="progressData.major_program.goal_desc" class="muted" style="margin-left: 10px">
+                培养目标：{{ progressData.major_program.goal_desc }}
+              </span>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="progressData.graduate_profile" label="研究生方向与导师（第 13 组）" :span="2">
+              <span>研究方向：<b>{{ progressData.graduate_profile.direction_name || '未定' }}</b></span>
+              <span v-if="progressData.graduate_profile.mentors?.length" style="margin-left: 12px">
+                指导教师：{{ progressData.graduate_profile.mentors.map(m => `${m.mentor_name}${m.title_label ? `（${m.title_label}）` : ''}`).join('、') }}
+              </span>
+              <div v-if="progressData.graduate_profile.scheme_requirements?.length" class="muted" style="margin-top: 4px">
+                方案分类要求：{{ progressData.graduate_profile.scheme_requirements.map(r => `${r.group_label} ≥ ${r.min_credit} 学分`).join('；') }}
+              </div>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="progressData.student?.is_international_student" label="来华留学生信息（第 15 组）" :span="2">
+              国籍：{{ progressData.student.nationality || '—' }}
+              <span v-if="progressData.student.scholarship_program" style="margin-left: 12px">
+                奖学金项目：{{ progressData.student.scholarship_program }}
+              </span>
+            </el-descriptions-item>
+          </el-descriptions>
+
           <el-alert
-            v-if="Number(progressData.minor_summary?.earned_credit || 0) > 0 || Number(progressData.minor_summary?.failed_credit || 0) > 0"
+            v-if="Number(progressData.minor_summary?.earned_credit || 0) > 0 || Number(progressData.minor_summary?.failed_credit || 0) > 0 || (progressData.minor_summary?.qualifications || []).length > 0"
             type="info"
             show-icon
             :closable="false"
             style="margin-bottom: 14px"
             :title="`辅修 / 双学位单独统计：已获 ${progressData.minor_summary.earned_credit} 学分（${progressData.minor_summary.passed_count} 门），未通过 ${progressData.minor_summary.failed_credit} 学分；不计入主修毕业学分。`"
+            :description="(progressData.minor_summary?.qualifications || []).length ? `跨组核验资格（第 1 / 2 组）：${progressData.minor_summary.qualifications.map(q => `${q.category}·${q.target_major}（${q.status_label}）`).join('；')}` : ''"
           />
 
           <div class="sub-heading">三大类别学分汇总</div>
@@ -354,7 +399,12 @@
           <el-table :data="progressData.categories || []" border stripe v-loading="loadingProgress" style="margin-bottom: 16px">
             <el-table-column prop="course_type" label="性质编码" width="90" />
             <el-table-column prop="course_type_label" label="课程性质" width="120" />
-            <el-table-column prop="plan_credit" label="方案应修学分" width="120" />
+            <el-table-column label="方案应修学分" width="135">
+              <template #default="{ row }">
+                <div>{{ row.plan_credit }}</div>
+                <div v-if="row.program_min_credit" class="muted">总纲最低 {{ row.program_min_credit }}</div>
+              </template>
+            </el-table-column>
             <el-table-column label="已获学分（及格）" width="135">
               <template #default="{ row }">
                 <b class="text-success">{{ row.earned_credit }}</b>
@@ -385,7 +435,14 @@
           <div class="sub-heading">培养方案课程完成对照（共 {{ progressData.plan_courses?.length || 0 }} 门）</div>
           <el-table :data="progressData.plan_courses || []" border size="small" empty-text="当前专业暂未配置培养方案课程清单" style="margin-bottom: 16px">
             <el-table-column prop="course_id" label="课程号" width="110" />
-            <el-table-column prop="course_name" label="课程名称" min-width="165" />
+            <el-table-column label="课程名称" min-width="195">
+              <template #default="{ row }">
+                <span>{{ row.course_name }}</span>
+                <el-tag v-if="row.in_personal_plan" size="small" type="success" style="margin-left: 6px">
+                  个人计划内{{ row.planned_term ? `·${row.planned_term}` : '' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="plan_category_label" label="方案类别" width="110" />
             <el-table-column label="必修要求" width="90">
               <template #default="{ row }">
@@ -425,6 +482,32 @@
               <el-table-column prop="term" label="修读学期" width="120" />
               <el-table-column prop="record_source" label="来源说明" width="110" />
             </el-table>
+          </template>
+
+          <template v-if="progressData.transfer_info">
+            <div class="sub-heading" style="margin-top: 16px">转专业与学分转换记录（第 1 组学籍管理 · 第 2 组专业设置）</div>
+            <el-alert
+              v-for="(t, idx) in (progressData.transfer_info.transfers || [])"
+              :key="`tr-${idx}`"
+              type="info"
+              show-icon
+              :closable="false"
+              style="margin-bottom: 10px"
+              :title="`转专业记录：${t.from_major_name} → ${t.to_major_name}（${t.admission_result || t.application_status}，生效学期：${t.effective_term || t.application_term}）`"
+            />
+            <template v-for="(ap, idx) in (progressData.transfer_info.credit_applies || [])" :key="`ca-${idx}`">
+              <el-table v-if="ap.items?.length" :data="ap.items" border size="small" style="margin-bottom: 12px">
+                <el-table-column prop="source_course_name" label="原修读课程" min-width="160" />
+                <el-table-column prop="source_credit" label="原学分" width="80" />
+                <el-table-column prop="target_course_name" label="认定转换课程" min-width="160" />
+                <el-table-column prop="target_credit" label="转换学分" width="90" />
+                <el-table-column label="审核状态" width="110">
+                  <template #default="{ row }">
+                    <el-tag size="small" type="success">{{ row.item_status === '1' || row.item_status === '01' ? '已认定转换' : row.item_status }}</el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </template>
           </template>
         </template>
         <el-empty v-else-if="!loadingProgress" description="请选择学生查看学业完成情况" />
@@ -513,7 +596,7 @@
             <el-option
               v-for="s in transcriptStudents"
               :key="s.student_id"
-              :label="`${s.student_name} (${s.student_id}) · ${s.is_incoming_exchange ? '来校交换生' : s.class_name}`"
+              :label="`${s.student_name} (${s.student_id}) · ${s.is_incoming_exchange ? '来校交换生' : (s.is_international_student ? `来华留学生·${s.nationality}` : s.class_name)}`"
               :value="s.student_id"
             />
           </el-select>
@@ -535,10 +618,10 @@
               :disabled="!!transcriptForm.start_term && t < transcriptForm.start_term"
             />
           </el-select>
-          <el-select v-model="transcriptForm.template" style="width: 205px">
+          <el-select v-model="transcriptForm.template" style="width: 235px">
             <el-option label="自动匹配版式" value="AUTO" />
             <el-option label="本校历次成绩明细单" value="STANDARD" />
-            <el-option label="来校交换生中英文正式单" value="EXCHANGE_BILINGUAL" />
+            <el-option label="来校交换生 / 留学生中英文双语单" value="EXCHANGE_BILINGUAL" />
           </el-select>
           <el-button type="primary" :loading="loadingTranscript" @click="loadTranscriptPreview">
             生成打印预览
@@ -803,7 +886,15 @@
           <el-table-column prop="tc_id" label="教学班号" width="125" />
           <el-table-column prop="lesson_no" label="课堂号" width="125" />
           <el-table-column prop="course_name" label="课程名称" min-width="160" />
-          <el-table-column prop="teacher_name" label="任课教师" width="110" />
+          <el-table-column label="任课教师" min-width="145">
+            <template #default="{ row }">
+              <div>
+                <span>{{ row.teacher_name }}</span>
+                <el-tag v-if="row.teacher_title" size="small" type="info" effect="plain" style="margin-left: 5px">{{ row.teacher_title }}</el-tag>
+              </div>
+              <div v-if="row.teacher_org_name" class="muted">{{ row.teacher_org_name }}</div>
+            </template>
+          </el-table-column>
           <el-table-column prop="enrolled_num" label="有效选课人数" width="115" />
           <el-table-column label="参评人数" width="100">
             <template #default="{ row }">{{ row.eval_num ?? '—' }}</template>
@@ -831,15 +922,21 @@
         <el-card
           v-if="evalSummaryData?.teacher_weighted_summaries?.length"
           shadow="never"
-          header="教师评教加权汇总"
+          header="教师评教加权汇总（供第 4 组师资管理联动）"
           style="margin-top: 16px"
         >
           <el-table :data="evalSummaryData.teacher_weighted_summaries" border size="small">
             <el-table-column prop="teacher_id" label="教师编码" width="120" />
-            <el-table-column prop="teacher_name" label="教师姓名" width="130" />
-            <el-table-column prop="class_count" label="有效参评教学班数" width="150" />
-            <el-table-column prop="total_eval_num" label="累计参评人数" width="130" />
-            <el-table-column prop="weighted_avg_score" label="人数加权评教均分" />
+            <el-table-column prop="teacher_name" label="教师姓名" width="115" />
+            <el-table-column prop="teacher_title" label="职称" width="100">
+              <template #default="{ row }">{{ row.teacher_title || '—' }}</template>
+            </el-table-column>
+            <el-table-column prop="teacher_org_name" label="所属学院" min-width="150">
+              <template #default="{ row }">{{ row.teacher_org_name || '—' }}</template>
+            </el-table-column>
+            <el-table-column prop="class_count" label="有效参评教学班数" width="145" />
+            <el-table-column prop="total_eval_num" label="累计参评人数" width="125" />
+            <el-table-column prop="weighted_avg_score" label="人数加权评教均分" width="145" />
           </el-table>
         </el-card>
       </el-tab-pane>
@@ -902,11 +999,12 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { statsApi } from '../../api/stats'
+import { systemApi } from '../../api/modules'
 import { userState } from '../../stores/user'
-import { mergeTermOptions } from '../../constants/terms'
+import { mergeTermOptions, loadDynamicTermOptions } from '../../constants/terms'
 import { MAJOR_OPTIONS, getMajorName, formatReasonText } from '../../constants/dicts'
 import TranscriptPreview from './TranscriptPreview.vue'
 
@@ -945,8 +1043,9 @@ const evalForm = reactive({ eval_score: 95, eval_comment: '' })
 
 // 4.2 成绩查询
 const gradeQuery = reactive({ term: '', only_final: false })
+const dynamicTerms = ref([])
 const gradeTermOptions = ref(['2026-2027-1'])
-const allTermOptions = computed(() => mergeTermOptions(reportOptions.value?.terms, gradeTermOptions.value))
+const allTermOptions = computed(() => mergeTermOptions(dynamicTerms.value, reportOptions.value?.terms, gradeTermOptions.value))
 const gradeResult = ref(null)
 const loadingGrades = ref(false)
 const gradeGateBlocked = ref(false)
@@ -958,6 +1057,11 @@ const progressData = ref(null)
 const loadingProgress = ref(false)
 const progressGateBlocked = ref(false)
 const progressGateMessage = ref('')
+const hasCrossProgressInfo = computed(() => {
+  const d = progressData.value
+  if (!d) return false
+  return Boolean(d.registration_status || d.finance_summary || d.major_program || d.graduate_profile || d.student?.is_international_student)
+})
 const progressStudentOptions = computed(() => {
   if (transcriptStudents.value.length) return transcriptStudents.value
   return academicData.value?.items || []
@@ -1339,6 +1443,11 @@ async function initByRole(curKey) {
     await Promise.all([loadGradeReport(), loadEvalSummaries()])
   }
 }
+
+onMounted(async () => {
+  const { terms } = await loadDynamicTermOptions(systemApi)
+  dynamicTerms.value = terms
+})
 
 watch(() => userState.currentKey || role.value, (val) => {
   initByRole(val)

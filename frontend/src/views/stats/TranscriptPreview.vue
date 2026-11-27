@@ -1,10 +1,14 @@
 <template>
   <div v-if="data" class="transcript-sheet" :class="{ 'bilingual-sheet': isBilingual }">
-    <!-- 来校交换生中英文正式成绩单版式（对齐 4.4 打印版式） -->
+    <!-- 来校交换生 / 来华留学生中英文正式成绩单版式 -->
     <template v-if="isBilingual">
       <div class="sheet-header">
-        <div class="cn-title">北京科技大学来校交流学生正式成绩单</div>
-        <div class="en-title">OFFICIAL ACADEMIC TRANSCRIPT FOR INCOMING EXCHANGE STUDENTS (USTB)</div>
+        <div class="cn-title">
+          {{ isInternational ? '北京科技大学来华留学生正式成绩单' : '北京科技大学来校交流学生正式成绩单' }}
+        </div>
+        <div class="en-title">
+          {{ isInternational ? 'OFFICIAL ACADEMIC TRANSCRIPT FOR INTERNATIONAL STUDENTS (USTB)' : 'OFFICIAL ACADEMIC TRANSCRIPT FOR INCOMING EXCHANGE STUDENTS (USTB)' }}
+        </div>
         <div class="meta-bar">
           <span>成绩单编号 Transcript No.: <b>{{ data.transcript_no }}</b></span>
           <span>出具日期 Issue Date: <b>{{ data.issue_date }}</b></span>
@@ -13,7 +17,27 @@
       </div>
 
       <table class="info-grid">
-        <tbody>
+        <tbody v-if="isInternational">
+          <tr>
+            <th>姓名 Name</th>
+            <td>{{ data.student?.student_name }}</td>
+            <th>学号 Student ID</th>
+            <td>{{ data.student?.student_id }}</td>
+          </tr>
+          <tr>
+            <th>培养层次 Level</th>
+            <td>{{ data.student?.degree_level || '本科' }}</td>
+            <th>国籍 Nationality</th>
+            <td>{{ data.student?.nationality || '—' }}</td>
+          </tr>
+          <tr>
+            <th>学院 / 班级 College &amp; Class</th>
+            <td>{{ data.student?.college_name || '—' }} · {{ data.student?.class_name || '—' }}</td>
+            <th>奖学金项目 Scholarship</th>
+            <td>{{ data.student?.scholarship_program || '来华学历留学生' }}</td>
+          </tr>
+        </tbody>
+        <tbody v-else>
           <tr>
             <th>姓名 Name</th>
             <td>{{ data.student?.student_name }}</td>
@@ -208,6 +232,7 @@ const STUDY_TYPE_MAP = { 1: '初修', 2: '重修', 3: '辅修' }
 const EXAM_FLAG_MAP = { 0: '正常', 1: '缺考', 2: '缓考', 3: '违纪' }
 
 const isBilingual = computed(() => props.data?.template === 'EXCHANGE_BILINGUAL')
+const isInternational = computed(() => Boolean(props.data?.is_international_student || props.data?.student?.is_international_student))
 
 function formatRemark(row) {
   if (row.score_type === 2) return '五级制'

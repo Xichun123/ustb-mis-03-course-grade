@@ -2,6 +2,57 @@
   <div>
     <el-alert v-if="!canView" title="当前账号无权访问系统维护模块。" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
     <el-tabs v-else v-model="activeTab" type="border-card">
+      <!-- 6.1 运行参数与跨组开关 -->
+      <el-tab-pane label="运行参数与跨组开关" name="params">
+        <el-alert
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px"
+          title="系统参数直接读写公共字典表（al_dict_item），支持实时切换财务欠费选课拦截开关、最低开班人数、平时成绩最低占比与默认学期。"
+        />
+        <div class="toolbar">
+          <el-select v-model="codeGroup" style="width: 210px" @change="loadCodes">
+            <el-option label="系统运行参数与跨组开关" value="system_param" />
+            <el-option label="全部公共字典项" value="" />
+          </el-select>
+          <el-button type="primary" @click="loadCodes">刷新参数</el-button>
+        </div>
+        <el-table :data="codes" border stripe v-loading="loadingCodes">
+          <el-table-column prop="dict_group" label="参数分组" width="160" />
+          <el-table-column prop="dict_code" label="参数键" width="210" />
+          <el-table-column label="当前值 / 开关" min-width="220">
+            <template #default="{ row }">
+              <template v-if="row.dict_group === 'system_param' && row.dict_code === 'block_selection_on_arrears'">
+                <el-switch
+                  v-if="isAdmin"
+                  :model-value="row.dict_name === '1'"
+                  active-text="欠费拦截选课"
+                  inactive-text="欠费仅提醒"
+                  @change="(val) => toggleArrearsBlock(row, val)"
+                />
+                <el-tag v-else :type="row.dict_name === '1' ? 'danger' : 'success'" size="small">
+                  {{ row.dict_name === '1' ? '已开启欠费拦截选课' : '欠费仅温馨提醒（允许选课）' }}
+                </el-tag>
+              </template>
+              <span v-else><b>{{ row.dict_name }}</b></span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="remark" label="参数说明" min-width="220" />
+          <el-table-column v-if="isAdmin" label="操作" width="110">
+            <template #default="{ row }">
+              <el-button
+                v-if="!(row.dict_group === 'system_param' && row.dict_code === 'block_selection_on_arrears')"
+                type="primary"
+                link
+                @click="editCode(row)"
+              >修改参数</el-button>
+              <span v-else class="muted">直接切换</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
       <!-- 6.2 备份与恢复 -->
       <el-tab-pane label="数据备份与恢复" name="backups">
         <div class="toolbar">
@@ -66,12 +117,42 @@ const role = computed(() => userState.currentUser?.role)
 const isAdmin = computed(() => role.value === 'SYS_ADMIN')
 const canView = computed(() => role.value === 'SYS_ADMIN' || role.value === 'ACADEMIC_OFFICE')
 
-const activeTab = ref('backups')
+const activeTab = ref('params')
+const codeGroup = ref('system_param')
+const codes = ref([])
+const loadingCodes = ref(false)
 
 const backups = ref([])
 const loadingBackups = ref(false)
 const backupVisible = ref(false)
 const backupForm = reactive({ backup_type: 1, file_name: '', file_size_kb: 1024, remark: '' })
+
+async function loadCodes() {
+  loadingCodes.value = true
+  try {
+    const res = await adminApi.listCodes({ group: codeGroup.value || undefined })
+    codes.value = res.data || []
+  } finally {
+    loadingCodes.value = false
+  }
+}
+
+async function toggleArrearsBlock(row, enabled) {
+  const nextVal = enabled ? '1' : '0'
+  await adminApi.updateCode(row.dict_id, { dict_name: nextVal })
+  row.dict_name = nextVal
+  ElMessage.success(enabled ? '已开启：存在第 5 组财务欠费的学生将暂缓选课' : '已切换为：存在财务欠费时仅温馨提醒，允许选课')
+}
+
+async function editCode(row) {
+  const { value } = await ElMessageBox.prompt(`请输入参数「${row.remark || row.dict_code}」的新值`, '修改系统参数', {
+    inputValue: String(row.dict_name || ''),
+    inputValidator: (v) => (v && v.trim() ? true : '参数值不能为空')
+  })
+  await adminApi.updateCode(row.dict_id, { dict_name: value.trim() })
+  ElMessage.success('参数已更新')
+  await loadCodes()
+}
 
 async function loadBackups() {
   loadingBackups.value = true
@@ -103,6 +184,7 @@ async function restore(row) {
 
 function initByRole() {
   if (!canView.value) return
+  loadCodes()
   loadBackups()
 }
 
@@ -122,5 +204,9 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 12px;
   flex-wrap: wrap;
+}
+.muted {
+  color: var(--app-text-secondary);
+  font-size: 12px;
 }
 </style>

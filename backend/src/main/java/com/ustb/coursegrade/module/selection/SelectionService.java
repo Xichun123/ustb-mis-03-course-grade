@@ -1,6 +1,7 @@
 package com.ustb.coursegrade.module.selection;
 
 import com.ustb.coursegrade.common.BizException;
+import com.ustb.coursegrade.common.CrossGroupDataService;
 import com.ustb.coursegrade.common.auth.*;
 import com.ustb.coursegrade.module.selection.SelectionCatalogProperties.CourseType;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -15,21 +16,33 @@ import java.time.*;
 import java.util.*;
 import static com.ustb.coursegrade.module.selection.SelectionRules.*;
 
-/** 业务②：仅使用当前 v9 真实结构，状态、日志与人数同事务提交。 */
+/** 业务②：选课核心服务，状态、日志与人数同事务提交，并联动全班跨组上游校验与展示。 */
 @Service
 @EnableConfigurationProperties(SelectionCatalogProperties.class)
 public class SelectionService {
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final SelectionCatalogProperties catalog;
-    @Autowired
+    private final CrossGroupDataService crossGroup;
+
     public SelectionService(JdbcTemplate jdbc, SelectionCatalogProperties catalog) {
-        this(jdbc, Clock.system(ZoneId.of("Asia/Shanghai")), catalog);
+        this(jdbc, Clock.system(ZoneId.of("Asia/Shanghai")), catalog, new CrossGroupDataService(jdbc));
     }
+
+    @Autowired
+    public SelectionService(JdbcTemplate jdbc, SelectionCatalogProperties catalog, CrossGroupDataService crossGroup) {
+        this(jdbc, Clock.system(ZoneId.of("Asia/Shanghai")), catalog, crossGroup);
+    }
+
     SelectionService(JdbcTemplate jdbc, Clock clock, SelectionCatalogProperties catalog) {
+        this(jdbc, clock, catalog, new CrossGroupDataService(jdbc));
+    }
+
+    SelectionService(JdbcTemplate jdbc, Clock clock, SelectionCatalogProperties catalog, CrossGroupDataService crossGroup) {
         this.jdbc = jdbc;
         this.clock = clock;
         this.catalog = catalog;
+        this.crossGroup = crossGroup;
     }
     private LocalDateTime now(){return LocalDateTime.now(clock);}
     public record Application(Integer roundId,String tcId,Integer studyType,Integer priority,String expectedVersion,@com.fasterxml.jackson.annotation.JsonAlias("special_requirement_confirmed") Boolean specialRequirementConfirmed){
@@ -46,7 +59,34 @@ public class SelectionService {
         CurrentUser user=UserContext.requireUser();
         List<Map<String,Object>> rounds=jdbc.queryForList("SELECT r.*,r.start_at AS start_time,r.end_at AS end_time,r.approved_at AS approve_time,r.published_at AS publish_time FROM sel_select_round r WHERE r.round_status IN (2,3,4) ORDER BY r.start_at DESC,r.round_id DESC");
         for(var r:rounds)r.put("window_open",open(r));
-        return Map.of("user",user,"rounds",rounds,"terms",jdbc.queryForList("SELECT DISTINCT term FROM aca_teaching_class WHERE term IS NOT NULL ORDER BY term DESC",String.class),"server_time",now(),"stop_write_enabled",true,"min_open_students",minOpenStudents(),"course_types",CourseType.options());
+        List<String> terms=crossGroup.listTermCodes();
+        if(terms.isEmpty()){
+            terms=jdbc.queryForList("SELECT DISTINCT term FROM aca_teaching_class WHERE term IS NOT NULL ORDER BY term DESC",String.class);
+        }
+        String currentTerm=crossGroup.getCurrentTerm();
+        Map<String,Object> resp=new LinkedHashMap<>();
+        resp.put("user",user);
+        resp.put("rounds",rounds);
+        resp.put("terms",terms);
+        resp.put("term_options",crossGroup.listTerms());
+        resp.put("current_term",currentTerm);
+        resp.put("server_time",now());
+        resp.put("stop_write_enabled",true);
+        resp.put("min_open_students",minOpenStudents());
+        resp.put("block_selection_on_arrears",crossGroup.isBlockSelectionOnArrearsEnabled());
+        resp.put("course_types",CourseType.options());
+        if(user.role()==RoleEnum.STUDENT && user.studentId()!=null && !user.studentId().isBlank()){
+            String sid=user.studentId();
+            Map<String,Object> crossStatus=new LinkedHashMap<>();
+            crossStatus.put("registration",crossGroup.getRegistrationStatus(sid,currentTerm));
+            crossStatus.put("finance",crossGroup.getFinanceStatus(sid));
+            crossStatus.put("minor_qualification",crossGroup.getMinorDualQualification(sid));
+            crossStatus.put("graduate_profile",crossGroup.getGraduateProfile(sid));
+            crossStatus.put("exchange_supervisor",crossGroup.getIncomingExchangeSupervisorOpinion(sid));
+            crossStatus.put("international_student",crossGroup.getInternationalStudent(sid));
+            resp.put("cross_group_status",crossStatus);
+        }
+        return resp;
     }
     public Map<String,Object> courses(int roundId,String keyword,int page,int size,CourseType filter){
         CurrentUser u=UserContext.requireRole(RoleEnum.STUDENT);var round=visibleRound(roundId);student(u.studentId(),text(round,"term"),false);
@@ -75,25 +115,63 @@ public class SelectionService {
         var pageGroups = groups.subList(start, Math.min(start + size, groups.size()));
         var classIds = pageGroups.stream().flatMap(List::stream).map(tc -> text(tc, "tc_id")).toList();
         var courseIds = pageGroups.stream().map(g -> text(g.get(0), "course_id")).distinct().toList();
+        var empIds = pageGroups.stream().flatMap(List::stream).map(tc -> text(tc, "emp_id")).filter(s -> !s.isEmpty()).distinct().toList();
         var limitsByClass = courseLimits(classIds);
         var specialByClass = specialRequirementsByClass(classIds);
         var preCoursesByCourse = preCourseLabelsByCourse(courseIds);
+
+        var roomLookup = crossGroup.loadRoomLookup();
+        var labByRoom = crossGroup.loadLabLookupByRoomId();
+        var teacherProfiles = crossGroup.loadTeacherProfiles(empIds);
+        var teacherAlerts = crossGroup.loadTeacherAlerts(empIds);
+        var generalCats = crossGroup.loadGeneralPlanCategories(courseIds, text(round, "term"));
+        var conflictsByTc = crossGroup.loadUnresolvedConflictsByTcIds(classIds);
+        Map<String, Object> gradProfile = crossGroup.getGraduateProfile(u.studentId());
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Object>> planCourseMap = gradProfile != null && gradProfile.get("personal_plan_course_map") instanceof Map<?, ?> m
+                ? (Map<String, Map<String, Object>>) m : Map.of();
+
         List<Map<String, Object>> items = new ArrayList<>();
         for (var group : pageGroups) {
             for (var tc : group) {
                 String id = text(tc, "tc_id");
                 String cid = text(tc, "course_id");
+                String empId = text(tc, "emp_id");
+                Integer tcCap = tc.get("capacity") instanceof Number n ? n.intValue() : null;
+                List<Map<String, Object>> sched = schedule(id);
+                List<String> schedIds = sched.stream().map(s -> text(s, "sched_id")).filter(s -> !s.isEmpty()).toList();
+                var adjs = crossGroup.loadApprovedAdjustmentsBySchedIds(schedIds);
+                crossGroup.enrichScheduleSlots(sched, tcCap, roomLookup, labByRoom, adjs);
+
                 tc.put("actual_num", count(id));
-                tc.put("schedule", schedule(id));
+                tc.put("schedule", sched);
                 tc.put("version", version(tc));
                 tc.put("sc_id", stringId(tc.get("sc_id")));
                 tc.put("preferences", jdbc.queryForList("SELECT priority,COUNT(*) AS applicants FROM sel_sc WHERE round_id=? AND tc_id=? AND select_status IN (0,1) GROUP BY priority ORDER BY priority", roundId, id));
                 tc.put("audience", audience(tc, limitsByClass.getOrDefault(id, Map.of()), specialByClass.get(id), preCoursesByCourse.getOrDefault(cid, List.of())));
+                Map<String, Object> tp = teacherProfiles.get(empId);
+                tc.put("teacher_name", tp != null && !text(tp, "emp_name").isEmpty() ? tp.get("emp_name") : empId);
+                tc.put("teacher_title", tp == null ? "" : tp.getOrDefault("title_label", ""));
+                tc.put("teacher_alerts", teacherAlerts.getOrDefault(empId, List.of()));
+                tc.put("schedule_conflicts", conflictsByTc.getOrDefault(id, List.of()));
+                tc.put("general_category", generalCats.get(cid));
+                boolean overCap = sched.stream().anyMatch(s -> Boolean.TRUE.equals(s.get("room_over_capacity")));
+                tc.put("room_over_capacity", overCap);
             }
             var first = group.get(0);
+            String courseId = text(first, "course_id");
             Map<String, Object> course = new LinkedHashMap<>();
             for (String key : List.of("course_id", "course_name", "course_type", "course_type_label", "credit", "course_level", "open_college")) {
                 course.put(key, first.get(key));
+            }
+            if (generalCats.containsKey(courseId)) {
+                course.put("general_category", generalCats.get(courseId));
+            }
+            if (planCourseMap.containsKey(courseId)) {
+                course.put("in_personal_plan", true);
+                course.put("planned_term", planCourseMap.get(courseId).get("planned_term"));
+            } else {
+                course.put("in_personal_plan", false);
             }
             var sharedAudience = first.get("audience");
             boolean sameAudience = group.stream().allMatch(tc -> sharedAudience.equals(tc.get("audience")));
@@ -252,7 +330,18 @@ public class SelectionService {
           FROM sel_sc sc JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id JOIN aca_course c ON c.course_id=tc.course_id
           WHERE sc.student_id=? AND tc.term=? ORDER BY sc.select_time DESC,sc.sc_id DESC
           """,u.studentId(),term);
-        for(var row:rows){row.put("version",version(row));row.put("schedule",schedule(text(row,"tc_id")));
+        var roomLookup = crossGroup.loadRoomLookup();
+        var labByRoom = crossGroup.loadLabLookupByRoomId();
+        var empIds = rows.stream().map(r -> text(r, "emp_id")).filter(s -> !s.isEmpty()).distinct().toList();
+        var teacherProfiles = crossGroup.loadTeacherProfiles(empIds);
+        for(var row:rows){
+            List<Map<String,Object>> sched=schedule(text(row,"tc_id"));
+            List<String> schedIds=sched.stream().map(s->text(s,"sched_id")).filter(s->!s.isEmpty()).toList();
+            crossGroup.enrichScheduleSlots(sched, row.get("capacity") instanceof Number n?n.intValue():null, roomLookup, labByRoom, crossGroup.loadApprovedAdjustmentsBySchedIds(schedIds));
+            row.put("version",version(row));row.put("schedule",sched);
+            Map<String,Object> tp=teacherProfiles.get(text(row,"emp_id"));
+            row.put("teacher_name",tp!=null && !text(tp,"emp_name").isEmpty()?tp.get("emp_name"):text(row,"emp_id"));
+            row.put("teacher_title",tp==null?"":tp.getOrDefault("title_label",""));
             boolean activeClass="4".equals(text(row,"tc_status"));
             List<Integer> dropRounds=(number(row.get("select_status"))==1 && activeClass) ? jdbc.queryForList("SELECT sr.round_id FROM sel_select_round sr JOIN sel_round_class rc ON rc.round_id=sr.round_id WHERE rc.tc_id=? AND sr.term=? AND sr.round_type=3 AND sr.round_status IN (2,3) AND sr.start_at<=? AND sr.end_at>? AND NOT EXISTS(SELECT 1 FROM sel_score WHERE sc_id=?) AND NOT EXISTS(SELECT 1 FROM sel_teach_eval WHERE sc_id=?) ORDER BY sr.start_at DESC,sr.round_id DESC",Integer.class,row.get("tc_id"),term,now(),now(),row.get("sc_id"),row.get("sc_id")) : List.of();
             row.put("withdraw_round_id",dropRounds.isEmpty()?null:dropRounds.get(0));row.put("sc_id",stringId(row.get("sc_id")));}
@@ -263,7 +352,7 @@ public class SelectionService {
         List<Map<String,Object>> blocks=new ArrayList<>();List<String> missing=new ArrayList<>();
         for(var row:rows){if(number(row.get("select_status"))!=1)continue;
             @SuppressWarnings("unchecked") var slots=(List<Map<String,Object>>)row.get("schedule");if(slots.isEmpty())missing.add(text(row,"tc_id"));
-            for(var slot:slots){validateSchedule(slot);if(weeks(text(slot,"week_range")).contains(week)){var block=new LinkedHashMap<>(slot);for(String k:List.of("course_name","tc_id","is_exempt_attend"))block.put(k,row.get(k));blocks.add(block);}}
+            for(var slot:slots){validateSchedule(slot);if(weeks(text(slot,"week_range")).contains(week)){var block=new LinkedHashMap<>(slot);for(String k:List.of("course_name","tc_id","is_exempt_attend","teacher_name","teacher_title"))block.put(k,row.get(k));blocks.add(block);}}
         }
         return Map.of("blocks",blocks,"missing_schedule",missing,"summary",result.get("summary"),"week",week);
     }
@@ -272,9 +361,14 @@ public class SelectionService {
         var u=UserContext.requireRole(RoleEnum.STUDENT);validateApplication(r);var round=visibleRound(r.roundId());
         int exempt=validate(r,round,student(u.studentId(),text(round,"term"),false),teachingClass(r.tcId(),false),false);
         String special=specialRequirementFor(r.tcId());
+        Map<String,Object> finance=crossGroup.getFinanceStatus(u.studentId());
         Map<String,Object> resp=new LinkedHashMap<>();
         resp.put("passed",true);
         resp.put("is_exempt_attend",exempt);
+        if(Boolean.TRUE.equals(finance.get("has_arrears"))){
+            resp.put("finance_warning",finance.get("warning_message"));
+            resp.put("total_arrears",finance.get("total_arrears"));
+        }
         if(!special.isEmpty()){
             resp.put("special_requirement",special);
             resp.put("requires_special_confirmation",!Boolean.TRUE.equals(r.specialRequirementConfirmed()));
@@ -556,6 +650,12 @@ public class SelectionService {
     private int validate(Application r,Map<String,Object> round,Map<String,Object> s,Map<String,Object> tc,boolean screening){
         if(!screening)requireWindow(round);String id=text(s,"student_id"),tcId=text(tc,"tc_id");requireMember(r.roundId(),tcId);
         if(!Objects.equals(round.get("term"),tc.get("term")) || !"4".equals(text(tc,"tc_status")))throw invalid("教学班学期不符或未发布");
+        // 第 1 组：新学期学籍注册核验（存在非注册成功记录则拦截，无记录兼容放行）
+        Map<String,Object> reg=crossGroup.getRegistrationStatus(id,text(round,"term"));
+        if(Boolean.TRUE.equals(reg.get("blocked")))throw invalid("新学期学籍注册异常，暂不可选课："+reg.get("abnormal_reason"));
+        // 第 5 组：财务欠费可控开关（默认仅提醒，开启 block_selection_on_arrears=1 时拦截）
+        Map<String,Object> fin=crossGroup.getFinanceStatus(id);
+        if(Boolean.TRUE.equals(fin.get("blocked")))throw invalid(String.valueOf(fin.get("warning_message")));
         int level=number(s.get("level")),target=number(round.get("target_level"));if(level==0)throw pending("来校交换生培养层次与成绩归属阶段尚无权威映射");if(target!=3 && target!=level)throw invalid("轮次不适用于当前培养层次");
         boolean retake=r.studyType()==2;if(retake && number(round.get("allow_retake"))!=1)throw invalid("本轮未开放重修");
         int mode=number(round.get("select_mode"));if(mode==2 && (r.priority()==null || r.priority()<1 || r.priority()>3))throw invalid("超额筛选须选择1—3志愿");if(mode==1 && r.priority()!=null)throw invalid("先到先得不填写志愿");
@@ -566,7 +666,13 @@ public class SelectionService {
             if(value==null)throw pending("限选所需学生资料缺失");if(!entry.getValue().contains(value.toString()))throw invalid("不满足课程限选条件（类型"+entry.getKey()+"）");
         }
         if("1".equals(text(tc,"tc_type")) && !retake){String names=text(tc,"class_ids");if(names.isBlank() || s.get("class_name")==null)throw pending("必修班面向班级资料缺失");if(!Arrays.stream(names.split("[,，]",-1)).map(String::trim).toList().contains(text(s,"class_name")))throw invalid("不在必修班面向班级范围内");}
-        if(r.studyType()==3 && !"3".equals(text(tc,"tc_type")))throw invalid("辅修须选择已认定的双学位教学班");
+        if(r.studyType()==3){
+            if(!"3".equals(text(tc,"tc_type")))throw invalid("辅修须选择已认定的双学位教学班");
+            Map<String,Object> minorQual=crossGroup.getMinorDualQualification(id);
+            if(Boolean.TRUE.equals(minorQual.get("qualification_data_available")) && !Boolean.TRUE.equals(minorQual.get("approved"))){
+                throw invalid("未查到已获批的辅修或双学位修读资格，请先在学籍管理或双学位系统完成资格审批");
+            }
+        }
         if(!retake)checkPreCourses(id,text(tc,"course_id"));
         if(level==2){var schemes=jdbc.queryForList("SELECT * FROM grad_scheme_assignment WHERE student_id=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>=?)",id,now().toLocalDate(),now().toLocalDate());if(schemes.size()!=1)throw pending("研究生有效培养方案缺失或不唯一");var scheme=schemes.get(0);if(jdbc.queryForObject("SELECT COUNT(*) FROM grad_scheme_course WHERE scheme_id=? AND course_id=? AND (direction_id IS NULL OR direction_id=?)",Integer.class,scheme.get("scheme_id"),tc.get("course_id"),scheme.get("direction_id"))==0)throw invalid("课程不在有效培养方案及研究方向内");}
         if(jdbc.queryForObject("SELECT COUNT(*) FROM sel_sc sc JOIN aca_teaching_class tc ON tc.tc_id=sc.tc_id WHERE sc.student_id=? AND tc.term=? AND tc.course_id=? AND sc.tc_id<>? AND sc.select_status IN (0,1)",Integer.class,id,round.get("term"),tc.get("course_id"),tcId)>0)throw invalid("同学期不能重复选修同课的不同教学班");
@@ -617,7 +723,7 @@ public class SelectionService {
           WHERE tc.tc_id=?
           """,id);
     }
-    private List<Map<String,Object>> schedule(String id){return jdbc.queryForList("SELECT week_range,week_day,start_slot,end_slot,room_id FROM aca_schedule_result WHERE tc_id=? AND "+CONFIRMED_SCHEDULE+" ORDER BY week_day,start_slot,week_range,sched_id",id);}
+    private List<Map<String,Object>> schedule(String id){return jdbc.queryForList("SELECT sched_id,week_range,week_day,start_slot,end_slot,room_id FROM aca_schedule_result WHERE tc_id=? AND "+CONFIRMED_SCHEDULE+" ORDER BY week_day,start_slot,week_range,sched_id",id);}
     private Map<String,Object> relation(String s,String tc,boolean lock){var rows=jdbc.queryForList("SELECT * FROM sel_sc WHERE student_id=? AND tc_id=?"+(lock?" FOR UPDATE":""),s,tc);return rows.isEmpty()?null:rows.get(0);}
     private int count(String tc){return jdbc.queryForObject("SELECT COUNT(*) FROM sel_sc WHERE tc_id=? AND select_status=1",Integer.class,tc);}
     private void recount(String tc){int c=count(tc);jdbc.update("UPDATE aca_teaching_class SET actual_num=?,selected_count=? WHERE tc_id=?",c,c,tc);}

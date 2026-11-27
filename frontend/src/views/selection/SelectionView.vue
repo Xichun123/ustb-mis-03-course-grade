@@ -19,7 +19,55 @@
       <div v-if="isStudent" class="summary">
         <span>本学期已选中 <strong>{{ summary.courses ?? '—' }}</strong> 门</span>
         <span>有效学分 <strong>{{ summary.credits ?? '—' }}</strong></span>
+        <template v-if="crossStatus">
+          <el-tag v-if="crossStatus.registration?.has_record" :type="crossStatus.registration.blocked ? 'danger' : 'success'" size="small">
+            学籍注册：{{ crossStatus.registration.status_label }}
+          </el-tag>
+          <el-tag v-if="crossStatus.finance?.has_records" :type="crossStatus.finance.has_arrears ? 'warning' : 'success'" size="small">
+            财务状态：{{ crossStatus.finance.status_label }}
+          </el-tag>
+          <el-tag v-if="crossStatus.minor_qualification?.approved" type="primary" size="small">
+            辅修/双学位资格：{{ approvedMinorText }}
+          </el-tag>
+          <el-tag v-if="crossStatus.graduate_profile" type="info" size="small">
+            方向：{{ crossStatus.graduate_profile.direction_name || '未定' }}
+            <template v-if="crossStatus.graduate_profile.mentors?.length"> · 导师：{{ crossStatus.graduate_profile.mentors.map(m => m.mentor_name).join('、') }}</template>
+            <template v-if="crossStatus.graduate_profile.personal_plan_courses?.length"> · 个人计划 {{ crossStatus.graduate_profile.personal_plan_courses.length }} 门</template>
+          </el-tag>
+          <el-tag v-if="crossStatus.international_student" type="primary" size="small">
+            来华留学生 · {{ crossStatus.international_student.nationality }}
+          </el-tag>
+        </template>
       </div>
+      <template v-if="isStudent && crossStatus">
+        <el-alert
+          v-if="crossStatus.registration?.blocked"
+          type="error"
+          show-icon
+          :closable="false"
+          class="notice"
+          title="第 1 组（学籍管理）拦截：本学期尚未完成学籍注册，暂不可提交选课"
+          :description="crossStatus.registration.abnormal_reason"
+        />
+        <el-alert
+          v-if="crossStatus.finance?.has_arrears"
+          :type="crossStatus.finance.blocked ? 'error' : 'warning'"
+          show-icon
+          :closable="false"
+          class="notice"
+          title="第 5 组（财务管理）缴费提醒"
+          :description="crossStatus.finance.warning_message"
+        />
+        <el-alert
+          v-if="crossStatus.exchange_supervisor"
+          type="info"
+          show-icon
+          :closable="false"
+          class="notice"
+          :title="`第 15 组（对外交流管理）接收导师选课建议（${crossStatus.exchange_supervisor.emp_name}${crossStatus.exchange_supervisor.college_name ? ' · ' + crossStatus.exchange_supervisor.college_name : ''}）`"
+          :description="crossStatus.exchange_supervisor.course_plan || crossStatus.exchange_supervisor.accept_opinion"
+        />
+      </template>
       <el-tabs v-model="active" type="border-card" @tab-change="() => perform(refresh)">
         <template v-if="isStudent">
           <el-tab-pane label="课程查询与选课" name="courses">
@@ -35,11 +83,51 @@
             <el-table :data="courses" row-key="course_id" border empty-text="当前条件下没有开放课程">
               <el-table-column type="expand"><template #default="{row}">
                 <div class="class-detail"><el-table :data="row.classes" size="small" border>
-                  <el-table-column prop="tc_id" label="教学班号" min-width="150" />
-                  <el-table-column label="面向对象" min-width="230">
+                  <el-table-column prop="tc_id" label="教学班号" min-width="140" />
+                  <el-table-column label="任课教师" min-width="135">
+                    <template #default="{ row: tc }">
+                      <div>
+                        <span>{{ tc.teacher_name || '待定' }}</span>
+                        <el-tag v-if="tc.teacher_title" size="small" type="info" effect="plain" style="margin-left: 4px">{{ tc.teacher_title }}</el-tag>
+                      </div>
+                      <div v-if="tc.teacher_alerts?.length" class="tag-wrap">
+                        <el-tooltip v-for="(al, i) in tc.teacher_alerts" :key="i" :content="`${al.source_group}：${al.period}${al.detail ? ' · ' + al.detail : ''}`" placement="top">
+                          <el-tag size="small" type="warning">{{ al.label }}</el-tag>
+                        </el-tooltip>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="面向对象" min-width="220">
                     <template #default="{ row: tc }"><SelectionAudience :audience="tc.audience" detailed /></template>
                   </el-table-column>
-                  <el-table-column label="上课安排" min-width="200"><template #default="{row:tc}"><div v-for="(s,i) in tc.schedule" :key="i">{{ slotText(s) }}</div><span v-if="!tc.schedule.length" class="muted">排课待确认</span></template></el-table-column>
+                  <el-table-column label="上课安排" min-width="235">
+                    <template #default="{row:tc}">
+                      <div v-for="(s,i) in tc.schedule" :key="i" class="slot-item">
+                        <div>{{ slotText(s) }}</div>
+                        <div v-if="s.room_info" class="muted">
+                          {{ [s.room_info.building_name, s.room_info.capacity ? `${s.room_info.capacity}座` : '', s.room_info.computer_num ? `${s.room_info.computer_num}机位` : (s.room_info.has_projector ? '含投影' : '')].filter(Boolean).join(' · ') }}
+                        </div>
+                        <div v-if="s.lab_info" class="muted">
+                          实验室：{{ s.lab_info.lab_name }}（{{ s.lab_info.open_time }}–{{ s.lab_info.close_time }}）
+                        </div>
+                        <div v-if="s.room_over_capacity || s.lab_info?.has_active_closure || s.adjustments?.length" class="tag-wrap">
+                          <el-tag v-if="s.room_over_capacity" size="small" type="danger">教室超容</el-tag>
+                          <el-tooltip v-if="s.lab_info?.has_active_closure" :content="(s.lab_info.active_closures || []).map(c => `${c.start_at} 至 ${c.end_at}：${c.reason}`).join('；')" placement="top">
+                            <el-tag size="small" type="warning">实验室封闭提醒</el-tag>
+                          </el-tooltip>
+                          <el-tooltip v-if="s.adjustments?.length" :content="s.adjustments.map(a => `${a.old_value} → ${a.new_value}（${a.reason || '已批准调课'}）`).join('；')" placement="top">
+                            <el-tag size="small" type="primary" effect="plain">已调课</el-tag>
+                          </el-tooltip>
+                        </div>
+                      </div>
+                      <span v-if="!tc.schedule.length" class="muted">排课待确认</span>
+                      <div v-if="tc.schedule_conflicts?.length" class="tag-wrap">
+                        <el-tooltip :content="tc.schedule_conflicts.map(c => c.conflict_desc).join('；')" placement="top">
+                          <el-tag size="small" type="danger" effect="plain">排课冲突待处理</el-tag>
+                        </el-tooltip>
+                      </div>
+                    </template>
+                  </el-table-column>
                   <el-table-column label="已选 / 容量" width="110"><template #default="{row:tc}">{{tc.actual_num}} / {{tc.capacity}}</template></el-table-column>
                   <el-table-column label="选课状态" width="115"><template #default="{row:tc}"><el-tag :type="statusType(tc.select_status)">{{statusText(tc.select_status)}}</el-tag></template></el-table-column>
                   <el-table-column v-if="selectedRound?.select_mode===2" label="各档志愿人数" min-width="150"><template #default="{row:tc}">{{ tc.preferences.map(p => `${p.priority ?? '未分档'}志愿 ${p.applicants}人`).join('；') || '暂无申请' }}</template></el-table-column>
@@ -47,7 +135,15 @@
                 </el-table></div>
               </template></el-table-column>
               <el-table-column prop="course_id" label="课程代码" width="125" />
-              <el-table-column prop="course_name" label="课程名称" min-width="170" />
+              <el-table-column label="课程名称" min-width="200">
+                <template #default="{ row }">
+                  <span>{{ row.course_name }}</span>
+                  <el-tag v-if="row.general_category" size="small" type="info" effect="plain" style="margin-left: 6px">{{ row.general_category }}</el-tag>
+                  <el-tag v-if="row.in_personal_plan" size="small" type="success" style="margin-left: 6px">
+                    个人培养计划内{{ row.planned_term ? `（${row.planned_term}）` : '' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
               <el-table-column prop="course_type_label" label="课程类型" width="115" />
               <el-table-column label="面向对象" min-width="230">
                 <template #default="{ row }">
@@ -212,6 +308,7 @@
             我已仔细阅读并确认本人符合上述特殊要求
           </el-checkbox>
         </div>
+        <el-alert v-if="checkFinanceWarning" :title="checkFinanceWarning" type="warning" show-icon :closable="false" style="margin-bottom: 10px" />
         <el-alert v-if="checkResult" :title="checkResult" type="info" :closable="false" />
       </template>
       <template #footer><el-button @click="applyVisible=false">取消</el-button><el-button :loading="busy" @click="precheck">先校验</el-button><el-button type="primary" :loading="busy" @click="enroll">确认提交</el-button></template>
@@ -238,14 +335,38 @@
         <el-button type="danger" :loading="busy" @click="confirmStopClass">确认停开</el-button>
       </template>
     </el-dialog>
-    <el-dialog v-model="scheduleVisible" title="课程详情" width="480px">
+    <el-dialog v-model="scheduleVisible" title="课程详情" width="540px">
       <el-descriptions v-if="selectedBlock" :column="1" border size="small">
         <el-descriptions-item label="课程名称">{{ selectedBlock.course_name }}</el-descriptions-item>
         <el-descriptions-item label="教学班号">{{ selectedBlock.tc_id }}</el-descriptions-item>
+        <el-descriptions-item v-if="selectedBlock.teacher_name" label="任课教师">
+          {{ selectedBlock.teacher_name }}<span v-if="selectedBlock.teacher_title" class="muted">（{{ selectedBlock.teacher_title }}）</span>
+        </el-descriptions-item>
         <el-descriptions-item label="上课周次">
           <el-tag size="small">{{ selectedBlock.week_range }}周</el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="上课地点">{{ selectedBlock.room_id }}</el-descriptions-item>
+        <el-descriptions-item v-if="selectedBlock.room_info" label="教室设施">
+          {{ [selectedBlock.room_info.building_name, selectedBlock.room_info.room_type_label, selectedBlock.room_info.capacity ? `${selectedBlock.room_info.capacity}座` : '', selectedBlock.room_info.equip_desc].filter(Boolean).join(' · ') }}
+          <el-tag v-if="selectedBlock.room_over_capacity" size="small" type="danger" style="margin-left: 6px">教室超容</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="selectedBlock.lab_info" label="实验室联动">
+          <div>{{ selectedBlock.lab_info.lab_name }}（开放 {{ selectedBlock.lab_info.open_time }}–{{ selectedBlock.lab_info.close_time }}，管理员：{{ selectedBlock.lab_info.manager_name }}）</div>
+          <el-alert
+            v-for="(c, idx) in (selectedBlock.lab_info.active_closures || [])"
+            :key="idx"
+            type="warning"
+            show-icon
+            :closable="false"
+            style="margin-top: 6px"
+            :title="`临时封闭提醒：${c.start_at} 至 ${c.end_at}（${c.reason}）`"
+          />
+        </el-descriptions-item>
+        <el-descriptions-item v-if="selectedBlock.adjustments?.length" label="已批准调课">
+          <div v-for="(a, idx) in selectedBlock.adjustments" :key="idx">
+            {{ a.old_value }} → {{ a.new_value }}（{{ a.reason || '已批准调课' }}）
+          </div>
+        </el-descriptions-item>
         <el-descriptions-item label="节次">
           第 {{ selectedBlock.start_slot }}—{{ selectedBlock.end_slot }} 节
         </el-descriptions-item>
@@ -296,11 +417,13 @@ const term = ref('2026-2027-1'), roundId = ref(null), keyword = ref(''), courseP
 const courseType = ref('')
 const resultRows = ref([]), resultKeyword = ref(''), statusFilter = ref(null), week = ref(1), timetableMode = ref('week'), timetable = ref({ blocks: [] })
 const teachingClasses = ref([]), tcId = ref(''), rosterKeyword = ref(''), roster = ref({}), stop = ref({}), screenResult = ref('')
-const applyVisible = ref(false), target = ref(null), application = ref({}), checkResult = ref(''), adjustVisible = ref(false), adjustment = ref({}), printData = ref(null)
+const applyVisible = ref(false), target = ref(null), application = ref({}), checkResult = ref(''), checkFinanceWarning = ref(''), adjustVisible = ref(false), adjustment = ref({}), printData = ref(null)
 const stopDialogVisible = ref(false), stopTarget = ref(null), stopReason = ref('')
 const scheduleVisible = ref(false), scheduleDetail = ref([]), selectedBlock = ref(null)
 const statuses = ['待筛选','已选中','未选中','已退选'], days = ['一','二','三','四','五','六','日']
 const isStudent = computed(() => context.value.user.role === 'STUDENT')
+const crossStatus = computed(() => context.value.cross_group_status || null)
+const approvedMinorText = computed(() => (crossStatus.value?.minor_qualification?.records || []).filter(r => r.approved).map(r => `${r.category}·${r.target_major}`).join('、'))
 const isOffice = computed(() => context.value.user.role === 'ACADEMIC_OFFICE')
 const isStaff = computed(() => isOffice.value || context.value.user.role === 'TEACHER')
 const isCurrentRosterStopped = computed(() => Boolean(roster.value.teaching_class && roster.value.teaching_class.tc_status !== '4'))
@@ -329,6 +452,8 @@ const displayBlocks = computed(() => {
         course_name: row.course_name,
         tc_id: row.tc_id,
         is_exempt_attend: row.is_exempt_attend,
+        teacher_name: row.teacher_name,
+        teacher_title: row.teacher_title,
       })
     }
   }
@@ -403,8 +528,8 @@ function changeTerm(){chooseRound();coursePage.value=1;summary.value={};perform(
 function changeRound(){coursePage.value=1;perform(refresh)}
 function searchCourses(){coursePage.value=1;perform(loadCourses)}
 function resetCourses(){keyword.value='';courseType.value='';searchCourses()}
-function openApply(tc){target.value=tc;application.value={roundId:roundId.value,tcId:tc.tc_id,studyType:1,priority:selectedRound.value.select_mode===2?1:null,expectedVersion:tc.version || null,specialRequirementConfirmed:false};checkResult.value='';applyVisible.value=true}
-function precheck(){perform(async()=>{try{checkResult.value=(await api.check(application.value)).data.message}catch(e){checkResult.value=e?.response?.data?.message || '校验未完成，请稍后重试';throw e}})}
+function openApply(tc){target.value=tc;application.value={roundId:roundId.value,tcId:tc.tc_id,studyType:1,priority:selectedRound.value.select_mode===2?1:null,expectedVersion:tc.version || null,specialRequirementConfirmed:false};checkResult.value='';checkFinanceWarning.value='';applyVisible.value=true}
+function precheck(){perform(async()=>{try{const d=(await api.check(application.value)).data;checkResult.value=d.message;checkFinanceWarning.value=d.finance_warning || ''}catch(e){checkResult.value=e?.response?.data?.message || '校验未完成，请稍后重试';throw e}})}
 function enroll(){perform(async()=>{if(target.value?.audience?.special_requirement && !application.value.specialRequirementConfirmed){ElMessage.warning('请先勾选确认本人符合本教学班的特殊要求');return}try{const r=await api.enroll(application.value);ElMessage.success(r.data.message);applyVisible.value=false;await loadCourses()}catch(e){if(!e.response){await loadResults();await loadCourses();applyVisible.value=false;error.value='提交未获得明确回执，已重新读取选课记录，请核对结果后再办理。';active.value='results';return}throw e}})}
 function withdraw(row){perform(async()=>{await ElMessageBox.confirm(`确认退选 ${row.course_name}（${row.tc_id}）？`,'退选确认',{type:'warning'});try{const r=await api.withdraw(row.sc_id,{roundId:row.withdraw_round_id,expectedVersion:row.version,confirmed:true});ElMessage.success(r.data.message)}catch(e){if(!e.response){error.value='退选结果待核实，正在重新读取选课记录。'}else throw e}await loadResults()})}
 function showSchedule(block){selectedBlock.value=block;const found=resultRows.value.find(r=>r.tc_id===block.tc_id);perform(async()=>{if(!found)await loadResults();scheduleDetail.value=resultRows.value.find(r=>r.tc_id===block.tc_id)?.schedule || [];scheduleVisible.value=true})}
@@ -434,12 +559,14 @@ onMounted(() => perform(bootContext))
 .filters{justify-content:space-between;padding:14px 18px;background:var(--app-card-bg);border:1px solid var(--app-border);border-radius:14px;box-shadow:var(--app-shadow-sm)}
 .filters-left{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .filters label{font-size:13px;color:var(--app-text-secondary)}
-.summary{display:flex;align-items:baseline;gap:28px;padding:15px 20px;background:var(--app-menu-active-bg);border:1px solid var(--app-border);border-radius:12px;margin-bottom:18px;color:var(--app-text-primary);font-size:14px;line-height:1.4}
+.summary{display:flex;align-items:center;flex-wrap:wrap;gap:14px 24px;padding:15px 20px;background:var(--app-menu-active-bg);border:1px solid var(--app-border);border-radius:12px;margin-bottom:18px;color:var(--app-text-primary);font-size:14px;line-height:1.4}
 .summary > span{display:inline-flex;align-items:baseline;gap:4px}
 .summary strong{font-size:20px;line-height:1;color:var(--brand-primary);margin:0 2px}
 .notice{margin-bottom:16px}
 .class-detail{padding:16px 20px;background:var(--app-card-muted-bg)}
 .muted{font-size:12px;color:var(--app-text-secondary);line-height:1.7}
+.slot-item + .slot-item{margin-top:6px;padding-top:6px;border-top:1px dashed var(--app-border)}
+.tag-wrap{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
 .el-pagination{margin-top:16px;justify-content:flex-end}
 .timetable-toolbar{margin-bottom:14px}
 .ustb-schedule-wrap{overflow-x:auto;border:1px solid var(--app-grid-line);border-radius:10px;background:var(--app-card-bg)}

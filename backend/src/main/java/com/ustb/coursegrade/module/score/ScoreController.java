@@ -227,4 +227,18 @@ public class ScoreController {
             @RequestParam(required = false) String keyword) {
         return ApiResponse.ok(scoreService.listCourseCandidates(keyword));
     }
+
+    /** 3.5 查询第 15 组已完成或待完成的返校备案学生清单（含国际交流与国内访学） */
+    @GetMapping("/exchange/ready-students")
+    public ApiResponse<List<Map<String, Object>>> exchangeReadyStudents(
+            @RequestParam(required = false) String student_id) {
+        return ApiResponse.ok(scoreService.listExchangeReadyStudents(student_id));
+    }
+
+    /** 3.5 查询第 15 组外校原始成绩单明细，支持一键带入换算表单 */
+    @GetMapping("/exchange/foreign-transcripts")
+    public ApiResponse<List<Map<String, Object>>> foreignTranscripts(
+            @RequestParam(required = false) String student_id) {
+        return ApiResponse.ok(scoreService.listForeignTranscripts(student_id));
+    }
 }

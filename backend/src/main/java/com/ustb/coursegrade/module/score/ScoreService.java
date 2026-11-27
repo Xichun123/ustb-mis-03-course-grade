@@ -1,9 +1,11 @@
 package com.ustb.coursegrade.module.score;
 
 import com.ustb.coursegrade.common.BizException;
+import com.ustb.coursegrade.common.CrossGroupDataService;
 import com.ustb.coursegrade.common.auth.CurrentUser;
 import com.ustb.coursegrade.common.auth.RoleEnum;
 import com.ustb.coursegrade.common.auth.UserContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,16 +29,23 @@ public class ScoreService {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final JdbcTemplate jdbc;
+    private final CrossGroupDataService crossGroup;
 
     public ScoreService(JdbcTemplate jdbc) {
+        this(jdbc, new CrossGroupDataService(jdbc));
+    }
+
+    @Autowired
+    public ScoreService(JdbcTemplate jdbc, CrossGroupDataService crossGroup) {
         this.jdbc = jdbc;
+        this.crossGroup = crossGroup;
     }
 
     /** 3.1 我的课堂列表（仅包含正常开课教学班，已停开课程不进入成绩录入） */
     public List<Map<String, Object>> myClasses(String term, String keyword) {
         CurrentUser u = UserContext.requireRole(RoleEnum.TEACHER, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
-                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, tc.course_id, c.course_name, c.credit,
+                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, MIN(tc.emp_id) AS teacher_id, tc.term, tc.course_id, c.course_name, c.credit,
                        COALESCE(org.college_id, c.org_id) AS open_college,
                        GROUP_CONCAT(DISTINCT tc.class_ids ORDER BY tc.class_ids SEPARATOR '、') AS class_ids,
                        (SELECT COUNT(*) FROM sel_sc sc
@@ -80,7 +89,9 @@ public class ScoreService {
         }
         sql.append(" GROUP BY lc.lesson_no, tc.term, tc.course_id, c.course_name, c.credit, COALESCE(org.college_id, c.org_id) ");
         sql.append(" ORDER BY tc.term DESC, lc.lesson_no ASC ");
-        return jdbc.queryForList(sql.toString(), args.toArray());
+        List<Map<String, Object>> list = jdbc.queryForList(sql.toString(), args.toArray());
+        attachTeacherCrossGroupMeta(list);
+        return list;
     }
 
     /** 3.1 已停开课程只读清单（无需录入成绩，且不计入教师教学工作量） */
@@ -765,7 +776,7 @@ public class ScoreService {
     public List<Map<String, Object>> auditPending(String term) {
         CurrentUser u = UserContext.requireRole(RoleEnum.COLLEGE_SECRETARY, RoleEnum.ACADEMIC_OFFICE, RoleEnum.SYS_ADMIN);
         StringBuilder sql = new StringBuilder("""
-                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, c.course_name,
+                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, MIN(tc.emp_id) AS teacher_id, tc.term, c.course_name,
                        COALESCE(org.college_id, c.org_id) AS open_college,
                        (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
@@ -799,7 +810,9 @@ public class ScoreService {
         }
         sql.append(" GROUP BY lc.lesson_no, tc.term, c.course_name, COALESCE(org.college_id, c.org_id) ");
         sql.append(" ORDER BY tc.term DESC, lc.lesson_no ");
-        return jdbc.queryForList(sql.toString(), args.toArray());
+        List<Map<String, Object>> list = jdbc.queryForList(sql.toString(), args.toArray());
+        attachTeacherCrossGroupMeta(list);
+        return list;
     }
 
     /** 3.3 学院输码核对（对齐 sel_score_audit.lesson_no 与 verify_code）：通过置 2，退回置 4 并必填差异说明 */
@@ -867,8 +880,8 @@ public class ScoreService {
             termSql = " AND tc.term = ? ";
             args.add(term.trim());
         }
-        return jdbc.queryForList("""
-                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, tc.term, c.course_name,
+        List<Map<String, Object>> list = jdbc.queryForList("""
+                SELECT lc.lesson_no, MIN(lc.tc_id) AS tc_id, MIN(tc.emp_id) AS teacher_id, tc.term, c.course_name,
                        (SELECT COUNT(*) FROM sel_score s JOIN sel_sc sc ON s.sc_id = sc.sc_id
                          JOIN sel_lesson_class lc2 ON sc.tc_id = lc2.tc_id
                          WHERE lc2.lesson_no = lc.lesson_no AND s.exam_type = 1 AND s.score_status = 2) AS ready_count,
@@ -889,6 +902,8 @@ public class ScoreService {
                 GROUP BY lc.lesson_no, tc.term, c.course_name
                 ORDER BY tc.term DESC, lc.lesson_no
                 """, args.toArray());
+        attachTeacherCrossGroupMeta(list);
+        return list;
     }
 
     /** 3.4 成绩发布：校验本次提交批次已审核通过（sel_score_audit.lesson_no），置 3、精准重标 is_final、刷新学业统计，并自动闭环待重发的成绩更正申请 */
@@ -1002,7 +1017,19 @@ public class ScoreService {
         return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
-    /** 3.5 校外交流成绩认定：登记并换算 */
+    /** 3.5 查询第 15 组返校备案学生清单（覆盖国际交流与国内访学） */
+    public List<Map<String, Object>> listExchangeReadyStudents(String studentId) {
+        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
+        return crossGroup.listExchangeCreditReady(studentId, false);
+    }
+
+    /** 3.5 查询第 15 组外校原始成绩单明细，供一键带入成绩换算表单 */
+    public List<Map<String, Object>> listForeignTranscripts(String studentId) {
+        UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
+        return crossGroup.listForeignTranscripts(studentId);
+    }
+
+    /** 3.5 校外交流成绩认定：登记并换算（联查第 15 组返校备案资格视图 v_exchange_credit_ready） */
     @Transactional
     public Map<String, Object> createExchange(Map<String, Object> body) {
         UserContext.requireRole(RoleEnum.ACADEMIC_OFFICE, RoleEnum.COLLEGE_SECRETARY, RoleEnum.SYS_ADMIN);
@@ -1013,6 +1040,27 @@ public class ScoreService {
         String courseId = str(body.get("course_id"));
         String proofNo = str(body.get("proof_no"));
         String extRaw = str(body.get("ext_score_raw"));
+        String applyId = str(body.get("exchange_apply_id"));
+
+        // 当第 15 组返校备案视图存在数据时，自动核验返校备案资格并补全申请编号/合作院校
+        if (!sid.isEmpty() && crossGroup.hasExchangeCreditReadyData()) {
+            List<Map<String, Object>> readyList = crossGroup.listExchangeCreditReady(sid, true);
+            if (readyList.isEmpty()) {
+                throw BizException.conflict("EXCHANGE_NOT_READY",
+                        "第 15 组对外交流系统显示学号 " + sid + " 尚未完成返校备案，暂不可办理校外成绩认定，请先办结返校报到与备案");
+            }
+            Map<String, Object> matched = readyList.get(0);
+            if (applyId.isEmpty()) {
+                applyId = str(matched.get("application_no"));
+            }
+            if (host.isEmpty()) {
+                host = str(matched.get("partner_school_snapshot"));
+            }
+            if (term.isEmpty()) {
+                term = str(matched.get("term_ref"));
+            }
+        }
+
         if (sid.isEmpty() || term.isEmpty() || host.isEmpty() || extName.isEmpty()
                 || courseId.isEmpty() || proofNo.isEmpty() || extRaw.isEmpty()) {
             throw BizException.unprocessable("MISSING_FIELD",
@@ -1060,7 +1108,6 @@ public class ScoreService {
             throw BizException.unprocessable("INVALID_SCORE_TYPE", "换算后记分方式仅支持百分制、五级制或两级制");
         }
         BigDecimal gp = converted != null ? percentToPoint(converted) : levelToPoint(level);
-        String applyId = str(body.get("exchange_apply_id"));
         String extCode = str(body.get("ext_course_code"));
         jdbc.update("""
                 INSERT INTO sel_exchange_score_convert(student_id, exchange_apply_id, term, stat_stage, host_school,
@@ -1073,6 +1120,23 @@ public class ScoreService {
                 scoreType, converted, level.isEmpty() ? null : level, gp, proofNo);
         return Map.of("student_id", sid, "course_id", courseId, "grade_point", gp,
                 "message", "校外成绩已登记，待学院审核、教务处审批后生效");
+    }
+
+    private void attachTeacherCrossGroupMeta(List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) return;
+        List<String> empIds = rows.stream()
+                .map(r -> str(r.get("teacher_id")))
+                .filter(s -> !s.isEmpty()).distinct().toList();
+        if (empIds.isEmpty()) return;
+        Map<String, Map<String, Object>> profiles = crossGroup.loadTeacherProfiles(empIds);
+        Map<String, List<Map<String, Object>>> alerts = crossGroup.loadTeacherAlerts(empIds);
+        for (Map<String, Object> r : rows) {
+            String empId = str(r.get("teacher_id"));
+            Map<String, Object> p = profiles.get(empId);
+            r.put("teacher_name", p != null && !str(p.get("emp_name")).isEmpty() ? p.get("emp_name") : empId);
+            r.put("teacher_title", p == null ? "" : p.getOrDefault("title_label", ""));
+            r.put("teacher_alerts", alerts.getOrDefault(empId, List.of()));
+        }
     }
 
     /** 3.5 学院审核校外成绩认定（0 -> 1 通过 / 0 -> 3 驳回） */

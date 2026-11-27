@@ -1,10 +1,12 @@
 package com.ustb.coursegrade.module.prep;
 
 import com.ustb.coursegrade.common.BizException;
+import com.ustb.coursegrade.common.CrossGroupDataService;
 import com.ustb.coursegrade.common.PageResult;
 import com.ustb.coursegrade.common.auth.CurrentUser;
 import com.ustb.coursegrade.common.auth.RoleEnum;
 import com.ustb.coursegrade.common.auth.UserContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -32,9 +34,16 @@ public class PrepService {
             + " WHERE sr.tc_id = tc.tc_id AND " + CONFIRMED_SCHEDULE + ")";
 
     private final JdbcTemplate jdbc;
+    private final CrossGroupDataService crossGroup;
 
     public PrepService(JdbcTemplate jdbc) {
+        this(jdbc, new CrossGroupDataService(jdbc));
+    }
+
+    @Autowired
+    public PrepService(JdbcTemplate jdbc, CrossGroupDataService crossGroup) {
         this.jdbc = jdbc;
+        this.crossGroup = crossGroup;
     }
 
     /** 1.1 开课计划导入（直读第 2 组教学班/课程/排课结果及第 4 组任课教师，不复制冗余表） */
@@ -134,7 +143,7 @@ public class PrepService {
             where.append(" AND tc.term = ? ");
             params.add(term.trim());
         }
-        return jdbc.queryForMap("""
+        Map<String, Object> summary = new LinkedHashMap<>(jdbc.queryForMap("""
                 SELECT COUNT(*) AS total_classes,
                        COUNT(CASE WHEN tc.tc_status = '4' THEN 1 END) AS published_classes,
                        COUNT(CASE WHEN tc.tc_status = '4' AND %1$s THEN 1 END) AS scheduled_classes,
@@ -143,7 +152,43 @@ public class PrepService {
                 FROM aca_teaching_class tc
                 JOIN aca_course c ON tc.course_id = c.course_id
                 LEFT JOIN org_organization org ON c.org_id = org.org_id
-                """.formatted(HAS_SCHEDULE) + where, params.toArray());
+                """.formatted(HAS_SCHEDULE) + where, params.toArray()));
+
+        List<Map<String, Object>> scopeRows = jdbc.queryForList("""
+                SELECT tc.tc_id, tc.capacity
+                FROM aca_teaching_class tc
+                JOIN aca_course c ON tc.course_id = c.course_id
+                LEFT JOIN org_organization org ON c.org_id = org.org_id
+                """ + where + " AND tc.tc_status = '4' ", params.toArray());
+        List<String> scopeTcIds = scopeRows.stream().map(r -> String.valueOf(r.get("tc_id")).trim()).toList();
+        Map<String, List<Map<String, Object>>> conflicts = crossGroup.loadUnresolvedConflictsByTcIds(scopeTcIds);
+        Map<String, Map<String, Object>> roomLookup = crossGroup.loadRoomLookup();
+        int overCapCount = 0;
+        if (!scopeTcIds.isEmpty() && !roomLookup.isEmpty()) {
+            String ph = String.join(",", Collections.nCopies(scopeTcIds.size(), "?"));
+            Map<String, List<String>> roomsByTc = new HashMap<>();
+            jdbc.queryForList("SELECT tc_id, room_id FROM aca_schedule_result sr WHERE tc_id IN (" + ph + ") AND " + CONFIRMED_SCHEDULE,
+                            scopeTcIds.toArray())
+                    .forEach(r -> roomsByTc.computeIfAbsent(String.valueOf(r.get("tc_id")).trim(), k -> new ArrayList<>())
+                            .add(r.get("room_id") == null ? "" : String.valueOf(r.get("room_id")).trim()));
+            for (Map<String, Object> r : scopeRows) {
+                String tid = String.valueOf(r.get("tc_id")).trim();
+                Integer tcCap = r.get("capacity") instanceof Number n ? n.intValue() : null;
+                if (tcCap == null) continue;
+                boolean over = false;
+                for (String rmKey : roomsByTc.getOrDefault(tid, List.of())) {
+                    Map<String, Object> room = roomLookup.get(rmKey);
+                    if (room != null && room.get("capacity") instanceof Number rn && tcCap > rn.intValue()) {
+                        over = true;
+                        break;
+                    }
+                }
+                if (over) overCapCount++;
+            }
+        }
+        summary.put("conflict_classes", conflicts.size());
+        summary.put("over_capacity_classes", overCapCount);
+        return summary;
     }
 
     /** 1.3 查询本学期所有已发布的轮次候选教学班 */
@@ -622,24 +667,106 @@ public class PrepService {
         List<String> tcIds = items.stream()
                 .map(r -> r.get("tc_id") == null ? "" : String.valueOf(r.get("tc_id")).trim())
                 .filter(s -> !s.isEmpty()).distinct().toList();
+        List<String> empIds = items.stream()
+                .map(r -> r.get("emp_id") == null ? "" : String.valueOf(r.get("emp_id")).trim())
+                .filter(s -> !s.isEmpty()).distinct().toList();
+        List<String> courseIds = items.stream()
+                .map(r -> r.get("course_id") == null ? "" : String.valueOf(r.get("course_id")).trim())
+                .filter(s -> !s.isEmpty()).distinct().toList();
+        String firstTerm = items.get(0).get("term") == null ? null : String.valueOf(items.get(0).get("term")).trim();
+
         Map<String, List<Map<String, Object>>> schedMap = new HashMap<>();
+        List<String> allSchedIds = new ArrayList<>();
         if (!tcIds.isEmpty()) {
             String placeholders = String.join(",", Collections.nCopies(tcIds.size(), "?"));
             jdbc.queryForList("""
-                    SELECT tc_id, week_range, week_day, start_slot, end_slot, room_id, sched_status
+                    SELECT sched_id, tc_id, week_range, week_day, start_slot, end_slot, room_id, sched_status
                     FROM aca_schedule_result sr
                     WHERE tc_id IN (%s) AND %s
                     ORDER BY tc_id, week_day, start_slot, week_range, sched_id
                     """.formatted(placeholders, CONFIRMED_SCHEDULE), tcIds.toArray())
-                    .forEach(r -> schedMap.computeIfAbsent(String.valueOf(r.get("tc_id")).trim(), k -> new ArrayList<>()).add(r));
+                    .forEach(r -> {
+                        Map<String, Object> copy = new LinkedHashMap<>(r);
+                        String sid = copy.get("sched_id") == null ? "" : String.valueOf(copy.get("sched_id")).trim();
+                        if (!sid.isEmpty()) allSchedIds.add(sid);
+                        schedMap.computeIfAbsent(String.valueOf(copy.get("tc_id")).trim(), k -> new ArrayList<>()).add(copy);
+                    });
         }
+
+        Map<String, Map<String, Object>> roomLookup = crossGroup.loadRoomLookup();
+        Map<String, Map<String, Object>> labByRoom = crossGroup.loadLabLookupByRoomId();
+        Map<String, List<Map<String, Object>>> adjBySched = crossGroup.loadApprovedAdjustmentsBySchedIds(allSchedIds);
+        Map<String, List<Map<String, Object>>> conflictsByTc = crossGroup.loadUnresolvedConflictsByTcIds(tcIds);
+        Map<String, Map<String, Object>> teacherProfiles = crossGroup.loadTeacherProfiles(empIds);
+        Map<String, List<Map<String, Object>>> teacherAlerts = crossGroup.loadTeacherAlerts(empIds);
+        Map<String, String> generalCats = crossGroup.loadGeneralPlanCategories(courseIds, firstTerm);
+
         for (Map<String, Object> row : items) {
             String tcId = row.get("tc_id") == null ? "" : String.valueOf(row.get("tc_id")).trim();
+            String empId = row.get("emp_id") == null ? "" : String.valueOf(row.get("emp_id")).trim();
+            String courseId = row.get("course_id") == null ? "" : String.valueOf(row.get("course_id")).trim();
+            Integer tcCap = row.get("capacity") instanceof Number n ? n.intValue() : null;
+
             List<Map<String, Object>> schedules = schedMap.getOrDefault(tcId, List.of());
+            crossGroup.enrichScheduleSlots(schedules, tcCap, roomLookup, labByRoom, adjBySched);
+
             row.put("schedules", schedules);
             row.put("has_schedule", !schedules.isEmpty());
             row.put("schedule_summary", formatSchedules(schedules));
             row.put("course_type_label", courseTypeLabel(row.get("course_type")));
+
+            // 第 4 组与第 15 组：教师职称、学历与请假/出访提醒
+            Map<String, Object> tp = teacherProfiles.get(empId);
+            row.put("teacher_title", tp == null ? "" : tp.getOrDefault("title_label", ""));
+            row.put("teacher_edu_level", tp == null ? "" : tp.getOrDefault("edu_level", ""));
+            row.put("teacher_alerts", teacherAlerts.getOrDefault(empId, List.of()));
+
+            // 第 7 组教室容量/超容预警、第 9 组实验室与封闭提醒、第 2 组调课与冲突
+            Map<String, Object> firstRoom = null;
+            Map<String, Object> firstLab = null;
+            boolean overCap = false;
+            List<Map<String, Object>> labClosures = new ArrayList<>();
+            List<Map<String, Object>> classAdjustments = new ArrayList<>();
+            for (Map<String, Object> s : schedules) {
+                if (firstRoom == null && s.get("room_info") instanceof Map<?, ?> rm) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> cast = (Map<String, Object>) rm;
+                    firstRoom = cast;
+                }
+                if (Boolean.TRUE.equals(s.get("room_over_capacity"))) {
+                    overCap = true;
+                }
+                if (s.get("lab_info") instanceof Map<?, ?> lb) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> castLab = (Map<String, Object>) lb;
+                    if (firstLab == null) firstLab = castLab;
+                    if (castLab.get("active_closures") instanceof List<?> cl) {
+                        for (Object c : cl) {
+                            if (c instanceof Map<?, ?> cm) {
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> castC = (Map<String, Object>) cm;
+                                labClosures.add(castC);
+                            }
+                        }
+                    }
+                }
+                if (s.get("adjustments") instanceof List<?> adjs) {
+                    for (Object a : adjs) {
+                        if (a instanceof Map<?, ?> am) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> castA = (Map<String, Object>) am;
+                            classAdjustments.add(castA);
+                        }
+                    }
+                }
+            }
+            row.put("room_info", firstRoom);
+            row.put("room_over_capacity", overCap);
+            row.put("lab_info", firstLab);
+            row.put("lab_closures", labClosures);
+            row.put("schedule_adjustments", classAdjustments);
+            row.put("schedule_conflicts", conflictsByTc.getOrDefault(tcId, List.of()));
+            row.put("general_category", generalCats.get(courseId));
         }
     }
 

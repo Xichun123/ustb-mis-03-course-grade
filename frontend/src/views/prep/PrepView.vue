@@ -13,13 +13,19 @@
             <el-tag v-if="syncSummary.stopped_classes > 0" size="small" type="danger">
               已停开/取消 {{ syncSummary.stopped_classes }}
             </el-tag>
+            <el-tag v-if="syncSummary.over_capacity_classes > 0" size="small" type="danger">
+              教室超容预警 {{ syncSummary.over_capacity_classes }}
+            </el-tag>
+            <el-tag v-if="syncSummary.conflict_classes > 0" size="small" type="danger">
+              排课冲突 {{ syncSummary.conflict_classes }}
+            </el-tag>
           </div>
-          <span class="sync-banner-note">课程和排课来自第 2 组，任课教师来自第 4 组。</span>
+          <span class="sync-banner-note">课程与排课来自第 2 组，教师与请假/出访提醒来自第 4/15 组，教室与实验室状态来自第 7/9 组。</span>
         </div>
 
         <div class="toolbar">
           <el-select v-model="classQuery.term" placeholder="全部学期" clearable style="width: 170px" @change="refreshClasses">
-            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+            <el-option v-for="t in termOptions" :key="t" :label="t" :value="t" />
           </el-select>
           <el-input v-model="classQuery.keyword" placeholder="教学班号 / 课程名 / 教师姓名或工号" style="width: 260px"
             clearable @keyup.enter="refreshClasses" @clear="refreshClasses" />
@@ -43,25 +49,78 @@
               <div class="cell-sub">{{ row.term }}</div>
             </template>
           </el-table-column>
-          <el-table-column label="课程名称" min-width="165">
+          <el-table-column label="课程名称" min-width="175">
             <template #default="{ row }">
               <div>{{ row.course_name }}</div>
               <div class="cell-sub">{{ courseMetaLine(row) }}</div>
               <div v-if="classFormatLabel(row)" class="cell-sub">{{ classFormatLabel(row) }}</div>
+              <el-tag v-if="row.general_category" size="small" type="info" effect="plain" style="margin-top: 3px">
+                通识 · {{ row.general_category }}
+              </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="任课教师 / 开课学院" min-width="135">
+          <el-table-column label="任课教师 / 开课学院" min-width="155">
             <template #default="{ row }">
-              <div>{{ row.teacher_name || '待定' }}</div>
+              <div>
+                <span>{{ row.teacher_name || '待定' }}</span>
+                <el-tag v-if="row.teacher_title" size="small" type="info" effect="plain" style="margin-left: 6px">
+                  {{ row.teacher_title }}
+                </el-tag>
+              </div>
               <div class="cell-sub">{{ row.open_college_name || getCollegeName(row.open_college) }}</div>
+              <div v-if="row.teacher_alerts?.length" class="cell-tags">
+                <el-tooltip
+                  v-for="(al, idx) in row.teacher_alerts"
+                  :key="idx"
+                  :content="`${al.source_group}：${al.period}${al.detail ? ' · ' + al.detail : ''}`"
+                  placement="top"
+                >
+                  <el-tag size="small" type="warning">{{ al.label }}</el-tag>
+                </el-tooltip>
+              </div>
             </template>
           </el-table-column>
-          <el-table-column label="排课安排（时间 / 教室）" min-width="210">
+          <el-table-column label="排课安排（时间 / 教室）" min-width="245">
             <template #default="{ row }">
               <span v-if="row.has_schedule">{{ row.schedule_summary }}</span>
               <el-tag v-else-if="row.tc_status === '4'" size="small" type="warning">排课待确认</el-tag>
               <span v-else>—</span>
               <div v-if="row.has_schedule && row.week_count" class="cell-sub">计划 {{ row.week_count }} 周</div>
+              <div v-if="row.room_info" class="cell-sub">
+                {{ [row.room_info.building_name, row.room_info.capacity ? `${row.room_info.capacity}座` : '', row.room_info.computer_num ? `${row.room_info.computer_num}机位` : (row.room_info.has_projector ? '含投影' : '')].filter(Boolean).join(' · ') }}
+              </div>
+              <div v-if="row.lab_info" class="cell-sub">
+                实验室：{{ row.lab_info.lab_name }}（{{ row.lab_info.open_time }}–{{ row.lab_info.close_time }}）
+              </div>
+              <div
+                v-if="row.room_over_capacity || row.lab_closures?.length || row.schedule_adjustments?.length || row.schedule_conflicts?.length"
+                class="cell-tags"
+              >
+                <el-tag v-if="row.room_over_capacity" size="small" type="danger">
+                  教室超容（{{ row.capacity }} > {{ row.room_info?.capacity }}座）
+                </el-tag>
+                <el-tooltip
+                  v-if="row.lab_closures?.length"
+                  :content="row.lab_closures.map(c => `${c.start_at} 至 ${c.end_at}：${c.reason}`).join('；')"
+                  placement="top"
+                >
+                  <el-tag size="small" type="warning">实验室封闭提醒</el-tag>
+                </el-tooltip>
+                <el-tooltip
+                  v-if="row.schedule_adjustments?.length"
+                  :content="row.schedule_adjustments.map(a => `${a.old_value} → ${a.new_value}（${a.reason || '已批准调课'}）`).join('；')"
+                  placement="top"
+                >
+                  <el-tag size="small" type="primary" effect="plain">已调课 {{ row.schedule_adjustments.length }}</el-tag>
+                </el-tooltip>
+                <el-tooltip
+                  v-if="row.schedule_conflicts?.length"
+                  :content="row.schedule_conflicts.map(c => `${c.conflict_desc}${c.suggest_plan ? '；建议：' + c.suggest_plan : ''}`).join('；')"
+                  placement="top"
+                >
+                  <el-tag size="small" type="danger" effect="plain">排课冲突 {{ row.schedule_conflicts.length }}</el-tag>
+                </el-tooltip>
+              </div>
             </template>
           </el-table-column>
           <el-table-column label="面向班级 / 课堂号" min-width="130">
@@ -109,7 +168,7 @@
       <el-tab-pane :label="isStudent ? '选课轮次与通知公告' : '选课轮次、审批与发布'" name="rounds">
         <div class="toolbar">
           <el-select v-model="roundQuery.term" placeholder="全部学年学期" clearable style="width: 170px">
-            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+            <el-option v-for="t in termOptions" :key="t" :label="t" :value="t" />
           </el-select>
           <el-select v-if="!isStudent" v-model="roundQuery.round_status" placeholder="轮次状态" clearable style="width: 150px">
             <el-option v-for="(label, val) in ROUND_STATUS_MAP" :key="val" :label="label" :value="Number(val)" />
@@ -368,7 +427,7 @@
                 style="width: 100%"
                 @change="changeRoundTerm"
               >
-                <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+                <el-option v-for="t in termOptions" :key="t" :label="t" :value="t" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -516,13 +575,17 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { prepApi } from '../../api/prep'
+import { systemApi } from '../../api/modules'
 import { userState } from '../../stores/user'
-import { TERM_OPTIONS } from '../../constants/terms'
+import { TERM_OPTIONS, loadDynamicTermOptions } from '../../constants/terms'
 import { getCollegeName } from '../../constants/dicts'
+
+const termOptions = ref([...TERM_OPTIONS])
+const currentTermDefault = ref('2026-2027-1')
 
 const ROUND_TYPE_MAP = { 1: '预选', 2: '正选', 3: '补退选' }
 const LEVEL_MAP = { 1: '本科生', 2: '研究生', 3: '全部' }
@@ -710,7 +773,7 @@ async function openRoundDialog(roundId) {
   if (!roundId) {
     roundDetail.value = null
     Object.assign(roundForm, {
-      round_id: null, term: '2026-2027-1', round_name: '', round_type: 2, target_level: 1,
+      round_id: null, term: currentTermDefault.value, round_name: '', round_type: 2, target_level: 1,
       start_time: '2026-12-01 09:00:00', end_time: '2026-12-05 17:00:00', max_credit: 30,
       select_mode: 1, allow_retake: 0, retake_ignore_conflict: 0, notice_content: '', tc_ids: []
     })
@@ -834,6 +897,13 @@ async function handlePublishRound(roundId) {
   loadRounds()
 }
 
+onMounted(async () => {
+  const { terms, currentTerm } = await loadDynamicTermOptions(systemApi)
+  termOptions.value = terms
+  currentTermDefault.value = currentTerm
+  if (!classQuery.term) classQuery.term = currentTerm
+})
+
 watch(() => userState.currentUser, user => {
   if (!user) return
   activeTab.value = canViewClasses.value ? 'classes' : 'rounds'
@@ -910,6 +980,12 @@ watch(() => userState.currentUser, user => {
   font-size: 12px;
   color: var(--app-text-secondary);
   margin-top: 2px;
+}
+.cell-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
 }
 .import-schedule-bar {
   display: flex;

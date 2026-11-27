@@ -11,8 +11,7 @@ export const scoreApi = {
     return request.get(`/score/classes/${lessonNo}`)
   },
   saveGrades(lessonNo, items, usualRatio) {
-    const body = { items }
-    if (usualRatio !== undefined && usualRatio !== null) body.usual_ratio = usualRatio
+    const body = usualRatio !== undefined && usualRatio !== null ? { items, usual_ratio: usualRatio } : { items }
     return request.put(`/score/classes/${lessonNo}/grades`, body)
   },
   setClassRatio(lessonNo, usualRatio) {
@@ -69,5 +68,11 @@ export const scoreApi = {
   },
   exchangeCandidates(params) {
     return request.get('/score/exchange/candidates', { params })
+  },
+  listExchangeReadyStudents(params) {
+    return request.get('/score/exchange/ready-students', { params })
+  },
+  listForeignTranscripts(params) {
+    return request.get('/score/exchange/foreign-transcripts', { params })
   }
 }

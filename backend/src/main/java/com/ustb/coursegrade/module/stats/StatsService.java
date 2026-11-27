@@ -1,9 +1,11 @@
 package com.ustb.coursegrade.module.stats;
 
 import com.ustb.coursegrade.common.BizException;
+import com.ustb.coursegrade.common.CrossGroupDataService;
 import com.ustb.coursegrade.common.auth.CurrentUser;
 import com.ustb.coursegrade.common.auth.RoleEnum;
 import com.ustb.coursegrade.common.auth.UserContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -34,9 +36,16 @@ public class StatsService {
     private static final Pattern TERM_PATTERN = Pattern.compile("^\\d{4}-\\d{4}-\\d$");
 
     private final JdbcTemplate jdbc;
+    private final CrossGroupDataService crossGroup;
 
     public StatsService(JdbcTemplate jdbc) {
+        this(jdbc, new CrossGroupDataService(jdbc));
+    }
+
+    @Autowired
+    public StatsService(JdbcTemplate jdbc, CrossGroupDataService crossGroup) {
         this.jdbc = jdbc;
+        this.crossGroup = crossGroup;
     }
 
     // =========================================================================
@@ -44,13 +53,7 @@ public class StatsService {
     // =========================================================================
 
     public String getCurrentTerm() {
-        List<String> rows = jdbc.queryForList(
-                "SELECT item_name FROM al_dict_item WHERE dict_type = 'system_param' AND item_code = 'current_term' AND item_status IN ('01', '1') LIMIT 1",
-                String.class);
-        if (!rows.isEmpty() && rows.get(0) != null && !rows.get(0).isBlank()) {
-            return rows.get(0).trim();
-        }
-        return "2026-2027-1";
+        return crossGroup.getCurrentTerm();
     }
 
     private void validateTermFormat(String term) {
@@ -92,7 +95,17 @@ public class StatsService {
         if (!stuRows.isEmpty()) {
             Map<String, Object> profile = new LinkedHashMap<>(stuRows.get(0));
             profile.put("is_incoming_exchange", false);
-            profile.put("student_category", "本校" + profile.getOrDefault("degree_level", "学生"));
+            Map<String, Object> intl = crossGroup.getInternationalStudent(studentId);
+            if (intl != null) {
+                profile.put("is_international_student", true);
+                profile.put("nationality", intl.get("nationality"));
+                profile.put("scholarship_program", intl.get("scholarship_program"));
+                profile.put("expected_graduation_date", intl.get("expected_graduation_date"));
+                profile.put("student_category", "来华留学生（" + intl.get("nationality") + "）");
+            } else {
+                profile.put("is_international_student", false);
+                profile.put("student_category", "本校" + profile.getOrDefault("degree_level", "学生"));
+            }
             return profile;
         }
 
@@ -109,9 +122,14 @@ public class StatsService {
         if (!exRows.isEmpty()) {
             Map<String, Object> profile = new LinkedHashMap<>(exRows.get(0));
             profile.put("is_incoming_exchange", true);
+            profile.put("is_international_student", false);
             profile.put("degree_level", "本科");
             profile.put("class_name", "来校交换生");
             profile.put("student_category", "来校交换生");
+            Map<String, Object> supOpinion = crossGroup.getIncomingExchangeSupervisorOpinion(studentId);
+            if (supOpinion != null) {
+                profile.put("supervisor_opinion", supOpinion);
+            }
             return profile;
         }
 
@@ -790,11 +808,27 @@ public class StatsService {
             }
         }
 
-        // 4) 加载培养方案课程清单（本科读 aca_program_course，研究生读 grad_scheme_assignment + grad_scheme_course）
+        // 4) 加载培养方案课程清单（本科读 aca_program_course + aca_major_program，研究生读第 13 组全链路）
         List<Map<String, Object>> planDefs = new ArrayList<>();
         String planSourceNote = "";
+        Map<String, Object> majorProgram = null;
+        Map<String, BigDecimal> majorCategoryRules = Map.of();
+        Map<String, Object> gradProfile = null;
+        Map<String, Map<String, Object>> gradPersonalPlanMap = Map.of();
+
         if (!incomingExchange && statStage == 1 && majorId != null && !majorId.isBlank()) {
             String planGrade = grade;
+            majorProgram = crossGroup.getMajorProgramInfo(majorId, planGrade);
+            if (majorProgram != null) {
+                if (graduationMinCredit == null && majorProgram.get("total_credit") != null) {
+                    graduationMinCredit = toBigDecimal(majorProgram.get("total_credit"));
+                }
+                if (majorProgram.get("parsed_credit_rules") instanceof Map<?, ?> rm) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, BigDecimal> cast = (Map<String, BigDecimal>) rm;
+                    majorCategoryRules = cast;
+                }
+            }
             if (planGrade != null && !planGrade.isBlank()) {
                 planDefs = jdbc.queryForList("""
                         SELECT pc.course_id, c.course_name,
@@ -836,6 +870,20 @@ public class StatsService {
                 pd.put("plan_category_label", courseTypeLabel(ctype));
             }
         } else if (!incomingExchange && statStage == 2) {
+            gradProfile = crossGroup.getGraduateProfile(targetStudentId);
+            if (gradProfile != null) {
+                if (graduationMinCredit == null && gradProfile.get("min_credit") != null) {
+                    graduationMinCredit = toBigDecimal(gradProfile.get("min_credit"));
+                }
+                profile.put("direction_id", gradProfile.get("direction_id"));
+                profile.put("direction_name", gradProfile.get("direction_name"));
+                profile.put("mentors", gradProfile.get("mentors"));
+                if (gradProfile.get("personal_plan_course_map") instanceof Map<?, ?> pm) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Map<String, Object>> cast = (Map<String, Map<String, Object>>) pm;
+                    gradPersonalPlanMap = cast;
+                }
+            }
             List<Map<String, Object>> assigns = jdbc.queryForList("""
                     SELECT scheme_id, direction_id
                     FROM grad_scheme_assignment
@@ -846,6 +894,9 @@ public class StatsService {
                 String schemeId = String.valueOf(assigns.get(0).get("scheme_id"));
                 Object dirObj = assigns.get(0).get("direction_id");
                 String dirId = dirObj == null ? null : String.valueOf(dirObj);
+                String dirDisplay = (gradProfile != null && gradProfile.get("direction_name") != null
+                        && !String.valueOf(gradProfile.get("direction_name")).isBlank())
+                        ? String.valueOf(gradProfile.get("direction_name")) : dirId;
                 if (dirId == null || dirId.isBlank()) {
                     planDefs = jdbc.queryForList("""
                             SELECT gsc.course_id, c.course_name, c.course_type, c.credit,
@@ -865,7 +916,9 @@ public class StatsService {
                             ORDER BY gsc.course_category ASC, gsc.suggest_term ASC, gsc.course_id ASC
                             """, schemeId, dirId);
                 }
-                planSourceNote = "已按研究生培养方案（" + schemeId + (dirId != null && !dirId.isBlank() ? " · 方向 " + dirId : "") + "）进行对照";
+                planSourceNote = "已按研究生培养方案（" + schemeId
+                        + (dirDisplay != null && !dirDisplay.isBlank() ? " · 研究方向：" + dirDisplay : "")
+                        + "）进行对照";
                 for (Map<String, Object> pd : planDefs) {
                     int cat = pd.get("course_category") == null ? 3 : ((Number) pd.get("course_category")).intValue();
                     String ctype = normalizeCourseType(pd.get("course_type"));
@@ -965,6 +1018,10 @@ public class StatsService {
                     : null;
 
             b.put("plan_credit", fmtCredit(planC));
+            BigDecimal ruleMin = majorCategoryRules.get(String.valueOf(b.get("course_type")));
+            if (ruleMin != null) {
+                b.put("program_min_credit", fmtCredit(ruleMin));
+            }
             b.put("earned_credit", fmtCredit(earnedC));
             b.put("in_progress_credit", fmtCredit(inProgC));
             b.put("failed_credit", fmtCredit(failedC));
@@ -1049,6 +1106,12 @@ public class StatsService {
             row.put("grade_point", gpText);
             row.put("term", termText);
             row.put("record_source", sourceText);
+            if (gradPersonalPlanMap.containsKey(cid)) {
+                row.put("in_personal_plan", true);
+                row.put("planned_term", gradPersonalPlanMap.get(cid).get("planned_term"));
+            } else {
+                row.put("in_personal_plan", false);
+            }
             planCourses.add(row);
         }
 
@@ -1135,10 +1198,13 @@ public class StatsService {
                 targetStudentId);
         Map<String, Object> gpaSnapshot = gpaRows.isEmpty() ? null : new LinkedHashMap<>(gpaRows.get(0));
 
+        Map<String, Object> minorQual = crossGroup.getMinorDualQualification(targetStudentId);
         Map<String, Object> minorSummary = new LinkedHashMap<>();
         minorSummary.put("earned_credit", fmtCredit(minorEarned));
         minorSummary.put("failed_credit", fmtCredit(minorFailed));
         minorSummary.put("passed_count", minorPassedCount);
+        minorSummary.put("has_approved_qualification", minorQual.get("approved"));
+        minorSummary.put("qualifications", minorQual.get("records"));
         minorSummary.put("note", "辅修/双学位学分单独统计，不计入主修毕业学分要求。");
 
         Map<String, Object> resp = new LinkedHashMap<>();
@@ -1153,6 +1219,11 @@ public class StatsService {
         resp.put("plan_courses", planCourses);
         resp.put("extra_courses", extraCourses);
         resp.put("minor_summary", minorSummary);
+        resp.put("major_program", majorProgram);
+        resp.put("graduate_profile", gradProfile);
+        resp.put("transfer_info", crossGroup.getMajorTransferAndCreditInfo(targetStudentId));
+        resp.put("finance_summary", crossGroup.getFinanceStatus(targetStudentId));
+        resp.put("registration_status", crossGroup.getRegistrationStatus(targetStudentId, currentTerm));
         resp.put("data_time", LocalDateTime.now().format(TS_FMT));
         return resp;
     }
@@ -1558,8 +1629,16 @@ public class StatsService {
                 FROM v_exchange_student
                 ORDER BY temp_student_no ASC
                 """));
+        Map<String, Map<String, Object>> intlMap = crossGroup.loadInternationalStudentMap();
         for (Map<String, Object> item : list) {
             item.put("is_incoming_exchange", ((Number) item.get("is_incoming_exchange")).intValue() == 1);
+            String sid = item.get("student_id") == null ? "" : String.valueOf(item.get("student_id")).trim();
+            Map<String, Object> intl = intlMap.get(sid);
+            item.put("is_international_student", intl != null);
+            if (intl != null) {
+                item.put("nationality", intl.get("nationality"));
+                item.put("scholarship_program", intl.get("scholarship_program"));
+            }
         }
         return list;
     }
@@ -1618,9 +1697,10 @@ public class StatsService {
 
         Map<String, Object> profile = loadStudentProfile(targetStudentId);
         boolean isIncomingExchange = Boolean.TRUE.equals(profile.get("is_incoming_exchange"));
+        boolean isInternationalStudent = Boolean.TRUE.equals(profile.get("is_international_student"));
         String requestedTemplate = body.get("template") == null ? "AUTO" : String.valueOf(body.get("template")).trim().toUpperCase();
         String template = "AUTO".equals(requestedTemplate)
-                ? (isIncomingExchange ? "EXCHANGE_BILINGUAL" : "STANDARD")
+                ? ((isIncomingExchange || isInternationalStudent) ? "EXCHANGE_BILINGUAL" : "STANDARD")
                 : requestedTemplate;
 
         // 绝不按 is_final 过滤：保留正考、补考、重修、不及格、缺考等全部已发布记录
@@ -1685,6 +1765,7 @@ public class StatsService {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("template", template);
         resp.put("is_incoming_exchange", isIncomingExchange);
+        resp.put("is_international_student", isInternationalStudent);
         resp.put("transcript_no", transcriptNo);
         resp.put("issue_date", issueDate);
         resp.put("generated_at", LocalDateTime.now().format(TS_FMT));
@@ -1752,7 +1833,10 @@ public class StatsService {
         tcSql.append(" ORDER BY tc.term DESC, tc.tc_id ASC");
 
         List<Map<String, Object>> classes = jdbc.queryForList(tcSql.toString(), params.toArray());
-        List<String> terms = jdbc.queryForList("SELECT DISTINCT term FROM aca_teaching_class ORDER BY term DESC", String.class);
+        List<String> terms = crossGroup.listTermCodes();
+        if (terms.isEmpty()) {
+            terms = jdbc.queryForList("SELECT DISTINCT term FROM aca_teaching_class ORDER BY term DESC", String.class);
+        }
         List<Map<String, Object>> majors = jdbc.queryForList(
                 "SELECT DISTINCT major_id, grade FROM std_student WHERE major_id IS NOT NULL ORDER BY major_id ASC, grade DESC");
 
@@ -2377,10 +2461,21 @@ public class StatsService {
                 RoleEnum.ACADEMIC_OFFICE, RoleEnum.ACADEMIC_DIRECTOR,
                 RoleEnum.GRADUATE_SCHOOL, RoleEnum.SYS_ADMIN);
 
+        List<String> evalEmpIds = rows.stream()
+                .map(r -> r.get("teacher_id") == null ? "" : String.valueOf(r.get("teacher_id")).trim())
+                .filter(s -> !s.isEmpty()).distinct().toList();
+        Map<String, Map<String, Object>> evalTeacherProfiles = crossGroup.loadTeacherProfiles(evalEmpIds);
+
         // 按教师聚合（供第4组师资管理按参评人数加权汇总参考）
         Map<String, Map<String, Object>> teacherAgg = new LinkedHashMap<>();
 
         for (Map<String, Object> r : rows) {
+            String tid = r.get("teacher_id") == null ? "" : String.valueOf(r.get("teacher_id")).trim();
+            Map<String, Object> tp = evalTeacherProfiles.get(tid);
+            r.put("teacher_title", tp == null ? "" : tp.getOrDefault("title_label", ""));
+            r.put("teacher_edu_level", tp == null ? "" : tp.getOrDefault("edu_level", ""));
+            r.put("teacher_org_name", tp == null ? "" : tp.getOrDefault("org_name", ""));
+
             boolean hasSnapshot = r.get("calc_time") != null;
             Integer evalNum = r.get("eval_num") == null ? null : ((Number) r.get("eval_num")).intValue();
             int liveCount = ((Number) r.get("live_valid_eval_num")).intValue();
@@ -2405,6 +2500,9 @@ public class StatsService {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("teacher_id", tKey);
                     m.put("teacher_name", r.get("teacher_name"));
+                    m.put("teacher_title", r.get("teacher_title"));
+                    m.put("teacher_edu_level", r.get("teacher_edu_level"));
+                    m.put("teacher_org_name", r.get("teacher_org_name"));
                     m.put("class_count", 0);
                     m.put("total_eval_num", 0);
                     m.put("_weighted_sum", BigDecimal.ZERO);

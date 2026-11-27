@@ -6,7 +6,7 @@
       <el-tab-pane v-if="isTeacher || isAdmin" label="课堂与成绩录入" name="entry">
         <div class="toolbar">
           <el-select v-model="classQuery.term" placeholder="全部学期" clearable style="width: 170px">
-            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+            <el-option v-for="t in termOptions" :key="t" :label="t" :value="t" />
           </el-select>
           <el-input v-model="classQuery.keyword" placeholder="课堂号 / 课程名" style="width: 220px" clearable />
           <el-button type="primary" @click="loadClasses">查询</el-button>
@@ -22,7 +22,20 @@
           </el-table-column>
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="course_name" label="课程" min-width="150" />
-          <el-table-column prop="class_ids" label="面向班级" min-width="140" />
+          <el-table-column label="任课教师" min-width="145">
+            <template #default="{ row }">
+              <div>
+                <span>{{ row.teacher_name || row.teacher_id || '—' }}</span>
+                <el-tag v-if="row.teacher_title" size="small" type="info" effect="plain" style="margin-left: 5px">{{ row.teacher_title }}</el-tag>
+              </div>
+              <div v-if="row.teacher_alerts?.length" class="alert-tag-wrap">
+                <el-tooltip v-for="(al, idx) in row.teacher_alerts" :key="idx" :content="`${al.source_group}：${al.period}${al.detail ? ' · ' + al.detail : ''}`" placement="top">
+                  <el-tag size="small" type="warning">{{ al.label }}</el-tag>
+                </el-tooltip>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="class_ids" label="面向班级" min-width="135" />
           <el-table-column prop="student_count" label="选课人数" width="85" />
           <el-table-column prop="submitted_count" label="待核对" width="75" />
           <el-table-column prop="published_count" label="已发布" width="75" />
@@ -181,7 +194,7 @@
       <el-tab-pane v-if="isCollege || isAdmin" label="学院核对" name="audit">
         <div class="toolbar">
           <el-select v-model="auditTerm" placeholder="全部学期" clearable style="width: 170px">
-            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+            <el-option v-for="t in termOptions" :key="t" :label="t" :value="t" />
           </el-select>
           <el-button type="primary" @click="loadAudit">刷新待核对</el-button>
         </div>
@@ -196,6 +209,19 @@
           </el-table-column>
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="course_name" label="课程" min-width="150" />
+          <el-table-column label="任课教师" min-width="140">
+            <template #default="{ row }">
+              <div>
+                <span>{{ row.teacher_name || row.teacher_id || '—' }}</span>
+                <el-tag v-if="row.teacher_title" size="small" type="info" effect="plain" style="margin-left: 5px">{{ row.teacher_title }}</el-tag>
+              </div>
+              <div v-if="row.teacher_alerts?.length" class="alert-tag-wrap">
+                <el-tooltip v-for="(al, idx) in row.teacher_alerts" :key="idx" :content="`${al.source_group}：${al.period}${al.detail ? ' · ' + al.detail : ''}`" placement="top">
+                  <el-tag size="small" type="warning">{{ al.label }}</el-tag>
+                </el-tooltip>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column label="开课学院" min-width="145">
             <template #default="{ row }">{{ getCollegeName(row.open_college) }}</template>
           </el-table-column>
@@ -215,7 +241,7 @@
       <el-tab-pane v-if="isOffice || isAdmin" label="成绩发布" name="publish">
         <div class="toolbar">
           <el-select v-model="publishTerm" placeholder="全部学期" clearable style="width: 170px">
-            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+            <el-option v-for="t in termOptions" :key="t" :label="t" :value="t" />
           </el-select>
           <el-button type="primary" @click="loadPublish">刷新待发布</el-button>
         </div>
@@ -230,6 +256,19 @@
           </el-table-column>
           <el-table-column prop="term" label="学期" width="120" />
           <el-table-column prop="course_name" label="课程" min-width="160" />
+          <el-table-column label="任课教师" min-width="140">
+            <template #default="{ row }">
+              <div>
+                <span>{{ row.teacher_name || row.teacher_id || '—' }}</span>
+                <el-tag v-if="row.teacher_title" size="small" type="info" effect="plain" style="margin-left: 5px">{{ row.teacher_title }}</el-tag>
+              </div>
+              <div v-if="row.teacher_alerts?.length" class="alert-tag-wrap">
+                <el-tooltip v-for="(al, idx) in row.teacher_alerts" :key="idx" :content="`${al.source_group}：${al.period}${al.detail ? ' · ' + al.detail : ''}`" placement="top">
+                  <el-tag size="small" type="warning">{{ al.label }}</el-tag>
+                </el-tooltip>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column prop="ready_count" label="可发布人数" width="105" />
           <el-table-column label="操作" width="100">
             <template #default="{ row }">
@@ -245,7 +284,39 @@
           <el-input v-model="exchangeQuery.student_id" placeholder="学号" style="width: 160px" clearable />
           <el-input v-model="exchangeQuery.keyword" placeholder="课程名 / 外校" style="width: 200px" clearable />
           <el-button type="primary" @click="loadExchange">查询</el-button>
-          <el-button type="success" @click="openExchange">+ 登记认定</el-button>
+          <el-button type="success" @click="openExchange()">+ 登记认定</el-button>
+        </div>
+        <div v-if="readyStudents.length" class="ready-panel">
+          <div class="ready-panel-header">
+            <span>第 15 组（对外交流管理）返校备案名单（国际交流 / 国内访学）</span>
+            <span class="muted">仅已完成返校备案的学生可办理校外成绩认定，未备案提交时系统自动拦截</span>
+          </div>
+          <el-table :data="readyStudents" border size="small" max-height="185">
+            <el-table-column prop="student_id" label="学号" width="120" />
+            <el-table-column prop="student_name" label="姓名" width="90" />
+            <el-table-column label="交流类别" width="95">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.exchange_type === 'DOMESTIC' ? 'primary' : 'info'" effect="plain">
+                  {{ row.exchange_type_label }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="partner_school_snapshot" label="合作/访学院校" min-width="165" />
+            <el-table-column prop="term_ref" label="交流学期" width="115" />
+            <el-table-column label="返校备案状态" width="175">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.ready ? 'success' : 'danger'">
+                  {{ row.ready ? '已返校备案 · 可认定' : '未完成返校备案 · 拦截' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="快捷操作" width="110" fixed="right">
+              <template #default="{ row }">
+                <el-button v-if="row.ready" type="primary" link @click="openExchange(row)">+ 办理认定</el-button>
+                <span v-else class="muted">待备案</span>
+              </template>
+            </el-table-column>
+          </el-table>
         </div>
         <el-table :data="exchangeList" border stripe>
           <el-table-column prop="student_id" label="学号" width="130" />
@@ -385,9 +456,27 @@
     </el-dialog>
 
     <!-- 校外认定 -->
-    <el-dialog v-model="exchangeVisible" title="校外交流成绩换算与认定" width="520px">
-      <el-form label-width="110px">
-        <el-form-item label="学号"><el-input v-model="exchangeForm.student_id" /></el-form-item>
+    <el-dialog v-model="exchangeVisible" title="校外交流成绩换算与认定" width="580px">
+      <el-form label-width="115px">
+        <el-form-item v-if="foreignTranscripts.length" label="外校成绩单带入">
+          <el-select
+            v-model="selectedForeignId"
+            clearable
+            placeholder="从第 15 组外校原始成绩单选择一键带入"
+            style="width: 100%"
+            @change="applyForeignTranscript"
+          >
+            <el-option
+              v-for="ft in foreignTranscripts"
+              :key="ft.foreign_transcript_id"
+              :value="ft.foreign_transcript_id"
+              :label="`${ft.student_id} ${ft.student_name || ''} · ${ft.partner_school} · ${ft.foreign_course_name}（${ft.foreign_score} / ${ft.foreign_credit}学分）`"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="学号">
+          <el-input v-model="exchangeForm.student_id" @blur="loadForeignTranscriptsForForm" />
+        </el-form-item>
         <el-form-item label="学期">
           <el-select
             v-model="exchangeForm.term"
@@ -397,10 +486,11 @@
             default-first-option
             style="width: 100%"
           >
-            <el-option v-for="t in TERM_OPTIONS" :key="t" :label="t" :value="t" />
+            <el-option v-for="t in termOptions" :key="t" :label="t" :value="t" />
           </el-select>
         </el-form-item>
         <el-form-item label="外校"><el-input v-model="exchangeForm.host_school" /></el-form-item>
+        <el-form-item label="外校课程号"><el-input v-model="exchangeForm.ext_course_code" placeholder="选填，如 CS2040" /></el-form-item>
         <el-form-item label="外校课程名"><el-input v-model="exchangeForm.ext_course_name" /></el-form-item>
         <el-form-item label="外校学分"><el-input-number v-model="exchangeForm.ext_credit" :min="0.5" :precision="1" controls-position="right" style="width: 100%" /></el-form-item>
         <el-form-item label="原始成绩"><el-input v-model="exchangeForm.ext_score_raw" placeholder="如 92 / A-" /></el-form-item>
@@ -522,9 +612,13 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { scoreApi } from '../../api/score'
+import { systemApi } from '../../api/modules'
 import { userState } from '../../stores/user'
-import { TERM_OPTIONS } from '../../constants/terms'
+import { TERM_OPTIONS, loadDynamicTermOptions } from '../../constants/terms'
 import { getCollegeName } from '../../constants/dicts'
+
+const termOptions = ref([...TERM_OPTIONS])
+const currentTermDefault = ref('2026-2027-1')
 
 const route = useRoute()
 const role = computed(() => userState.currentUser?.role)
@@ -812,18 +906,65 @@ async function doPublish(row) {
 // 3.5
 const exchangeQuery = reactive({ student_id: '', keyword: '' })
 const exchangeList = ref([])
+const readyStudents = ref([])
+const foreignTranscripts = ref([])
+const selectedForeignId = ref('')
 const exchangeVisible = ref(false)
 const exchangeForm = reactive({
-  student_id: '', term: '2026-2027-1', host_school: '', ext_course_name: '',
+  student_id: '', exchange_apply_id: '', term: '2026-2027-1', host_school: '',
+  ext_course_code: '', ext_course_name: '',
   ext_credit: 2, ext_score_raw: '', proof_no: '', course_id: '', score_type: 1, converted_score: 90, converted_level: '', ext_required: false
 })
 
 async function loadExchange() {
-  const res = await scoreApi.listExchange({
-    student_id: exchangeQuery.student_id || undefined,
-    keyword: exchangeQuery.keyword || undefined
-  })
-  exchangeList.value = res.data || []
+  const [exRes, readyRes] = await Promise.all([
+    scoreApi.listExchange({
+      student_id: exchangeQuery.student_id || undefined,
+      keyword: exchangeQuery.keyword || undefined
+    }),
+    scoreApi.listExchangeReadyStudents({ student_id: exchangeQuery.student_id || undefined }).catch(() => ({ data: [] }))
+  ])
+  exchangeList.value = exRes.data || []
+  readyStudents.value = readyRes.data || []
+}
+
+async function loadForeignTranscriptsForForm() {
+  try {
+    const res = await scoreApi.listForeignTranscripts({
+      student_id: exchangeForm.student_id ? exchangeForm.student_id.trim() : undefined
+    })
+    foreignTranscripts.value = res.data || []
+  } catch {
+    foreignTranscripts.value = []
+  }
+}
+
+function guessConvertedScore(raw) {
+  const s = String(raw || '').trim().toUpperCase()
+  const num = Number(s)
+  if (!Number.isNaN(num) && num >= 0 && num <= 100) return num
+  const map = { 'A+': 96, A: 94, 'A-': 90, 'B+': 86, B: 82, 'B-': 78, 'C+': 74, C: 70, D: 62, F: 50 }
+  return map[s] ?? 88
+}
+
+function applyForeignTranscript(ftId) {
+  if (!ftId) return
+  const item = foreignTranscripts.value.find((f) => String(f.foreign_transcript_id) === String(ftId))
+  if (!item) return
+  exchangeForm.student_id = item.student_id || exchangeForm.student_id
+  exchangeForm.term = item.study_term || exchangeForm.term
+  exchangeForm.host_school = item.partner_school || exchangeForm.host_school
+  exchangeForm.ext_course_code = item.foreign_course_id || ''
+  exchangeForm.ext_course_name = item.foreign_course_name || ''
+  exchangeForm.ext_credit = Number(item.foreign_credit) || 2
+  exchangeForm.ext_score_raw = item.foreign_score || ''
+  exchangeForm.proof_no = `FT-${item.foreign_transcript_id}`
+  exchangeForm.score_type = 1
+  exchangeForm.converted_score = guessConvertedScore(item.foreign_score)
+  const matchedReady = readyStudents.value.find((r) => r.student_id === item.student_id && r.ready)
+  if (matchedReady?.application_no) {
+    exchangeForm.exchange_apply_id = matchedReady.application_no
+  }
 }
 
 const courseCandidates = ref([])
@@ -839,9 +980,27 @@ async function searchCourseCandidates(keyword = '') {
   }
 }
 
-function openExchange() {
+function openExchange(readyRow = null) {
+  selectedForeignId.value = ''
+  Object.assign(exchangeForm, {
+    student_id: readyRow?.student_id || '',
+    exchange_apply_id: readyRow?.application_no || '',
+    term: readyRow?.term_ref || currentTermDefault.value,
+    host_school: readyRow?.partner_school_snapshot || '',
+    ext_course_code: '',
+    ext_course_name: '',
+    ext_credit: 2,
+    ext_score_raw: '',
+    proof_no: '',
+    course_id: '',
+    score_type: 1,
+    converted_score: 90,
+    converted_level: '',
+    ext_required: false
+  })
   exchangeVisible.value = true
   searchCourseCandidates('')
+  loadForeignTranscriptsForForm()
 }
 
 async function doExchange() {
@@ -933,7 +1092,11 @@ watch(() => route.query.lesson_no, async (lessonNo) => {
   }
 })
 
-onMounted(() => {
+onMounted(async () => {
+  const { terms, currentTerm } = await loadDynamicTermOptions(systemApi)
+  termOptions.value = terms
+  currentTermDefault.value = currentTerm
+  exchangeForm.term = currentTerm
   initByRole()
 })
 </script>
@@ -954,6 +1117,30 @@ onMounted(() => {
 .muted {
   color: var(--app-text-secondary);
   font-size: 12.5px;
+}
+.alert-tag-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.ready-panel {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--app-card-muted-bg);
+  border: 1px solid var(--app-border);
+}
+.ready-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-text-primary);
 }
 .ratio-label {
   font-size: 13px;
